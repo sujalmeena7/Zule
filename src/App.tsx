@@ -13,6 +13,8 @@ import { ZuleProvider, useZule } from './context/ZuleContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { DetachedCopilot } from './components/copilot/DetachedCopilot';
 import { LandingPage } from './components/LandingPage';
+import { AuthPage } from './components/AuthPage';
+import { AuthProvider, useAuth } from './firebase/AuthContext';
 import { ModelLoader } from './components/common/ModelLoader';
 import { LayoutDashboard, Settings as SettingsIcon, Activity } from 'lucide-react';
 import { Toaster } from 'react-hot-toast';
@@ -47,14 +49,29 @@ function AppContent() {
   const { state } = useZule();
   const { currentPage, isCopilotActive } = state;
   const { isOnline } = useOnlineStatus();
+  const { user, loading } = useAuth();
 
   // Sync offline state to the AI provider router (Requirement 20.1)
   useEffect(() => {
     setRouterOffline(!isOnline);
   }, [isOnline]);
 
+  // Show loading spinner while checking auth state
+  if (loading) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0a0a12' }}>
+        <div style={{ color: '#94a3b8', fontSize: '0.9rem' }}>Loading...</div>
+      </div>
+    );
+  }
+
   if (currentPage === 'landing') {
     return <LandingPage />;
+  }
+
+  // Auth guard: if not logged in and not on landing, show auth page
+  if (!user) {
+    return <AuthPage />;
   }
 
   return (
@@ -150,23 +167,25 @@ function App() {
   }
 
   return (
-    <ZuleProvider>
-      <MotionConfig reducedMotion="user">
-        <AppContent />
-        <ModelLoader />
-        <Toaster 
-          position="bottom-right"
-          toastOptions={{
-            style: {
-              background: '#1e293b',
-              color: '#f8fafc',
-              border: '1px solid rgba(255, 255, 255, 0.1)',
-              backdropFilter: 'blur(10px)',
-            },
-          }}
-        />
-      </MotionConfig>
-    </ZuleProvider>
+    <AuthProvider>
+      <ZuleProvider>
+        <MotionConfig reducedMotion="user">
+          <AppContent />
+          <ModelLoader />
+          <Toaster 
+            position="bottom-right"
+            toastOptions={{
+              style: {
+                background: '#1e293b',
+                color: '#f8fafc',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                backdropFilter: 'blur(10px)',
+              },
+            }}
+          />
+        </MotionConfig>
+      </ZuleProvider>
+    </AuthProvider>
   );
 }
 
