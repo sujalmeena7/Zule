@@ -66,7 +66,7 @@ export function LandingPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, ease: "easeOut" }}
         >
-          <div className="landing-logo-icon" />
+          <img src="/favicon.svg" alt="Zule logo" className="landing-logo-icon" />
           <span>Zule AI</span>
         </motion.div>
         <motion.nav 

@@ -89,11 +89,9 @@
 .landing-logo-icon {
   width: 28px;
   height: 28px;
-  background-image: url('/logo.png');
-  background-size: cover;
-  background-position: center;
   border-radius: 8px;
   box-shadow: 0 0 20px var(--landing-accent-glow);
+  object-fit: contain;
 }
 
 .landing-nav {
