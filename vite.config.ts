@@ -32,12 +32,19 @@ function copyVendorPlugin(): Plugin {
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), copyVendorPlugin()],
+  resolve: {
+    alias: {
+      // @xenova/transformers is used in vectorStore.ts but only runs in Electron.
+      // For the web/landing page build, stub it out so the build doesn't fail.
+      '@xenova/transformers': '@huggingface/transformers',
+    },
+  },
   build: {
     rollupOptions: {
       output: {
         manualChunks(id: string) {
           // Heavy ML runtime — Vector_Index + Whisper (Requirement 21.1)
-          if (id.includes('@xenova/transformers') || id.includes('onnxruntime')) {
+          if (id.includes('@xenova/transformers') || id.includes('@huggingface/transformers') || id.includes('onnxruntime')) {
             return 'vendor-transformers';
           }
           // Heavy computer vision — OCR_Worker (Requirement 21.1)
