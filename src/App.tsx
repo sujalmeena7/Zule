@@ -25,6 +25,8 @@ import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { OfflineBanner } from './components/OfflineBanner';
 import { setRouterOffline } from './brain/aiProvider';
 import { isElectron } from './hooks/useElectronBridge';
+import { BlogPage } from './components/BlogPage';
+import { BlogPost } from './components/BlogPost';
 // Wrapper for the Electron Overlay that strips the opaque background
 function OverlayShell() {
   useEffect(() => {
@@ -71,12 +73,20 @@ function AppContent() {
     return <LandingPage />;
   }
 
-  // Web browser: only allow landing page, block dashboard access
+  if (currentPage === 'blog') {
+    return <BlogPage />;
+  }
+
+  if (currentPage === 'blog-post') {
+    return <BlogPost />;
+  }
+
+  // Web browser: only allow public marketing pages, block dashboard access
   if (!isElectron()) {
     return <LandingPage />;
   }
 
-  // Auth guard: if not logged in and not on landing, show auth page
+  // Auth guard: if not logged in and not on public pages, show auth page
   if (!user) {
     return <AuthPage />;
   }

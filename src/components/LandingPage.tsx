@@ -79,6 +79,8 @@ export function LandingPage() {
         >
           <a href="#features">Features</a>
           <a href="#how-it-works">How it works</a>
+          <a href="#faq">FAQ</a>
+          <a href="#" onClick={(e) => { e.preventDefault(); actions.navigateTo('blog'); }}>Blog</a>
         </motion.nav>
       </header>
 

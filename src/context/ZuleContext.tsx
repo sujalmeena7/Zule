@@ -16,7 +16,7 @@ import { isElectron } from '../hooks/useElectronBridge';
 
 // ---- Page & Hash Routing ----
 
-export type Page = 'landing' | 'auth' | 'dashboard' | 'copilot' | 'meeting-detail' | 'settings' | 'diagnostics';
+export type Page = 'landing' | 'auth' | 'dashboard' | 'copilot' | 'meeting-detail' | 'settings' | 'diagnostics' | 'blog' | 'blog-post';
 
 const PAGE_TO_HASH: Record<Page, string> = {
   landing: '',
@@ -26,6 +26,8 @@ const PAGE_TO_HASH: Record<Page, string> = {
   'meeting-detail': '#meeting-detail',
   settings: '#settings',
   diagnostics: '#diagnostics',
+  blog: '#blog',
+  'blog-post': '#blog-post',
 };
 
 const HASH_TO_PAGE: Record<string, Page> = {
@@ -37,6 +39,8 @@ const HASH_TO_PAGE: Record<string, Page> = {
   '#meeting-detail': 'meeting-detail',
   '#settings': 'settings',
   '#diagnostics': 'diagnostics',
+  '#blog': 'blog',
+  '#blog-post': 'blog-post',
 };
 
 function pageFromHash(): Page {
@@ -59,6 +63,7 @@ export interface ZuleState {
   selectedMeeting: StoredMeeting | null;
   customModes: CustomMode[];
   isCopilotActive: boolean;
+  activeBlogPost: string | null;
 }
 
 const initialState: ZuleState = {
@@ -70,6 +75,7 @@ const initialState: ZuleState = {
   selectedMeeting: null,
   customModes: [],
   isCopilotActive: false,
+  activeBlogPost: null,
 };
 
 // ---- Actions ----
@@ -85,7 +91,8 @@ type ZuleAction =
   | { type: 'START_COPILOT'; payload?: CopilotMode }
   | { type: 'STOP_COPILOT'; payload: StoredMeeting }
   | { type: 'ADD_MEETING'; payload: StoredMeeting }
-  | { type: 'DELETE_MEETING'; payload: string };
+  | { type: 'DELETE_MEETING'; payload: string }
+  | { type: 'SET_ACTIVE_BLOG_POST'; payload: string | null };
 
 function zuleReducer(state: ZuleState, action: ZuleAction): ZuleState {
   switch (action.type) {
@@ -146,6 +153,9 @@ function zuleReducer(state: ZuleState, action: ZuleAction): ZuleState {
             : state.currentPage,
       };
 
+    case 'SET_ACTIVE_BLOG_POST':
+      return { ...state, activeBlogPost: action.payload };
+
     default:
       return state;
   }
@@ -164,6 +174,7 @@ interface ZuleActions {
   deleteMeeting: (id: string) => Promise<void>;
   saveCustomMode: (mode: CustomMode) => Promise<void>;
   deleteCustomMode: (id: string) => Promise<void>;
+  viewBlogPost: (slug: string) => void;
 }
 
 interface ZuleContextValue {
@@ -327,6 +338,14 @@ export function ZuleProvider({ children }: ZuleProviderProps) {
     []
   );
 
+  const viewBlogPost = useCallback(
+    (slug: string) => {
+      dispatch({ type: 'SET_ACTIVE_BLOG_POST', payload: slug });
+      dispatch({ type: 'SET_PAGE', payload: 'blog-post' });
+    },
+    []
+  );
+
   const actions: ZuleActions = {
     navigateTo,
     updateApiKey,
@@ -338,6 +357,7 @@ export function ZuleProvider({ children }: ZuleProviderProps) {
     deleteMeeting,
     saveCustomMode,
     deleteCustomMode,
+    viewBlogPost,
   };
 
   return (
