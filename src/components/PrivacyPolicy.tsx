@@ -36,7 +36,7 @@ export function PrivacyPolicy() {
             <p>Zule may integrate with third-party LLM providers (like OpenAI or Anthropic) to power advanced summarization. When using cloud-based models, transcript snippets are sent over secure connections, processed, and not used to train their models.</p>
 
             <h2 style={{ color: '#fff', fontSize: '1.5rem', marginTop: '16px' }}>6. Contact Us</h2>
-            <p>If you have questions or comments about this Privacy Policy, please contact us at support@zule.ai.</p>
+            <p>If you have questions or comments about this Privacy Policy, please contact us at sujalmeena@lexguard.co.in.</p>
           </div>
         </motion.div>
       </div>

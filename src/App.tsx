@@ -20,7 +20,7 @@ import { AuthProvider, useAuth } from './firebase/AuthContext';
 import { ModelLoader } from './components/common/ModelLoader';
 import { LayoutDashboard, Settings as SettingsIcon, Activity } from 'lucide-react';
 import { Toaster } from 'react-hot-toast';
-import { MotionConfig } from 'framer-motion';
+import { MotionConfig, AnimatePresence, motion } from 'framer-motion';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { OfflineBanner } from './components/OfflineBanner';
 import { setRouterOffline } from './brain/aiProvider';
@@ -176,23 +176,6 @@ function App() {
     );
   }
 
-  // Legal Pages
-  if (hashRoute === '#privacy') {
-    return (
-      <ErrorBoundary>
-        <PrivacyPolicy />
-      </ErrorBoundary>
-    );
-  }
-
-  if (hashRoute === '#terms') {
-    return (
-      <ErrorBoundary>
-        <TermsOfService />
-      </ErrorBoundary>
-    );
-  }
-
   // Electron overlay window — renders ONLY the FloatingCopilot
   // in a transparent container (no dashboard, no sidebar)
   if (hashRoute === '#overlay') {
@@ -216,11 +199,39 @@ function App() {
     );
   }
 
+  // Legal and Main Pages wrapped in AnimatePresence for smooth transitions
+  let currentView;
+  if (hashRoute === '#privacy') {
+    currentView = (
+      <motion.div key="privacy" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} transition={{ duration: 0.3 }}>
+        <ErrorBoundary>
+          <PrivacyPolicy />
+        </ErrorBoundary>
+      </motion.div>
+    );
+  } else if (hashRoute === '#terms') {
+    currentView = (
+      <motion.div key="terms" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} transition={{ duration: 0.3 }}>
+        <ErrorBoundary>
+          <TermsOfService />
+        </ErrorBoundary>
+      </motion.div>
+    );
+  } else {
+    currentView = (
+      <motion.div key="main" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }}>
+        <AppContent />
+      </motion.div>
+    );
+  }
+
   return (
     <AuthProvider>
       <ZuleProvider>
         <MotionConfig reducedMotion="user">
-          <AppContent />
+          <AnimatePresence mode="wait">
+            {currentView}
+          </AnimatePresence>
           <ModelLoader />
           <Toaster 
             position="bottom-right"

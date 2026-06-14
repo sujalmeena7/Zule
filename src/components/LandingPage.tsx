@@ -617,7 +617,7 @@ export function LandingPage() {
               <div className="footer-column">
                 <h4>Support</h4>
                 <a href="https://github.com/sujalmeena7/Zule/discussions" target="_blank" rel="noreferrer">Help Center</a>
-                <a href="mailto:support@zule.ai">Contact Us</a>
+                <a href="mailto:sujalmeena@lexguard.co.in">Contact Us</a>
                 <a href="https://github.com/sujalmeena7/Zule/issues" target="_blank" rel="noreferrer">Bug Report</a>
               </div>
               <div className="footer-column">
@@ -635,7 +635,7 @@ export function LandingPage() {
             <div className="footer-socials">
               <a href="https://github.com/sujalmeena7/Zule" target="_blank" rel="noreferrer" title="Github"><Globe size={18} /></a>
               <a href="https://github.com/sujalmeena7/Zule/discussions" target="_blank" rel="noreferrer" title="Discussions"><MessageCircle size={18} /></a>
-              <a href="mailto:support@zule.ai" title="Email"><Mail size={18} /></a>
+              <a href="mailto:sujalmeena@lexguard.co.in" title="Email"><Mail size={18} /></a>
             </div>
           </div>
         </footer>

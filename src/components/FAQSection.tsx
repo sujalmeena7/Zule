@@ -25,7 +25,7 @@ const faqs = [
   },
   {
     question: "Can I talk to customer support?",
-    answer: "Absolutely. You can reach out to us anytime at support@zule.ai or open an issue on our GitHub repository. We actively listen to user feedback to improve the product."
+    answer: "Absolutely. You can reach out to us anytime at sujalmeena@lexguard.co.in or open an issue on our GitHub repository. We actively listen to user feedback to improve the product."
   }
 ];
 
