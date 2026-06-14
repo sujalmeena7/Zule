@@ -1,16 +1,18 @@
 // ============================================
-// Zule AI — Authentication Page (Login / Sign Up)
+// Zule AI — Authentication Page (Desktop Welcome + Login)
 // ============================================
 
 import { useState } from 'react';
-import { motion } from 'framer-motion';
-import { Mail, Lock, Eye, EyeOff, Loader2 } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Mail, Lock, Eye, EyeOff, Loader2, ArrowRight, Sparkles, Shield, Zap } from 'lucide-react';
 import { useAuth } from '../firebase/AuthContext';
 import './AuthPage.css';
 
+type AuthView = 'welcome' | 'login' | 'signup';
+
 export function AuthPage() {
   const { signIn, signUp, signInWithGoogle } = useAuth();
-  const [isSignUp, setIsSignUp] = useState(false);
+  const [view, setView] = useState<AuthView>('welcome');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -23,14 +25,13 @@ export function AuthPage() {
     setLoading(true);
 
     try {
-      if (isSignUp) {
+      if (view === 'signup') {
         await signUp(email, password);
       } else {
         await signIn(email, password);
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Authentication failed';
-      // Clean up Firebase error messages
       if (message.includes('auth/invalid-credential')) {
         setError('Invalid email or password');
       } else if (message.includes('auth/email-already-in-use')) {
@@ -64,91 +65,183 @@ export function AuthPage() {
 
   return (
     <div className="auth-page">
-      <motion.div
-        className="auth-card"
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5 }}
-      >
-        <div className="auth-header">
-          <img src="/logo.png" alt="Zule AI" className="auth-logo" />
-          <h1>{isSignUp ? 'Create Account' : 'Welcome Back'}</h1>
-          <p>{isSignUp ? 'Sign up to get started with Zule AI' : 'Sign in to your Zule AI account'}</p>
-        </div>
+      {/* Background gradient orbs */}
+      <div className="auth-bg-orb auth-bg-orb-1" />
+      <div className="auth-bg-orb auth-bg-orb-2" />
+      <div className="auth-bg-orb auth-bg-orb-3" />
 
-        <button
-          className="auth-google-btn"
-          onClick={handleGoogleSignIn}
-          disabled={loading}
-          type="button"
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24">
-            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-          </svg>
-          Continue with Google
-        </button>
-
-        <div className="auth-divider">
-          <span>or</span>
-        </div>
-
-        <form onSubmit={handleSubmit} className="auth-form">
-          <div className="auth-input-group">
-            <Mail size={18} className="auth-input-icon" />
-            <input
-              type="email"
-              placeholder="Email address"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              autoComplete="email"
-            />
-          </div>
-
-          <div className="auth-input-group">
-            <Lock size={18} className="auth-input-icon" />
-            <input
-              type={showPassword ? 'text' : 'password'}
-              placeholder="Password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              minLength={6}
-              autoComplete={isSignUp ? 'new-password' : 'current-password'}
-            />
-            <button
-              type="button"
-              className="auth-password-toggle"
-              onClick={() => setShowPassword(!showPassword)}
-              aria-label={showPassword ? 'Hide password' : 'Show password'}
-            >
-              {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-            </button>
-          </div>
-
-          {error && <div className="auth-error">{error}</div>}
-
-          <button
-            type="submit"
-            className="auth-submit-btn"
-            disabled={loading}
+      <AnimatePresence mode="wait">
+        {view === 'welcome' ? (
+          <motion.div
+            key="welcome"
+            className="auth-welcome"
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            transition={{ duration: 0.4 }}
           >
-            {loading ? <Loader2 size={18} className="spinner" /> : null}
-            {isSignUp ? 'Create Account' : 'Sign In'}
-          </button>
-        </form>
+            <motion.div
+              className="auth-welcome-logo"
+              initial={{ y: -20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ delay: 0.2 }}
+            >
+              <img src="/logo.png" alt="Zule AI" />
+            </motion.div>
 
-        <div className="auth-switch">
-          {isSignUp ? (
-            <p>Already have an account? <button onClick={() => { setIsSignUp(false); setError(''); }}>Sign In</button></p>
-          ) : (
-            <p>Don't have an account? <button onClick={() => { setIsSignUp(true); setError(''); }}>Sign Up</button></p>
-          )}
-        </div>
-      </motion.div>
+            <motion.h1
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ delay: 0.3 }}
+            >
+              Welcome to Zule AI
+            </motion.h1>
+
+            <motion.p
+              className="auth-welcome-subtitle"
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ delay: 0.4 }}
+            >
+              Your undetectable AI meeting assistant
+            </motion.p>
+
+            <motion.div
+              className="auth-features"
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ delay: 0.5 }}
+            >
+              <div className="auth-feature">
+                <Shield size={18} />
+                <span>Invisible to screen share</span>
+              </div>
+              <div className="auth-feature">
+                <Zap size={18} />
+                <span>Real-time AI responses</span>
+              </div>
+              <div className="auth-feature">
+                <Sparkles size={18} />
+                <span>Multiple AI providers</span>
+              </div>
+            </motion.div>
+
+            <motion.button
+              className="auth-continue-btn"
+              onClick={() => setView('login')}
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ delay: 0.6 }}
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+            >
+              Continue to Login
+              <ArrowRight size={18} />
+            </motion.button>
+
+            <motion.p
+              className="auth-welcome-note"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.8 }}
+            >
+              Sign in to sync your settings and sessions
+            </motion.p>
+          </motion.div>
+        ) : (
+          <motion.div
+            key="auth-form"
+            className="auth-card"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            transition={{ duration: 0.4 }}
+          >
+            <div className="auth-header">
+              <img src="/logo.png" alt="Zule AI" className="auth-logo" />
+              <h1>{view === 'signup' ? 'Create Account' : 'Welcome Back'}</h1>
+              <p>{view === 'signup' ? 'Sign up to get started with Zule AI' : 'Sign in to your Zule AI account'}</p>
+            </div>
+
+            <button
+              className="auth-google-btn"
+              onClick={handleGoogleSignIn}
+              disabled={loading}
+              type="button"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24">
+                <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+                <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+                <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+              </svg>
+              Continue with Google
+            </button>
+
+            <div className="auth-divider">
+              <span>or</span>
+            </div>
+
+            <form onSubmit={handleSubmit} className="auth-form">
+              <div className="auth-input-group">
+                <Mail size={18} className="auth-input-icon" />
+                <input
+                  type="email"
+                  placeholder="Email address"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  autoComplete="email"
+                />
+              </div>
+
+              <div className="auth-input-group">
+                <Lock size={18} className="auth-input-icon" />
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  placeholder="Password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  minLength={6}
+                  autoComplete={view === 'signup' ? 'new-password' : 'current-password'}
+                />
+                <button
+                  type="button"
+                  className="auth-password-toggle"
+                  onClick={() => setShowPassword(!showPassword)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+
+              {error && <div className="auth-error">{error}</div>}
+
+              <button
+                type="submit"
+                className="auth-submit-btn"
+                disabled={loading}
+              >
+                {loading ? <Loader2 size={18} className="spinner" /> : null}
+                {view === 'signup' ? 'Create Account' : 'Sign In'}
+              </button>
+            </form>
+
+            <div className="auth-switch">
+              {view === 'signup' ? (
+                <p>Already have an account? <button onClick={() => { setView('login'); setError(''); }}>Sign In</button></p>
+              ) : (
+                <p>Don't have an account? <button onClick={() => { setView('signup'); setError(''); }}>Sign Up</button></p>
+              )}
+            </div>
+
+            <button className="auth-back-btn" onClick={() => setView('welcome')}>
+              ← Back
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
