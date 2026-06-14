@@ -1,41 +1,66 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence, useInView } from 'framer-motion';
 
-const QUESTION_TEXT = "What should I say about our Q3 growth?";
-const ANSWER_TEXT = "Revenue grew 34% QoQ driven by enterprise expansion. Our pipeline has 12 deals in late stage worth $2.4M ARR. Customer retention is at 96%, up from 91% last quarter.";
+const QA_PAIRS = [
+  {
+    q: "What should I say about our Q3 growth?",
+    a: "Revenue grew 34% QoQ driven by enterprise expansion. Our pipeline has 12 deals in late stage worth $2.4M ARR. Customer retention is at 96%, up from 91% last quarter."
+  },
+  {
+    q: "Summarize the client's main concerns.",
+    a: "They are worried about the migration timeline and data security. They need reassurance that downtime will be under 2 hours, and all data is encrypted at rest."
+  },
+  {
+    q: "What are the action items from this call?",
+    a: "1. Sarah to send the technical whitepaper.\n2. You need to schedule a follow-up demo for next Tuesday.\n3. Send the revised pricing proposal by EOD."
+  }
+];
 
 export function AnimatedMockup() {
   const ref = useRef(null);
   const isInView = useInView(ref, { once: true, margin: "-100px" });
+  
+  const [pairIndex, setPairIndex] = useState(0);
   const [typingIndex, setTypingIndex] = useState(0);
   const [phase, setPhase] = useState<'idle' | 'typing' | 'thinking' | 'answering' | 'done'>('idle');
 
+  const currentQA = QA_PAIRS[pairIndex];
+
   useEffect(() => {
     if (!isInView) return;
-    // Sequence Timeline
-    const startTimeout = setTimeout(() => setPhase('typing'), 500);
-    return () => clearTimeout(startTimeout);
-  }, [isInView]);
+    if (phase === 'idle') {
+      const startTimeout = setTimeout(() => setPhase('typing'), 500);
+      return () => clearTimeout(startTimeout);
+    }
+  }, [isInView, phase]);
 
   useEffect(() => {
     if (phase === 'typing') {
-      if (typingIndex < QUESTION_TEXT.length) {
+      if (typingIndex < currentQA.q.length) {
         const timeout = setTimeout(() => {
           setTypingIndex(prev => prev + 1);
-        }, 20); // Smooth, fast typing speed
+        }, 25); // Smooth, fast typing speed
         return () => clearTimeout(timeout);
       } else {
-        const timeout = setTimeout(() => setPhase('thinking'), 500);
+        const timeout = setTimeout(() => setPhase('thinking'), 600);
         return () => clearTimeout(timeout);
       }
     } else if (phase === 'thinking') {
       const timeout = setTimeout(() => setPhase('answering'), 1200);
       return () => clearTimeout(timeout);
     } else if (phase === 'answering') {
-      const timeout = setTimeout(() => setPhase('done'), 3000);
+      const timeout = setTimeout(() => setPhase('done'), 4000);
+      return () => clearTimeout(timeout);
+    } else if (phase === 'done') {
+      const timeout = setTimeout(() => {
+        // Reset and go to next pair
+        setPhase('idle');
+        setTypingIndex(0);
+        setPairIndex((prev) => (prev + 1) % QA_PAIRS.length);
+      }, 1500); // Wait 1.5 seconds before starting the next question
       return () => clearTimeout(timeout);
     }
-  }, [phase, typingIndex]);
+  }, [phase, typingIndex, currentQA.q.length]);
 
   return (
     <motion.div
@@ -58,7 +83,7 @@ export function AnimatedMockup() {
         <div className="mockup-question">
           <span className="mockup-q-label">You asked:</span>
           <p className="typing-text">
-            "{QUESTION_TEXT.substring(0, typingIndex)}"
+            "{currentQA.q.substring(0, typingIndex)}"
             {phase === 'typing' && <motion.span animate={{ opacity: [1, 0] }} transition={{ repeat: Infinity, duration: 0.7 }}>|</motion.span>}
           </p>
         </div>
@@ -81,7 +106,7 @@ export function AnimatedMockup() {
             
             {(phase === 'answering' || phase === 'done') && (
               <motion.p
-                key="answer"
+                key={`answer-${pairIndex}`}
                 initial="hidden"
                 animate="visible"
                 variants={{
@@ -89,7 +114,7 @@ export function AnimatedMockup() {
                   visible: { opacity: 1, transition: { staggerChildren: 0.03 } }
                 }}
               >
-                {ANSWER_TEXT.split(' ').map((word, i) => (
+                {currentQA.a.split(' ').map((word, i) => (
                   <motion.span
                     key={i}
                     variants={{
