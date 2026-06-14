@@ -18,6 +18,7 @@ import {
   ipcMain,
   session,
   desktopCapturer,
+  shell,
 } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -155,6 +156,18 @@ function createMainWindow(): void {
       backgroundThrottling: false,
       webSecurity: false,
     },
+  });
+
+  // Allow Firebase auth popups (Google sign-in) to open in a new window.
+  // Without this handler, Electron blocks popup windows by default.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    // Allow Firebase/Google auth popups
+    if (url.includes('accounts.google.com') || url.includes('firebaseapp.com') || url.includes('googleapis.com')) {
+      return { action: 'allow' };
+    }
+    // For other URLs, open in the system browser
+    shell.openExternal(url);
+    return { action: 'deny' };
   });
 
   // Apply screen-capture invisibility to the dashboard window too. Without
