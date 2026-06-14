@@ -48,7 +48,6 @@
 }
 
 /* Section dividers */
-.features-section::before,
 .hiw-section::before {
   content: '';
   position: absolute;
@@ -589,7 +588,7 @@
 .features-section {
   max-width: 1200px;
   margin: 0 auto;
-  padding: 140px 24px;
+  padding: 140px 24px 80px;
 }
 
 .section-title {
@@ -941,11 +940,24 @@
 
 /* --- BOTTOM CTA SECTION (Dark Mode — matches landing page vibe) --- */
 .bottom-cta-section {
-  background: radial-gradient(ellipse at 50% 0%, rgba(59, 130, 246, 0.15) 0%, rgba(139, 92, 246, 0.05) 55%, transparent 80%);
-  padding: 140px 24px;
+  background: transparent;
+  padding: 80px 24px 140px;
   position: relative;
   overflow: hidden;
   text-align: center;
+}
+
+/* Smooth top fade so CTA melts into the section above */
+.bottom-cta-section::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 200px;
+  background: linear-gradient(to bottom, var(--landing-bg, #0a0a12), transparent);
+  pointer-events: none;
+  z-index: 0;
 }
 
 .bottom-cta-content {
