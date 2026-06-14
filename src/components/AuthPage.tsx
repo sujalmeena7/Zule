@@ -4,9 +4,11 @@
 
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowRight, Loader2, Shield, Zap, Sparkles } from 'lucide-react';
+import { ArrowRight, Loader2, Shield, Zap, Sparkles, Eye, EyeOff } from 'lucide-react';
 import { useAuth } from '../firebase/AuthContext';
 import { isElectron } from '../hooks/useElectronBridge';
+import { sendPasswordResetEmail } from 'firebase/auth';
+import { auth } from '../firebase/config';
 import './AuthPage.css';
 
 export function AuthPage() {
@@ -14,7 +16,9 @@ export function AuthPage() {
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
   const [step, setStep] = useState<'email' | 'password'>('email');
   const [showLogin, setShowLogin] = useState(false);
@@ -64,6 +68,29 @@ export function AuthPage() {
       const message = err instanceof Error ? err.message : 'Google sign-in failed';
       if (!message.includes('popup-closed-by-user')) {
         setError('Google sign-in failed. Please try again.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    if (!email.trim()) {
+      setError('Enter your email first, then click Forgot Password');
+      return;
+    }
+    setError('');
+    setSuccess('');
+    setLoading(true);
+    try {
+      await sendPasswordResetEmail(auth, email);
+      setSuccess('Password reset email sent! Check your inbox.');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to send reset email';
+      if (message.includes('auth/user-not-found')) {
+        setError('No account found with this email');
+      } else {
+        setError('Failed to send reset email. Try again.');
       }
     } finally {
       setLoading(false);
@@ -277,7 +304,7 @@ export function AuthPage() {
                     <div className="auth-input-floating">
                       <label>Password</label>
                       <input
-                        type="password"
+                        type={showPassword ? 'text' : 'password'}
                         placeholder="••••••••"
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
@@ -286,10 +313,23 @@ export function AuthPage() {
                         autoComplete={isSignUp ? 'new-password' : 'current-password'}
                         autoFocus
                       />
+                      <button
+                        type="button"
+                        className="auth-eye-toggle"
+                        onClick={() => setShowPassword(!showPassword)}
+                        aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      >
+                        {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
                       <button type="submit" className="auth-input-arrow" disabled={loading} aria-label="Sign in">
                         {loading ? <Loader2 size={18} className="spinner" /> : <ArrowRight size={18} />}
                       </button>
                     </div>
+                    {!isSignUp && (
+                      <button type="button" className="auth-forgot-btn" onClick={handleForgotPassword}>
+                        Forgot password?
+                      </button>
+                    )}
                   </motion.form>
                 )}
               </AnimatePresence>
@@ -301,6 +341,16 @@ export function AuthPage() {
                   animate={{ opacity: 1, height: 'auto' }}
                 >
                   {error}
+                </motion.div>
+              )}
+
+              {success && (
+                <motion.div
+                  className="auth-success"
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                >
+                  {success}
                 </motion.div>
               )}
 

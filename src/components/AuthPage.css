@@ -128,6 +128,59 @@
   box-shadow: 0 4px 12px rgba(20, 184, 166, 0.3);
 }
 
+/* Eye toggle for password visibility */
+.auth-eye-toggle {
+  position: absolute;
+  right: 58px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  transition: color 0.2s;
+}
+
+.auth-eye-toggle:hover {
+  color: #94a3b8;
+}
+
+/* Forgot password link */
+.auth-forgot-btn {
+  background: none;
+  border: none;
+  color: #14b8a6;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  margin-top: 8px;
+  padding: 0;
+  text-align: right;
+  display: block;
+  width: 100%;
+}
+
+.auth-forgot-btn:hover {
+  text-decoration: underline;
+  color: #2dd4bf;
+}
+
+/* Success message */
+.auth-success {
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: rgba(20, 184, 166, 0.08);
+  border: 1px solid rgba(20, 184, 166, 0.2);
+  border-radius: 10px;
+  color: #5eead4;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  overflow: hidden;
+}
+
 .auth-input-arrow:hover {
   transform: translateY(-50%) scale(1.05);
   box-shadow: 0 6px 18px rgba(20, 184, 166, 0.4);
