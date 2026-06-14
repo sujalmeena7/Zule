@@ -1475,9 +1475,221 @@
   line-height: 1.5;
 }
 
-@media (max-width: 768px) {
+/* ============================================
+   RESPONSIVE DESIGN (Tablets & Mobile)
+   ============================================ */
+
+/* Tablet & Smaller Desktop */
+@media (max-width: 1024px) {
+  .hero-title {
+    font-size: 4.5rem;
+  }
+  
+  .hero-subtitle {
+    font-size: 1.25rem;
+  }
+  
+  .bento-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  
+  .hiw-grid {
+    gap: 32px;
+  }
+  
   .stats-layout {
     grid-template-columns: 1fr;
-    gap: 48px;
+    gap: 64px;
+  }
+  
+  .footer-content {
+    flex-wrap: wrap;
+    gap: 40px;
+  }
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+  /* Header & Nav */
+  .landing-header {
+    padding: 16px 20px;
+    flex-wrap: wrap;
+  }
+  
+  .landing-nav {
+    display: none; /* Hide standard nav on mobile */
+  }
+  
+  /* Hero Section */
+  .hero-section {
+    padding: 100px 20px 60px;
+  }
+  
+  .hero-title {
+    font-size: 3rem;
+  }
+  
+  .hero-subtitle {
+    font-size: 1.1rem;
+    padding: 0 10px;
+    margin-bottom: 32px;
+  }
+  
+  .hero-actions {
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+  }
+  
+  .btn-landing.large {
+    width: 100%;
+    max-width: 300px;
+    justify-content: center;
+  }
+  
+  .zule-adv-wrapper {
+    width: 100%;
+    transform: translateX(-50%) scale(0.85);
+  }
+  
+  /* Feature Bento Grid */
+  .features-section {
+    padding: 80px 20px;
+  }
+  
+  .section-title {
+    font-size: 2.2rem;
+  }
+  
+  .bento-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .bento-card.large {
+    grid-column: span 1;
+  }
+  
+  .bento-content h3 {
+    font-size: 1.5rem;
+  }
+  
+  /* How it Works */
+  .hiw-section {
+    padding: 80px 20px;
+  }
+  
+  .hiw-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .hiw-step {
+    padding: 32px 24px;
+  }
+  
+  /* Live Stats & Mockup */
+  .stats-section {
+    padding: 80px 20px;
+  }
+  
+  .stats-heading {
+    font-size: 2rem;
+    text-align: center;
+  }
+  
+  .stats-mockup {
+    transform: scale(0.9);
+    margin: 0 -5%; /* Let it bleed edge slightly on mobile */
+  }
+  
+  .mockup-overlay-card {
+    padding: 20px;
+  }
+  
+  .mockup-actions {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  
+  /* Ticker */
+  .tools-ticker-label {
+    font-size: 0.75rem;
+  }
+  
+  .ticker-item {
+    font-size: 1.5rem;
+  }
+  
+  /* FAQ */
+  .faq-section {
+    padding: 80px 20px;
+  }
+  
+  .faq-question h3 {
+    font-size: 1.05rem;
+  }
+  
+  /* Bottom CTA */
+  .bottom-cta-section {
+    padding: 80px 20px;
+  }
+  
+  .bottom-cta-content h2 {
+    font-size: 2.2rem;
+  }
+  
+  .cta-actions {
+    flex-direction: column;
+    align-items: center;
+  }
+  
+  /* Footer */
+  .landing-footer {
+    padding: 60px 20px 40px;
+  }
+  
+  .footer-content {
+    flex-direction: column;
+    gap: 40px;
+  }
+  
+  .footer-brand {
+    align-items: flex-start; /* Or center if preferred */
+  }
+  
+  .footer-links-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 32px;
+    width: 100%;
+  }
+  
+  .footer-bottom {
+    flex-direction: column-reverse;
+    gap: 16px;
+    text-align: center;
+  }
+}
+
+/* Very Small Mobile */
+@media (max-width: 480px) {
+  .hero-title {
+    font-size: 2.5rem;
+  }
+  
+  .zule-adv-wrapper {
+    transform: translateX(-50%) scale(0.7);
+    top: 20px;
+  }
+  
+  .stats-mockup {
+    transform: scale(0.85);
+    margin: 0 -10%;
+  }
+  
+  .mockup-ai-response {
+    font-size: 0.85rem;
+  }
+  
+  .footer-links-grid {
+    grid-template-columns: 1fr;
   }
 }
