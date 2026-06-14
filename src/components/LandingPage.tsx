@@ -234,11 +234,25 @@ export function LandingPage() {
                 </div>
               </div>
               <div className="mac-zoom-grid">
-                <div className="mac-zoom-video" style={{ backgroundImage: 'url(https://images.unsplash.com/photo-1560250097-0b93528c311a?q=80&w=600&auto=format&fit=crop)' }}>
-                  <div className="mac-zoom-name">David Chen</div>
-                </div>
-                <div className="mac-zoom-video" style={{ backgroundImage: 'url(https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?q=80&w=600&auto=format&fit=crop)' }}>
-                  <div className="mac-zoom-name">Sarah Jenkins</div>
+                <video 
+                  className="mac-zoom-video-player"
+                  autoPlay 
+                  muted 
+                  loop 
+                  playsInline
+                  poster="https://images.unsplash.com/photo-1560250097-0b93528c311a?q=80&w=1200&auto=format&fit=crop"
+                >
+                  <source src="/meeting-demo.mp4" type="video/mp4" />
+                  {/* Fallback to static images if video not available */}
+                </video>
+                {/* Fallback static grid shown when video fails to load */}
+                <div className="mac-zoom-grid-fallback">
+                  <div className="mac-zoom-video" style={{ backgroundImage: 'url(https://images.unsplash.com/photo-1560250097-0b93528c311a?q=80&w=600&auto=format&fit=crop)' }}>
+                    <div className="mac-zoom-name">David Chen</div>
+                  </div>
+                  <div className="mac-zoom-video" style={{ backgroundImage: 'url(https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?q=80&w=600&auto=format&fit=crop)' }}>
+                    <div className="mac-zoom-name">Sarah Jenkins</div>
+                  </div>
                 </div>
               </div>
             </motion.div>

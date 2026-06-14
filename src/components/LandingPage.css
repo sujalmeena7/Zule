@@ -451,11 +451,30 @@
 
 .mac-zoom-grid {
   flex: 1;
+  position: relative;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
   padding: 12px;
   background: #000;
+}
+
+.mac-zoom-video-player {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 2;
+}
+
+.mac-zoom-grid-fallback {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  width: 100%;
+  height: 100%;
 }
 
 .mac-zoom-video {
