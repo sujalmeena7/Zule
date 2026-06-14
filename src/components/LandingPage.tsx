@@ -21,8 +21,8 @@ export function LandingPage() {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const DOWNLOAD_URL_WIN = 'https://github.com/sujalmeena7/Zule/releases/latest/download/Zule-AI-Setup.exe';
-  const DOWNLOAD_URL_MAC = 'https://github.com/sujalmeena7/Zule/releases/latest/download/Zule-AI-Setup.exe';
+  const DOWNLOAD_URL_WIN = 'https://github.com/sujalmeena7/Zule/releases/latest/download/ZuleAI-Setup.exe';
+  const DOWNLOAD_URL_MAC = 'https://github.com/sujalmeena7/Zule/releases/latest/download/ZuleAI-Setup.exe';
 
   const handleGetStarted = () => {
     actions.navigateTo('dashboard');
