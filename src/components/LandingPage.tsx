@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { useZule } from '../context/ZuleContext';
 import { Shield, Zap, Download, Play, Mic, Video, Smile, CirclePlay, Square, Globe, Mail, MessageCircle } from 'lucide-react';
+import { FAQSection } from './FAQSection';
 import './LandingPage.css';
 
 export function LandingPage() {
@@ -542,6 +543,9 @@ export function LandingPage() {
 
           </div>
         </section>
+
+        {/* --- FAQ SECTION --- */}
+        <FAQSection />
 
         {/* --- BOTTOM CTA --- */}
         <section id="download" className="bottom-cta-section">
