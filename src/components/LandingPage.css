@@ -100,7 +100,13 @@
   gap: 32px;
 }
 
-.landing-nav a {
+.landing-nav-links {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+}
+
+.landing-nav-links a {
   color: var(--landing-text-muted);
   text-decoration: none;
   font-size: 0.95rem;
@@ -108,7 +114,7 @@
   transition: color 0.4s var(--premium-ease);
 }
 
-.landing-nav a:hover {
+.landing-nav-links a:hover {
   color: var(--landing-text);
 }
 
