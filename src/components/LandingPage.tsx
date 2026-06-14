@@ -544,7 +544,7 @@ export function LandingPage() {
         </section>
 
         {/* --- BOTTOM CTA --- */}
-        <section className="bottom-cta-section">
+        <section id="download" className="bottom-cta-section">
           <div className="bottom-cta-content">
             <motion.div
               className="cta-badge"
@@ -598,8 +598,7 @@ export function LandingPage() {
           <div className="footer-top">
             <div className="footer-brand">
               <div className="footer-logo">
-                <div className="footer-logo-icon">
-                </div>
+                <img src="/favicon.svg" alt="Zule Logo" className="footer-logo-icon" style={{ width: '24px', height: '24px' }} />
                 Zule
               </div>
             </div>
@@ -607,20 +606,20 @@ export function LandingPage() {
             <div className="footer-links-grid">
               <div className="footer-column">
                 <h4>Product</h4>
-                <a href="#">Features</a>
-                <a href="#">Download</a>
-                <a href="#">Changelog</a>
+                <a href="#features">Features</a>
+                <a href="#download">Download</a>
+                <a href="https://github.com/sujalmeena7/Zule/releases" target="_blank" rel="noreferrer">Changelog</a>
               </div>
               <div className="footer-column">
                 <h4>Support</h4>
-                <a href="#">Help Center</a>
-                <a href="#">Contact Us</a>
-                <a href="#">Bug Report</a>
+                <a href="https://github.com/sujalmeena7/Zule/discussions" target="_blank" rel="noreferrer">Help Center</a>
+                <a href="mailto:support@zule.ai">Contact Us</a>
+                <a href="https://github.com/sujalmeena7/Zule/issues" target="_blank" rel="noreferrer">Bug Report</a>
               </div>
               <div className="footer-column">
                 <h4>Legal</h4>
-                <a href="#">Privacy Policy</a>
-                <a href="#">Terms of Service</a>
+                <a href="#privacy">Privacy Policy</a>
+                <a href="#terms">Terms of Service</a>
               </div>
             </div>
           </div>
@@ -630,9 +629,9 @@ export function LandingPage() {
               © 2025 Zule AI. All rights reserved.
             </div>
             <div className="footer-socials">
-              <a href="#"><Globe size={18} /></a>
-              <a href="#"><MessageCircle size={18} /></a>
-              <a href="#"><Mail size={18} /></a>
+              <a href="https://github.com/sujalmeena7/Zule" target="_blank" rel="noreferrer" title="Github"><Globe size={18} /></a>
+              <a href="https://github.com/sujalmeena7/Zule/discussions" target="_blank" rel="noreferrer" title="Discussions"><MessageCircle size={18} /></a>
+              <a href="mailto:support@zule.ai" title="Email"><Mail size={18} /></a>
             </div>
           </div>
         </footer>
