@@ -207,6 +207,124 @@ export function LandingPage() {
           </div>
         </section>
 
+        {/* --- LIVE INTELLIGENCE STATS SECTION --- */}
+        <section className="stats-section">
+          <div className="stats-layout">
+            {/* Left: Conversation mockup */}
+            <motion.div
+              className="stats-mockup"
+              initial={{ opacity: 0, x: -40 }}
+              whileInView={{ opacity: 1, x: 0 }}
+              viewport={{ once: true }}
+              transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1] }}
+            >
+              <div className="mockup-header">
+                <span className="mockup-date">Today, 2:45 PM</span>
+                <div className="mockup-avatars">
+                  <div className="mockup-avatar" style={{ background: '#3b82f6' }}>S</div>
+                  <div className="mockup-avatar" style={{ background: '#8b5cf6', marginLeft: '-8px' }}>R</div>
+                  <span className="mockup-more">+2 more</span>
+                </div>
+              </div>
+              <h4 className="mockup-title">Quarterly Strategy Review & Product Roadmap</h4>
+              <div className="mockup-tabs">
+                <span>Summary</span>
+                <span className="active">Transcript</span>
+                <span>Insights</span>
+              </div>
+              <div className="mockup-messages">
+                <div className="msg msg-them"><span className="msg-name">Sarah</span><span className="msg-time">2:45 PM</span><p>Let's discuss the Q3 growth metrics.</p></div>
+                <div className="msg msg-you"><span className="msg-name">You</span><span className="msg-time">2:45 PM</span><p>Sure, revenue is up 34% quarter over quarter.</p></div>
+                <div className="msg msg-them"><span className="msg-name">Sarah</span><span className="msg-time">2:46 PM</span><p>What about the enterprise pipeline?</p></div>
+                <div className="msg msg-you"><span className="msg-name">You</span><span className="msg-time">2:46 PM</span><p>We have 12 deals in late stage, worth $2.4M ARR.</p></div>
+              </div>
+            </motion.div>
+
+            {/* Right: Stats with animated numbers */}
+            <div className="stats-right">
+              <motion.h2
+                className="stats-heading"
+                initial={{ opacity: 0, y: 20 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+              >
+                Live conversation intelligence
+              </motion.h2>
+
+              <div className="stats-grid">
+                <motion.div
+                  className="stat-row"
+                  initial={{ opacity: 0, x: 20 }}
+                  whileInView={{ opacity: 1, x: 0 }}
+                  viewport={{ once: true }}
+                  transition={{ delay: 0.1 }}
+                >
+                  <div className="stat-number">
+                    <motion.span
+                      initial={{ opacity: 0, scale: 0.5 }}
+                      whileInView={{ opacity: 1, scale: 1 }}
+                      viewport={{ once: true }}
+                      transition={{ type: 'spring', stiffness: 200, delay: 0.2 }}
+                    >
+                      12+
+                    </motion.span>
+                  </div>
+                  <div className="stat-info">
+                    <h4>Languages</h4>
+                    <p>Supports English, Hindi, Spanish, French, German, Japanese, and more — all processed in real time.</p>
+                  </div>
+                </motion.div>
+
+                <motion.div
+                  className="stat-row"
+                  initial={{ opacity: 0, x: 20 }}
+                  whileInView={{ opacity: 1, x: 0 }}
+                  viewport={{ once: true }}
+                  transition={{ delay: 0.25 }}
+                >
+                  <div className="stat-number">
+                    <motion.span
+                      initial={{ opacity: 0, scale: 0.5 }}
+                      whileInView={{ opacity: 1, scale: 1 }}
+                      viewport={{ once: true }}
+                      transition={{ type: 'spring', stiffness: 200, delay: 0.35 }}
+                    >
+                      {'<'}200<sub>ms</sub>
+                    </motion.span>
+                  </div>
+                  <div className="stat-info">
+                    <h4>AI response latency</h4>
+                    <p>Instant suggestions appear before the speaker finishes. Built for the speed of live conversation.</p>
+                  </div>
+                </motion.div>
+
+                <motion.div
+                  className="stat-row"
+                  initial={{ opacity: 0, x: 20 }}
+                  whileInView={{ opacity: 1, x: 0 }}
+                  viewport={{ once: true }}
+                  transition={{ delay: 0.4 }}
+                >
+                  <div className="stat-number">
+                    <motion.span
+                      initial={{ opacity: 0, scale: 0.5 }}
+                      whileInView={{ opacity: 1, scale: 1 }}
+                      viewport={{ once: true }}
+                      transition={{ type: 'spring', stiffness: 200, delay: 0.5 }}
+                    >
+                      100%
+                    </motion.span>
+                  </div>
+                  <div className="stat-info">
+                    <h4>Invisible to participants</h4>
+                    <p>OS-level stealth ensures no one on the call, recording, or screen share can ever detect Zule.</p>
+                  </div>
+                </motion.div>
+              </div>
+            </div>
+          </div>
+        </section>
+
         {/* --- HOW IT WORKS SECTION --- */}
         <section id="how-it-works" className="hiw-section">
           <motion.h2 
