@@ -808,9 +808,9 @@
   box-shadow: 0 0 20px rgba(59, 130, 246, 0.4);
 }
 
-/* --- BOTTOM CTA SECTION (Light Mode Area) --- */
+/* --- BOTTOM CTA SECTION (Dark Mode — matches landing page vibe) --- */
 .bottom-cta-section {
-  background: #f1f3f6;
+  background: #0f0f1a;
   padding: 120px 24px;
   position: relative;
   overflow: hidden;
@@ -831,6 +831,7 @@
 .bottom-cta-content h2 {
   font-family: var(--font-display);
   font-size: clamp(2rem, 5vw, 3.5rem);
+  color: #f8fafc;
   font-weight: 500;
   color: #111827;
   margin-bottom: 12px;
@@ -839,7 +840,7 @@
 
 .bottom-cta-content p {
   font-size: clamp(1.2rem, 3vw, 2rem);
-  color: #6b7280;
+  color: #94a3b8;
   margin-bottom: 40px;
   font-weight: 400;
 }
@@ -897,8 +898,8 @@
 
 /* --- FOOTER --- */
 .zule-footer {
-  background: #f1f3f6;
-  color: #374151;
+  background: #0f0f1a;
+  color: #cbd5e1;
   padding: 40px 5vw 60px;
   font-family: var(--font-sans);
 }
@@ -957,7 +958,7 @@
 }
 
 .footer-column a {
-  color: #4b5563;
+  color: #94a3b8;
   text-decoration: none;
   font-size: 0.95rem;
   transition: color 0.2s;
@@ -967,7 +968,7 @@
 }
 
 .footer-column a:hover {
-  color: #111827;
+  color: #f8fafc;
 }
 
 .badge-new {
@@ -1028,12 +1029,12 @@
 }
 
 .footer-socials a {
-  color: #4b5563;
+  color: #94a3b8;
   transition: color 0.2s;
 }
 
 .footer-socials a:hover {
-  color: #111827;
+  color: #f8fafc;
 }
 
 @media (max-width: 768px) {
