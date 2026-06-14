@@ -161,7 +161,7 @@ export function LandingPage() {
               whileTap={{ scale: 0.95 }}
             >
               <Download size={18} style={{ display: 'inline', marginRight: '8px', verticalAlign: 'text-bottom' }} />
-              Download for Free
+              Download for Windows
             </motion.button>
             <motion.button 
               className="btn-landing large magnetic" 
