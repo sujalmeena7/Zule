@@ -941,9 +941,7 @@
 
 /* --- BOTTOM CTA SECTION (Dark Mode — matches landing page vibe) --- */
 .bottom-cta-section {
-  background: 
-    radial-gradient(ellipse at 50% 0%, rgba(59, 130, 246, 0.15) 0%, rgba(139, 92, 246, 0.05) 55%, transparent 80%),
-    linear-gradient(180deg, #0a0a12 0%, #0d1420 50%, #0a0a12 100%);
+  background: radial-gradient(ellipse at 50% 0%, rgba(59, 130, 246, 0.15) 0%, rgba(139, 92, 246, 0.05) 55%, transparent 80%);
   padding: 140px 24px;
   position: relative;
   overflow: hidden;
@@ -1068,7 +1066,7 @@
 
 /* --- FOOTER --- */
 .zule-footer {
-  background: #0f0f1a;
+  background: transparent;
   color: #cbd5e1;
   padding: 40px 5vw 60px;
   font-family: var(--font-sans);
