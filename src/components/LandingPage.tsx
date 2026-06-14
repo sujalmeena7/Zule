@@ -406,7 +406,7 @@ export function LandingPage() {
         </section>
 
         {/* --- FEATURES BENTO GRID --- */}
-        <section className="features-section">
+        <section id="features" className="features-section">
           <motion.h2 
             className="section-title"
             initial={{ opacity: 0, y: 20 }}
