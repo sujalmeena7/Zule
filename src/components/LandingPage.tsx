@@ -210,7 +210,7 @@ export function LandingPage() {
         {/* --- LIVE INTELLIGENCE STATS SECTION --- */}
         <section className="stats-section">
           <div className="stats-layout">
-            {/* Left: Conversation mockup */}
+            {/* Left: Zule overlay mockup showing what the app actually does */}
             <motion.div
               className="stats-mockup"
               initial={{ opacity: 0, x: -40 }}
@@ -218,26 +218,35 @@ export function LandingPage() {
               viewport={{ once: true }}
               transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1] }}
             >
-              <div className="mockup-header">
-                <span className="mockup-date">Today, 2:45 PM</span>
-                <div className="mockup-avatars">
-                  <div className="mockup-avatar" style={{ background: '#3b82f6' }}>S</div>
-                  <div className="mockup-avatar" style={{ background: '#8b5cf6', marginLeft: '-8px' }}>R</div>
-                  <span className="mockup-more">+2 more</span>
+              {/* Dark overlay card mimicking the actual Zule copilot */}
+              <div className="mockup-overlay-card">
+                <div className="mockup-mode-pill">✨ Assist</div>
+                <div className="mockup-question">
+                  <span className="mockup-q-label">You asked:</span>
+                  <p>"What should I say about our Q3 growth?"</p>
+                </div>
+                <div className="mockup-ai-response">
+                  <motion.p
+                    initial={{ opacity: 0 }}
+                    whileInView={{ opacity: 1 }}
+                    viewport={{ once: true }}
+                    transition={{ delay: 0.5, duration: 1.5 }}
+                  >
+                    Revenue grew 34% QoQ driven by enterprise expansion. Our pipeline has 12 deals in late stage worth $2.4M ARR. Customer retention is at 96%, up from 91% last quarter.
+                  </motion.p>
+                </div>
+                <div className="mockup-bottom-bar">
+                  <div className="mockup-actions">
+                    <span>✨ Assist</span>
+                    <span>💬 What should I say?</span>
+                    <span>📋 Follow-up</span>
+                  </div>
+                  <div className="mockup-input-bar">
+                    Ask about your screen or conversation...
+                  </div>
                 </div>
               </div>
-              <h4 className="mockup-title">Quarterly Strategy Review & Product Roadmap</h4>
-              <div className="mockup-tabs">
-                <span>Summary</span>
-                <span className="active">Transcript</span>
-                <span>Insights</span>
-              </div>
-              <div className="mockup-messages">
-                <div className="msg msg-them"><span className="msg-name">Sarah</span><span className="msg-time">2:45 PM</span><p>Let's discuss the Q3 growth metrics.</p></div>
-                <div className="msg msg-you"><span className="msg-name">You</span><span className="msg-time">2:45 PM</span><p>Sure, revenue is up 34% quarter over quarter.</p></div>
-                <div className="msg msg-them"><span className="msg-name">Sarah</span><span className="msg-time">2:46 PM</span><p>What about the enterprise pipeline?</p></div>
-                <div className="msg msg-you"><span className="msg-name">You</span><span className="msg-time">2:46 PM</span><p>We have 12 deals in late stage, worth $2.4M ARR.</p></div>
-              </div>
+              <div className="mockup-caption">Zule overlay during a live meeting — invisible to others</div>
             </motion.div>
 
             {/* Right: Stats with animated numbers */}
@@ -259,16 +268,7 @@ export function LandingPage() {
                   viewport={{ once: true }}
                   transition={{ delay: 0.1 }}
                 >
-                  <div className="stat-number">
-                    <motion.span
-                      initial={{ opacity: 0, scale: 0.5 }}
-                      whileInView={{ opacity: 1, scale: 1 }}
-                      viewport={{ once: true }}
-                      transition={{ type: 'spring', stiffness: 200, delay: 0.2 }}
-                    >
-                      12+
-                    </motion.span>
-                  </div>
+                  <div className="stat-number">12+</div>
                   <div className="stat-info">
                     <h4>Languages</h4>
                     <p>Supports English, Hindi, Spanish, French, German, Japanese, and more — all processed in real time.</p>
@@ -282,16 +282,7 @@ export function LandingPage() {
                   viewport={{ once: true }}
                   transition={{ delay: 0.25 }}
                 >
-                  <div className="stat-number">
-                    <motion.span
-                      initial={{ opacity: 0, scale: 0.5 }}
-                      whileInView={{ opacity: 1, scale: 1 }}
-                      viewport={{ once: true }}
-                      transition={{ type: 'spring', stiffness: 200, delay: 0.35 }}
-                    >
-                      {'<'}200<sub>ms</sub>
-                    </motion.span>
-                  </div>
+                  <div className="stat-number">200ms</div>
                   <div className="stat-info">
                     <h4>AI response latency</h4>
                     <p>Instant suggestions appear before the speaker finishes. Built for the speed of live conversation.</p>
@@ -305,16 +296,7 @@ export function LandingPage() {
                   viewport={{ once: true }}
                   transition={{ delay: 0.4 }}
                 >
-                  <div className="stat-number">
-                    <motion.span
-                      initial={{ opacity: 0, scale: 0.5 }}
-                      whileInView={{ opacity: 1, scale: 1 }}
-                      viewport={{ once: true }}
-                      transition={{ type: 'spring', stiffness: 200, delay: 0.5 }}
-                    >
-                      100%
-                    </motion.span>
-                  </div>
+                  <div className="stat-number">100%</div>
                   <div className="stat-info">
                     <h4>Invisible to participants</h4>
                     <p>OS-level stealth ensures no one on the call, recording, or screen share can ever detect Zule.</p>

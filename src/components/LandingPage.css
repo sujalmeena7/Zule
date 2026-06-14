@@ -1300,111 +1300,93 @@
   align-items: center;
 }
 
-/* Conversation mockup card */
+/* Conversation mockup card — shows what Zule overlay actually looks like */
 .stats-mockup {
-  background: #f8fafc;
-  border-radius: 20px;
-  padding: 28px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.mockup-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
-}
-
-.mockup-date {
-  font-size: 0.75rem;
-  color: #64748b;
-  font-weight: 500;
-}
-
-.mockup-avatars {
-  display: flex;
-  align-items: center;
-}
-
-.mockup-avatar {
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.6rem;
-  font-weight: 700;
-  color: white;
-  border: 2px solid #f8fafc;
-}
-
-.mockup-more {
-  font-size: 0.65rem;
-  color: #94a3b8;
-  margin-left: 6px;
-}
-
-.mockup-title {
-  font-size: 1rem;
-  font-weight: 700;
-  color: #1e293b;
-  margin-bottom: 16px;
-  letter-spacing: -0.02em;
-}
-
-.mockup-tabs {
-  display: flex;
-  gap: 16px;
-  margin-bottom: 16px;
-  border-bottom: 1px solid #e2e8f0;
-  padding-bottom: 10px;
-}
-
-.mockup-tabs span {
-  font-size: 0.75rem;
-  font-weight: 500;
-  color: #94a3b8;
-  cursor: pointer;
-}
-
-.mockup-tabs span.active {
-  color: #1e293b;
-  border-bottom: 2px solid #1e293b;
-  padding-bottom: 8px;
-  margin-bottom: -11px;
-}
-
-.mockup-messages {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  align-items: center;
 }
 
-.msg {
-  font-size: 0.78rem;
-  line-height: 1.4;
+.mockup-overlay-card {
+  background: rgba(15, 15, 22, 0.92);
+  backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  padding: 24px;
+  width: 100%;
+  max-width: 400px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
 }
 
-.msg-name {
+.mockup-mode-pill {
+  display: inline-block;
+  background: #3b82f6;
+  color: white;
+  padding: 5px 14px;
+  border-radius: 999px;
+  font-size: 0.72rem;
   font-weight: 600;
-  color: #3b82f6;
-  margin-right: 6px;
+  margin-bottom: 16px;
 }
 
-.msg-you .msg-name {
-  color: #1e293b;
+.mockup-question {
+  margin-bottom: 16px;
 }
 
-.msg-time {
-  font-size: 0.65rem;
+.mockup-q-label {
+  font-size: 0.7rem;
+  color: #64748b;
+  display: block;
+  margin-bottom: 4px;
+}
+
+.mockup-question p {
+  font-size: 0.85rem;
   color: #94a3b8;
+  font-style: italic;
+  background: rgba(96, 165, 250, 0.08);
+  border: 1px solid rgba(96, 165, 250, 0.15);
+  border-radius: 10px;
+  padding: 10px 14px;
 }
 
-.msg p {
-  color: #334155;
-  margin-top: 2px;
+.mockup-ai-response {
+  margin-bottom: 18px;
+}
+
+.mockup-ai-response p {
+  font-size: 0.88rem;
+  line-height: 1.6;
+  color: #e2e8f0;
+}
+
+.mockup-bottom-bar {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding-top: 14px;
+}
+
+.mockup-actions {
+  display: flex;
+  gap: 14px;
+  margin-bottom: 10px;
+  font-size: 0.7rem;
+  color: #64748b;
+}
+
+.mockup-input-bar {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 0.78rem;
+  color: #475569;
+}
+
+.mockup-caption {
+  margin-top: 14px;
+  font-size: 0.72rem;
+  color: #475569;
+  text-align: center;
 }
 
 /* Right: Stats */
@@ -1440,18 +1422,13 @@
 }
 
 .stat-number {
-  min-width: 90px;
-  font-size: 2.2rem;
+  min-width: 100px;
+  font-size: 2rem;
   font-weight: 800;
   color: #f1f5f9;
   letter-spacing: -0.03em;
-  line-height: 1;
-}
-
-.stat-number sub {
-  font-size: 0.5em;
-  font-weight: 500;
-  color: #64748b;
+  line-height: 1.2;
+  flex-shrink: 0;
 }
 
 .stat-info h4 {
