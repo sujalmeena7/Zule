@@ -10,25 +10,30 @@ export function BlogPage() {
   return (
     <div className="blog-container">
       {/* Header / Nav */}
-      <header className="landing-header">
-        <motion.div 
-          className="landing-logo"
-          style={{ cursor: 'pointer' }}
-          onClick={() => actions.navigateTo('landing')}
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-        >
-          <img src="/favicon.svg" alt="Zule logo" className="landing-logo-icon" />
-          <span>Zule AI</span>
-        </motion.div>
-        <motion.nav 
-          className="landing-nav"
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-        >
-          <a href="#" onClick={(e) => { e.preventDefault(); actions.navigateTo('landing'); }}>Home</a>
-        </motion.nav>
-      </header>
+      <div className="landing-header-wrapper">
+        <header className="landing-header">
+          <motion.div 
+            className="landing-logo"
+            style={{ cursor: 'pointer' }}
+            onClick={() => actions.navigateTo('landing')}
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+          >
+            <img src="/favicon.svg" alt="Zule logo" className="landing-logo-icon" />
+            <span>Zule AI</span>
+          </motion.div>
+          <motion.nav 
+            className="landing-nav"
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+          >
+            <div className="landing-nav-links">
+              <a href="#" onClick={(e) => { e.preventDefault(); actions.navigateTo('landing'); }}>Home</a>
+            </div>
+            <button className="nav-cta" onClick={() => window.open('https://github.com/sujalmeena7/Zule/releases/latest/download/Zule-Setup.exe', '_blank')}>Get Zule</button>
+          </motion.nav>
+        </header>
+      </div>
 
       <section className="blog-header">
         <motion.h1 

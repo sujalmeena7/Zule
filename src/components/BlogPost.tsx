@@ -74,22 +74,27 @@ export function BlogPost() {
   return (
     <div className="post-container">
       {/* Header / Nav */}
-      <header className="landing-header">
-        <motion.div 
-          className="landing-logo"
-          style={{ cursor: 'pointer' }}
-          onClick={() => actions.navigateTo('landing')}
-        >
-          <img src="/favicon.svg" alt="Zule logo" className="landing-logo-icon" />
-          <span>Zule AI</span>
-        </motion.div>
-        <nav className="landing-nav">
-          <a href="#" onClick={(e) => { e.preventDefault(); actions.navigateTo('blog'); }}>
-            <ArrowLeft size={16} style={{ display: 'inline', marginRight: '8px', verticalAlign: 'text-bottom' }} />
-            Back to Blog
-          </a>
-        </nav>
-      </header>
+      <div className="landing-header-wrapper">
+        <header className="landing-header">
+          <motion.div 
+            className="landing-logo"
+            style={{ cursor: 'pointer' }}
+            onClick={() => actions.navigateTo('landing')}
+          >
+            <img src="/favicon.svg" alt="Zule logo" className="landing-logo-icon" />
+            <span>Zule AI</span>
+          </motion.div>
+          <nav className="landing-nav">
+            <div className="landing-nav-links">
+              <a href="#" onClick={(e) => { e.preventDefault(); actions.navigateTo('blog'); }}>
+                <ArrowLeft size={16} style={{ display: 'inline', marginRight: '8px', verticalAlign: 'text-bottom' }} />
+                Back to Blog
+              </a>
+            </div>
+            <button className="nav-cta" onClick={handleDownload}>Get Zule</button>
+          </nav>
+        </header>
+      </div>
 
       <article>
         <header className="post-header">

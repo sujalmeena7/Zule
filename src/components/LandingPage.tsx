@@ -61,28 +61,33 @@ export function LandingPage() {
   };
   return (
     <div className="landing-container">
-      <header className="landing-header">
-        <motion.div 
-          className="landing-logo"
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, ease: "easeOut" }}
-        >
-          <img src="/favicon.svg" alt="Zule logo" className="landing-logo-icon" />
-          <span>Zule AI</span>
-        </motion.div>
-        <motion.nav 
-          className="landing-nav"
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, ease: "easeOut", delay: 0.1 }}
-        >
-          <a href="#features">Features</a>
-          <a href="#how-it-works">How it works</a>
-          <a href="#faq">FAQ</a>
-          <a href="#" onClick={(e) => { e.preventDefault(); actions.navigateTo('blog'); }}>Blog</a>
-        </motion.nav>
-      </header>
+      <div className="landing-header-wrapper">
+        <header className="landing-header">
+          <motion.div 
+            className="landing-logo"
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6, ease: "easeOut" }}
+          >
+            <img src="/favicon.svg" alt="Zule logo" className="landing-logo-icon" />
+            <span>Zule AI</span>
+          </motion.div>
+          <motion.nav 
+            className="landing-nav"
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6, ease: "easeOut", delay: 0.1 }}
+          >
+            <div className="landing-nav-links">
+              <a href="#features">Features</a>
+              <a href="#how-it-works">How it works</a>
+              <a href="#faq">FAQ</a>
+              <a href="#" onClick={(e) => { e.preventDefault(); actions.navigateTo('blog'); }}>Blog</a>
+            </div>
+            <button className="nav-cta" onClick={handleDownload}>Get Zule</button>
+          </motion.nav>
+        </header>
+      </div>
 
       <main className="landing-content">
         <section className="hero-section" style={{ position: 'relative' }}>
