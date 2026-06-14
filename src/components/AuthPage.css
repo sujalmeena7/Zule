@@ -15,7 +15,7 @@
 .auth-card {
   position: relative;
   width: 100%;
-  max-width: 420px;
+  max-width: 380px;
   border-radius: 24px;
   overflow: hidden;
   /* Glass effect */
@@ -45,7 +45,7 @@
 
 .auth-card-content {
   position: relative;
-  padding: 48px 36px 40px;
+  padding: 44px 28px 36px;
   z-index: 1;
 }
 
