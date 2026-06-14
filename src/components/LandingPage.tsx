@@ -546,12 +546,20 @@ export function LandingPage() {
         {/* --- BOTTOM CTA --- */}
         <section className="bottom-cta-section">
           <div className="bottom-cta-content">
+            <motion.div
+              className="cta-badge"
+              initial={{ opacity: 0, scale: 0.9 }}
+              whileInView={{ opacity: 1, scale: 1 }}
+              viewport={{ once: true }}
+            >
+              🚀 Ready to upgrade your meetings?
+            </motion.div>
             <motion.h2 
               initial={{ opacity: 0, y: 20 }}
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
             >
-              Meeting AI that helps during the call, not after.
+              Your AI advantage starts now.
             </motion.h2>
             <motion.p
               initial={{ opacity: 0, y: 20 }}
@@ -559,7 +567,7 @@ export function LandingPage() {
               viewport={{ once: true }}
               transition={{ delay: 0.1 }}
             >
-              Try Zule on your next meeting today.
+              Download Zule and never feel unprepared in a meeting again.
             </motion.p>
             <motion.button 
               className="btn-windows"
@@ -571,25 +579,18 @@ export function LandingPage() {
               whileTap={{ scale: 0.95 }}
               onClick={handleDownload}
             >
-              <LayoutGrid size={18} fill="white" /> Download for Windows
+              <Download size={18} /> Download for Windows
             </motion.button>
+            <motion.span
+              className="cta-note"
+              initial={{ opacity: 0 }}
+              whileInView={{ opacity: 1 }}
+              viewport={{ once: true }}
+              transition={{ delay: 0.4 }}
+            >
+              Free forever • No credit card • 2-minute setup
+            </motion.span>
           </div>
-          
-          {/* Decorative floating keycaps */}
-          <motion.div 
-            className="floating-keycap right"
-            animate={{ y: [-10, 10, -10], rotate: [-2, 2, -2] }}
-            transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }}
-          >
-            <Compass size={32} color="#a1a1aa" />
-          </motion.div>
-          <motion.div 
-            className="floating-keycap left"
-            animate={{ y: [10, -10, 10], rotate: [2, -2, 2] }}
-            transition={{ duration: 5, repeat: Infinity, ease: "easeInOut", delay: 1 }}
-          >
-            <Zap size={32} color="#a1a1aa" />
-          </motion.div>
         </section>
 
         {/* --- FOOTER --- */}
@@ -605,44 +606,33 @@ export function LandingPage() {
             
             <div className="footer-links-grid">
               <div className="footer-column">
-                <h4>Resources</h4>
-                <a href="#">Mobile <span className="badge-new">New</span></a>
-                <a href="#">Manifesto</a>
-                <a href="#">Press</a>
-                <a href="#">Bug Bounty</a>
+                <h4>Product</h4>
+                <a href="#">Features</a>
+                <a href="#">Download</a>
+                <a href="#">Changelog</a>
               </div>
               <div className="footer-column">
                 <h4>Support</h4>
                 <a href="#">Help Center</a>
                 <a href="#">Contact Us</a>
+                <a href="#">Bug Report</a>
               </div>
               <div className="footer-column">
                 <h4>Legal</h4>
                 <a href="#">Privacy Policy</a>
                 <a href="#">Terms of Service</a>
-                <a href="#">Subprocessors</a>
               </div>
             </div>
           </div>
 
-          <div className="footer-status-row">
-            <div className="status-badge">
-              <div className="status-dot"></div> All systems operational
-            </div>
-          </div>
-          <div className="footer-sub-row">
-            List of <a href="#" style={{ color: '#3b82f6', textDecoration: 'none', marginLeft: '4px' }}>subprocessors</a>.
-          </div>
-
           <div className="footer-bottom">
             <div className="footer-copyright">
-              © 2026 Zule AI. All rights reserved.
+              © 2025 Zule AI. All rights reserved.
             </div>
             <div className="footer-socials">
               <a href="#"><Globe size={18} /></a>
               <a href="#"><MessageCircle size={18} /></a>
               <a href="#"><Mail size={18} /></a>
-              <a href="#"><Link size={18} /></a>
             </div>
           </div>
         </footer>
