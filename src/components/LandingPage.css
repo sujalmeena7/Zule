@@ -590,20 +590,6 @@
   position: relative;
 }
 
-/* Full-width fade that dissolves the bento grid bottom into the page */
-.features-section::after {
-  content: '';
-  position: absolute;
-  bottom: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 100vw;
-  height: 300px;
-  background: linear-gradient(to bottom, transparent 0%, #0a0a12 85%);
-  pointer-events: none;
-  z-index: 3;
-}
-
 .section-title {
   font-family: var(--font-display);
   font-size: 3rem;
@@ -954,10 +940,24 @@
 /* --- BOTTOM CTA SECTION (Dark Mode — matches landing page vibe) --- */
 .bottom-cta-section {
   background: transparent;
-  padding: 60px 24px 140px;
+  padding: 0 24px 140px;
   position: relative;
-  overflow: hidden;
+  overflow: visible;
   text-align: center;
+}
+
+/* CTA section starts with a tall dark fade — content emerges from darkness */
+.bottom-cta-section::before {
+  content: '';
+  position: absolute;
+  top: -150px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100vw;
+  height: calc(100% + 150px);
+  background: linear-gradient(to bottom, transparent 0%, #0a0a12 150px, #0a0a12 100%);
+  pointer-events: none;
+  z-index: 1;
 }
 
 .bottom-cta-content {
@@ -968,6 +968,7 @@
   display: flex;
   flex-direction: column;
   align-items: center;
+  padding-top: 120px;
 }
 
 .cta-badge {
