@@ -49,7 +49,7 @@ function AppContent() {
   const { state } = useZule();
   const { currentPage, isCopilotActive } = state;
   const { isOnline } = useOnlineStatus();
-  const { user, loading } = useAuth();
+  const { user, loading, logout } = useAuth();
 
   // Sync offline state to the AI provider router (Requirement 20.1)
   useEffect(() => {
@@ -97,6 +97,32 @@ function AppContent() {
             Diagnostics
           </a>
         </div>
+
+        {/* User Profile */}
+        {user && (
+          <div className="nav-profile">
+            <div className="nav-profile-info">
+              {user.photoURL ? (
+                <img src={user.photoURL} alt="" className="nav-profile-avatar" referrerPolicy="no-referrer" />
+              ) : (
+                <div className="nav-profile-avatar nav-profile-avatar-fallback">
+                  {(user.displayName || user.email || '?')[0].toUpperCase()}
+                </div>
+              )}
+              <div className="nav-profile-details">
+                <span className="nav-profile-name">{user.displayName || 'User'}</span>
+                <span className="nav-profile-email">{user.email}</span>
+              </div>
+            </div>
+            <button className="nav-logout-btn" onClick={() => logout()} title="Sign out">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                <polyline points="16 17 21 12 16 7" />
+                <line x1="21" y1="12" x2="9" y2="12" />
+              </svg>
+            </button>
+          </div>
+        )}
       </nav>
 
       {/* Main Content Area */}
