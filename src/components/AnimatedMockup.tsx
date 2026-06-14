@@ -22,7 +22,7 @@ export function AnimatedMockup() {
       if (typingIndex < QUESTION_TEXT.length) {
         const timeout = setTimeout(() => {
           setTypingIndex(prev => prev + 1);
-        }, Math.random() * 50 + 30); // Random typing speed
+        }, 20); // Smooth, fast typing speed
         return () => clearTimeout(timeout);
       } else {
         const timeout = setTimeout(() => setPhase('thinking'), 500);
@@ -64,9 +64,10 @@ export function AnimatedMockup() {
         </div>
 
         <div className="mockup-ai-response" style={{ minHeight: '120px', position: 'relative' }}>
-          <AnimatePresence>
+          <AnimatePresence mode="wait">
             {phase === 'thinking' && (
               <motion.div
+                key="thinking"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
@@ -79,12 +80,13 @@ export function AnimatedMockup() {
             )}
             
             {(phase === 'answering' || phase === 'done') && (
-              <motion.div
+              <motion.p
+                key="answer"
                 initial="hidden"
                 animate="visible"
                 variants={{
                   hidden: { opacity: 0 },
-                  visible: { opacity: 1, transition: { staggerChildren: 0.05 } }
+                  visible: { opacity: 1, transition: { staggerChildren: 0.03 } }
                 }}
               >
                 {ANSWER_TEXT.split(' ').map((word, i) => (
@@ -99,7 +101,7 @@ export function AnimatedMockup() {
                     {word}
                   </motion.span>
                 ))}
-              </motion.div>
+              </motion.p>
             )}
           </AnimatePresence>
         </div>
