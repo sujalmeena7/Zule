@@ -1493,8 +1493,16 @@
     grid-template-columns: 1fr 1fr;
   }
   
+  .bento-content {
+    padding-top: 140px; /* Force text below graphic on tablet */
+  }
+  
   .hiw-grid {
     gap: 32px;
+  }
+  
+  .hiw-card {
+    padding-bottom: 250px; /* Reserve space for absolute mockups */
   }
   
   .stats-layout {
@@ -1565,6 +1573,14 @@
     grid-template-columns: 1fr;
   }
   
+  .bento-card {
+    min-height: 380px;
+  }
+  
+  .bento-content {
+    padding-top: 160px; /* Force text below the graphic */
+  }
+  
   .bento-card.large {
     grid-column: span 1;
   }
@@ -1584,6 +1600,11 @@
   
   .hiw-step {
     padding: 32px 24px;
+  }
+  
+  .hiw-card {
+    min-height: 550px;
+    padding: 40px 24px 280px 24px; /* Massive bottom padding for the absolute mockup */
   }
   
   /* Live Stats & Mockup */
