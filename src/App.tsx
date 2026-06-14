@@ -69,6 +69,11 @@ function AppContent() {
     return <LandingPage />;
   }
 
+  // Web browser: only allow landing page, block dashboard access
+  if (!isElectron()) {
+    return <LandingPage />;
+  }
+
   // Auth guard: if not logged in and not on landing, show auth page
   if (!user) {
     return <AuthPage />;
