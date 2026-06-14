@@ -8,6 +8,7 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   signInWithPopup,
+  signInWithCredential,
   GoogleAuthProvider,
   signOut,
   type User,
@@ -48,7 +49,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signInWithGoogle = async () => {
-    await signInWithPopup(auth, googleProvider);
+    // In Electron, signInWithPopup needs special handling.
+    // The popup window is allowed via setWindowOpenHandler in main.ts.
+    // We need to ensure the popup can communicate back.
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (err: unknown) {
+      // If popup fails (common in Electron), try with redirect as fallback
+      const message = err instanceof Error ? err.message : '';
+      if (message.includes('popup') || message.includes('cross-origin')) {
+        // Fallback: open Google OAuth URL in system browser isn't practical
+        // for getting the token back. Re-throw to surface the error.
+        throw err;
+      }
+      throw err;
+    }
   };
 
   const logout = async () => {

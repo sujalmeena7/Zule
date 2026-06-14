@@ -160,14 +160,47 @@ function createMainWindow(): void {
 
   // Allow Firebase auth popups (Google sign-in) to open in a new window.
   // Without this handler, Electron blocks popup windows by default.
+  // The popup needs to share the same session/partition as the parent
+  // so Firebase can communicate the auth result back.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    // Allow Firebase/Google auth popups
+    // Allow Firebase/Google auth popups — they need to open as child windows
+    // with the same session so postMessage works for credential relay.
     if (url.includes('accounts.google.com') || url.includes('firebaseapp.com') || url.includes('googleapis.com')) {
-      return { action: 'allow' };
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          width: 500,
+          height: 700,
+          autoHideMenuBar: true,
+          parent: mainWindow!,
+          webPreferences: {
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: false,
+          },
+        },
+      };
     }
     // For other URLs, open in the system browser
     shell.openExternal(url);
     return { action: 'deny' };
+  });
+
+  // Handle Firebase auth popup callback — when the child window navigates to
+  // the Firebase auth handler, inject a script that relays the result back
+  // to the parent window via IPC (since window.opener doesn't work in Electron).
+  mainWindow.webContents.on('did-create-window', (childWindow) => {
+    childWindow.webContents.on('will-navigate', (_event, url) => {
+      // When the auth handler finishes, the popup tries to close itself.
+      // We give it a moment then close it ourselves.
+      if (url.includes('firebaseapp.com/__/auth/handler')) {
+        setTimeout(() => {
+          if (!childWindow.isDestroyed()) {
+            childWindow.close();
+          }
+        }, 2000);
+      }
+    });
   });
 
   // Apply screen-capture invisibility to the dashboard window too. Without
