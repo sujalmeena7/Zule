@@ -1244,7 +1244,7 @@
 
 .tools-ticker-wrapper {
   position: relative;
-  max-width: 500px;
+  max-width: 600px;
   margin: 0 auto;
   overflow: hidden;
   mask-image: linear-gradient(to right, transparent 0%, black 10%, black 90%, transparent 100%);
