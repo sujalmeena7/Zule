@@ -108,7 +108,7 @@ export function LandingPage() {
             animate={{ opacity: 1, scale: 1 }}
             transition={{ duration: 0.8, ease: "easeOut" }}
           >
-            <Zap size={14} color="#3b82f6" />
+            <img src="/favicon.svg" alt="Zule" style={{ width: 14, height: 14 }} />
             Zule 2.0 is now live
           </motion.div>
           
