@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { useZule } from '../context/ZuleContext';
-import { Shield, Zap, Download, Play, Mic, Video, Smile, Wifi, Battery, Compass, LayoutGrid, Settings, Trash, CirclePlay, Square, MessageSquareText, PenTool, Globe, Link, Mail, MessageCircle } from 'lucide-react';
+import { Shield, Zap, Download, Play, Mic, Video, Smile, CirclePlay, Square, Globe, Mail, MessageCircle } from 'lucide-react';
 import './LandingPage.css';
 
 export function LandingPage() {
@@ -53,7 +53,7 @@ export function LandingPage() {
       opacity: 1,
       transition: { 
         duration: 0.7, 
-        ease: [0.16, 1, 0.3, 1]
+        ease: [0.16, 1, 0.3, 1] as [number, number, number, number]
       } 
     }
   };
