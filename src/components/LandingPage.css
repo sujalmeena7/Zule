@@ -272,6 +272,7 @@
 
 .hero-title-word {
   display: inline-block;
+  will-change: transform, opacity;
 }
 
 .hero-title .gradient-text {

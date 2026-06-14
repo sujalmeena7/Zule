@@ -40,15 +40,22 @@ export function LandingPage() {
     visible: {
       opacity: 1,
       transition: {
-        staggerChildren: 0.1,
-        delayChildren: 0.2
+        staggerChildren: 0.06,
+        delayChildren: 0.1
       }
     }
   };
 
   const wordVariants = {
-    hidden: { y: '1.25em' },
-    visible: { y: 0, transition: { duration: 0.8 } }
+    hidden: { y: '1.1em', opacity: 0 },
+    visible: { 
+      y: 0, 
+      opacity: 1,
+      transition: { 
+        duration: 0.7, 
+        ease: [0.16, 1, 0.3, 1]
+      } 
+    }
   };
   return (
     <div className="landing-container">
