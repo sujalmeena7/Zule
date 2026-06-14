@@ -1253,25 +1253,33 @@
 .tools-ticker-track {
   display: flex;
   width: max-content;
-  animation: ticker-scroll 20s linear infinite;
+  animation: ticker-scroll 25s linear infinite;
 }
 
 .tools-ticker-set {
   display: flex;
-  gap: 56px;
-  padding-right: 56px;
+  gap: 28px;
+  padding-right: 28px;
   align-items: center;
 }
 
 .ticker-item {
-  font-size: 0.9rem;
+  font-size: 0.88rem;
   font-weight: 500;
   color: #64748b;
   white-space: nowrap;
   letter-spacing: 0.01em;
 }
 
+.ticker-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: #334155;
+  flex-shrink: 0;
+}
+
 @keyframes ticker-scroll {
   0% { transform: translateX(0); }
-  100% { transform: translateX(-50%); }
+  100% { transform: translateX(-25%); }
 }

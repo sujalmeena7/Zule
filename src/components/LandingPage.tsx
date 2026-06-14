@@ -189,13 +189,18 @@ export function LandingPage() {
           <p className="tools-ticker-label">COMPATIBLE WITH EVERY TOOL</p>
           <div className="tools-ticker-wrapper">
             <div className="tools-ticker-track">
-              {[...Array(2)].map((_, setIdx) => (
+              {[...Array(4)].map((_, setIdx) => (
                 <div key={setIdx} className="tools-ticker-set">
                   <div className="ticker-item">Zoom</div>
+                  <div className="ticker-dot" />
                   <div className="ticker-item">Slack</div>
+                  <div className="ticker-dot" />
                   <div className="ticker-item">Microsoft Teams</div>
+                  <div className="ticker-dot" />
                   <div className="ticker-item">Google Meet</div>
+                  <div className="ticker-dot" />
                   <div className="ticker-item">Webex</div>
+                  <div className="ticker-dot" />
                 </div>
               ))}
             </div>
