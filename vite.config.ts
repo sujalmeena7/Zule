@@ -1,6 +1,10 @@
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { copyVendorAssets } from './scripts/copy-vendor.mjs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 /**
  * Vite plugin that mirrors PDF.js, Tesseract, and Transformers.js (ONNX)
@@ -36,7 +40,7 @@ export default defineConfig({
     alias: {
       // @xenova/transformers is used in vectorStore.ts but only runs in Electron.
       // For the web/landing page build, stub it out so the build doesn't fail.
-      '@xenova/transformers': '@huggingface/transformers',
+      '@xenova/transformers': path.resolve(__dirname, 'src/brain/transformers-stub.ts'),
     },
   },
   build: {
