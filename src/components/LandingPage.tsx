@@ -114,6 +114,11 @@ export function LandingPage() {
             Zule 2.0 is now live
           </motion.div>
           
+          {/* SEO Visually Hidden H2 for Competitor Keyword Ranking */}
+          <h2 style={{ position: 'absolute', width: '1px', height: '1px', padding: 0, margin: '-1px', overflow: 'hidden', clip: 'rect(0, 0, 0, 0)', whiteSpace: 'nowrap', border: 0 }}>
+            Looking for a Cluely alternative? Zule is the ultimate undetectable AI meeting assistant for real-time answers.
+          </h2>
+          
           <motion.h1 
             className="hero-title"
             variants={containerVariants}

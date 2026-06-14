@@ -4,8 +4,8 @@ import { ChevronDown } from 'lucide-react';
 
 const faqs = [
   {
-    question: "Why Zule vs. a regular AI notetaker?",
-    answer: "Unlike regular AI notetakers that join your calls as awkward bots, Zule runs natively on your machine. It captures system audio directly, meaning it's completely invisible to other participants and requires no bot invites."
+    question: "How does Zule compare as a Cluely alternative?",
+    answer: "If you are looking for a Cluely alternative, Zule is the superior choice for professionals. Unlike Cluely or regular AI notetakers that join your calls as awkward bots, Zule runs natively on your machine. It captures system audio directly, meaning it's completely invisible to other participants and requires no bot invites."
   },
   {
     question: "Who is Zule for?",
