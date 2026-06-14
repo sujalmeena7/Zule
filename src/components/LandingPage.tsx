@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { useZule } from '../context/ZuleContext';
 import { Shield, Zap, Download, Play, Mic, Video, Smile, CirclePlay, Square, Globe, Mail, MessageCircle } from 'lucide-react';
 import { FAQSection } from './FAQSection';
+import { AnimatedMockup } from './AnimatedMockup';
 import './LandingPage.css';
 
 export function LandingPage() {
@@ -210,44 +211,8 @@ export function LandingPage() {
         {/* --- LIVE INTELLIGENCE STATS SECTION --- */}
         <section className="stats-section">
           <div className="stats-layout">
-            {/* Left: Zule overlay mockup showing what the app actually does */}
-            <motion.div
-              className="stats-mockup"
-              initial={{ opacity: 0, x: -40 }}
-              whileInView={{ opacity: 1, x: 0 }}
-              viewport={{ once: true }}
-              transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1] }}
-            >
-              {/* Dark overlay card mimicking the actual Zule copilot */}
-              <div className="mockup-overlay-card">
-                <div className="mockup-mode-pill">✨ Assist</div>
-                <div className="mockup-question">
-                  <span className="mockup-q-label">You asked:</span>
-                  <p>"What should I say about our Q3 growth?"</p>
-                </div>
-                <div className="mockup-ai-response">
-                  <motion.p
-                    initial={{ opacity: 0 }}
-                    whileInView={{ opacity: 1 }}
-                    viewport={{ once: true }}
-                    transition={{ delay: 0.5, duration: 1.5 }}
-                  >
-                    Revenue grew 34% QoQ driven by enterprise expansion. Our pipeline has 12 deals in late stage worth $2.4M ARR. Customer retention is at 96%, up from 91% last quarter.
-                  </motion.p>
-                </div>
-                <div className="mockup-bottom-bar">
-                  <div className="mockup-actions">
-                    <span>✨ Assist</span>
-                    <span>💬 What should I say?</span>
-                    <span>📋 Follow-up</span>
-                  </div>
-                  <div className="mockup-input-bar">
-                    Ask about your screen or conversation...
-                  </div>
-                </div>
-              </div>
-              <div className="mockup-caption">Zule overlay during a live meeting — invisible to others</div>
-            </motion.div>
+            {/* Left: Zule overlay mockup showing what the app actually does (Now Animated) */}
+            <AnimatedMockup />
 
             {/* Right: Stats with animated numbers */}
             <div className="stats-right">
