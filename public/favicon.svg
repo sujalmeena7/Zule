@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- Brand Color Gradients -->
+    <linearGradient id="top-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6" />
+      <stop offset="100%" stop-color="#6366f1" />
+    </linearGradient>
+    
+    <linearGradient id="diag-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366f1" />
+      <stop offset="50%" stop-color="#8b5cf6" />
+      <stop offset="100%" stop-color="#d946ef" />
+    </linearGradient>
+    
+    <linearGradient id="bottom-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6" />
+      <stop offset="100%" stop-color="#ec4899" />
+    </linearGradient>
+
+    <!-- Overlay Highlight Gradients for 3D depth -->
+    <linearGradient id="highlight" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.25" />
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0" />
+    </linearGradient>
+    
+    <!-- Shadow Filter for 3D effect -->
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#090714" flood-opacity="0.6" />
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#8b5cf6" flood-opacity="0.15" />
+    </filter>
+
+    <!-- Glow Filter -->
+    <filter id="glow" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur stdDeviation="20" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Group with Shadow & Glow -->
+  <g filter="url(#shadow)">
+    <!-- 1. Bottom Ribbon (Back layer) -->
+    <path d="M 195,382 
+             L 345,382 
+             C 356,382 364,390 360,400 
+             L 340,432 
+             C 336,438 330,442 323,442 
+             L 173,442 
+             C 162,442 154,434 158,424 
+             L 178,392 
+             C 182,386 188,382 195,382 Z" 
+          fill="url(#bottom-grad)" />
+
+    <!-- 2. Middle Diagonal Ribbon -->
+    <path d="M 366,138 
+             L 186,390 
+             C 180,398 168,402 160,394 
+             L 136,374 
+             C 128,368 128,356 134,348 
+             L 314,96 
+             C 320,88 332,84 340,92 
+             L 364,112 
+             C 372,118 372,130 366,138 Z" 
+          fill="url(#diag-grad)" />
+
+    <!-- 3. Top Ribbon (Front layer) -->
+    <path d="M 215,130 
+             L 365,130 
+             C 376,130 384,138 380,148 
+             L 360,180 
+             C 356,186 350,190 343,190 
+             L 193,190 
+             C 182,190 174,182 178,172 
+             L 198,140 
+             C 202,134 208,130 215,130 Z" 
+          fill="url(#top-grad)" />
+
+    <!-- 4. Glossy Highlight Overlays -->
+    <path d="M 215,130 L 365,130 L 360,138 L 210,138 Z" fill="url(#highlight)" />
+    <path d="M 195,382 L 345,382 L 340,390 L 190,390 Z" fill="url(#highlight)" />
+  </g>
+</svg>

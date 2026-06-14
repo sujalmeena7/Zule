@@ -1,0 +1,37 @@
+# ============================================
+# Zule AI — Electron Builder Configuration
+# ============================================
+# Targets Windows only (as per user requirement)
+
+appId: com.zule.ai
+productName: Zule AI
+copyright: Copyright © 2024 Zule AI
+
+directories:
+  buildResources: public
+  output: release
+
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - public/favicon.png
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: public/favicon.png
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Zule AI
+
+# Auto-update configuration (Phase 4)
+publish:
+  provider: github
+  owner: zule-ai
+  repo: zule
