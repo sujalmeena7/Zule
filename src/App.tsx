@@ -14,6 +14,8 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { DetachedCopilot } from './components/copilot/DetachedCopilot';
 import { LandingPage } from './components/LandingPage';
 import { AuthPage } from './components/AuthPage';
+import { PrivacyPolicy } from './components/PrivacyPolicy';
+import { TermsOfService } from './components/TermsOfService';
 import { AuthProvider, useAuth } from './firebase/AuthContext';
 import { ModelLoader } from './components/common/ModelLoader';
 import { LayoutDashboard, Settings as SettingsIcon, Activity } from 'lucide-react';
@@ -170,6 +172,23 @@ function App() {
     return (
       <ErrorBoundary>
         <DetachedCopilot />
+      </ErrorBoundary>
+    );
+  }
+
+  // Legal Pages
+  if (hashRoute === '#privacy') {
+    return (
+      <ErrorBoundary>
+        <PrivacyPolicy />
+      </ErrorBoundary>
+    );
+  }
+
+  if (hashRoute === '#terms') {
+    return (
+      <ErrorBoundary>
+        <TermsOfService />
       </ErrorBoundary>
     );
   }
