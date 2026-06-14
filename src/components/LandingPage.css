@@ -1221,3 +1221,65 @@
     grid-template-columns: 1fr;
   }
 }
+
+
+/* --- TOOLS TICKER (Infinite Scroll Marquee) --- */
+.tools-ticker-section {
+  padding: 60px 0;
+  overflow: hidden;
+  position: relative;
+}
+
+.tools-ticker-label {
+  text-align: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: #64748b;
+  margin-bottom: 24px;
+}
+
+.tools-ticker-wrapper {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  mask-image: linear-gradient(to right, transparent 0%, black 10%, black 90%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, black 10%, black 90%, transparent 100%);
+}
+
+.tools-ticker-track {
+  display: flex;
+  width: max-content;
+  animation: ticker-scroll 30s linear infinite;
+}
+
+.tools-ticker-set {
+  display: flex;
+  gap: 48px;
+  padding-right: 48px;
+}
+
+.ticker-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: #94a3b8;
+  white-space: nowrap;
+  transition: color 0.3s;
+}
+
+.ticker-item:hover {
+  color: #f1f5f9;
+}
+
+.ticker-icon {
+  font-size: 1.1rem;
+}
+
+@keyframes ticker-scroll {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}

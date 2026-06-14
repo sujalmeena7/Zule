@@ -184,6 +184,27 @@ export function LandingPage() {
 
         </section>
 
+        {/* --- COMPATIBLE TOOLS TICKER --- */}
+        <section className="tools-ticker-section">
+          <p className="tools-ticker-label">COMPATIBLE WITH EVERY TOOL</p>
+          <div className="tools-ticker-wrapper">
+            <div className="tools-ticker-track">
+              {[...Array(2)].map((_, setIdx) => (
+                <div key={setIdx} className="tools-ticker-set">
+                  <div className="ticker-item"><span className="ticker-icon">📹</span> Zoom</div>
+                  <div className="ticker-item"><span className="ticker-icon">💬</span> Slack</div>
+                  <div className="ticker-item"><span className="ticker-icon">🟦</span> Webex</div>
+                  <div className="ticker-item"><span className="ticker-icon">🟪</span> Microsoft Teams</div>
+                  <div className="ticker-item"><span className="ticker-icon">🟢</span> Google Meet</div>
+                  <div className="ticker-item"><span className="ticker-icon">🎧</span> Discord</div>
+                  <div className="ticker-item"><span className="ticker-icon">📞</span> Skype</div>
+                  <div className="ticker-item"><span className="ticker-icon">🔴</span> YouTube Live</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
         {/* --- HOW IT WORKS SECTION --- */}
         <section id="how-it-works" className="hiw-section">
           <motion.h2 
