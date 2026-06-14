@@ -77,7 +77,6 @@ export function LandingPage() {
         >
           <a href="#features">Features</a>
           <a href="#how-it-works">How it works</a>
-          <button className="btn-landing" onClick={handleGetStarted}>Log in</button>
         </motion.nav>
       </header>
 
