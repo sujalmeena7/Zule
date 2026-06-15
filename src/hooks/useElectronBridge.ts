@@ -31,6 +31,7 @@ const browserFallback: ElectronAPI = {
   onSyncMessage: () => () => {},
   onOverlayError: () => () => {},
   onGlobalShortcut: () => () => {},
+  loginViaBrowser: async () => '',
   getDesktopSources: async () => [],
 };
 

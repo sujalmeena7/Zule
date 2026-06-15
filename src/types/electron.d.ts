@@ -40,6 +40,9 @@ export interface ElectronAPI {
   // Global Shortcuts (Phase 3)
   onGlobalShortcut: (callback: (shortcutId: string) => void) => () => void;
 
+  // Authentication
+  loginViaBrowser?: () => Promise<string>;
+
   // Native Screen Capture (Phase 3)
   getDesktopSources: () => Promise<
     Array<{

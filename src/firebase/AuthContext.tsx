@@ -33,7 +33,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const { isElectron, electron } = useElectronBridge();
+  const { isElectronEnv, api } = useElectronBridge();
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
@@ -54,9 +54,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signInWithGoogle = async () => {
-    if (isElectron && electron?.loginViaBrowser) {
+    if (isElectronEnv && api?.loginViaBrowser) {
       // 1. Electron deep-link flow: opens the system browser to the web app
-      const idToken = await electron.loginViaBrowser();
+      const idToken = await api.loginViaBrowser();
       // 2. Construct the Google credential using the idToken
       const credential = GoogleAuthProvider.credential(idToken);
       // 3. Log the user into Firebase locally

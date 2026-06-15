@@ -32,7 +32,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const DIST = path.join(__dirname, '../dist');
 const PRELOAD = path.join(__dirname, 'preload.mjs');
-const DEV_URL = 'http://localhost:5173';
+const DEV_URL = process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173';
 const isDev = !app.isPackaged;
 
 // ── Chromium feature toggles ─────────────────────────────────────────────────
@@ -252,7 +252,8 @@ function createMainWindow(): void {
           const port = address.port;
           // Construct the deep link to the web app
           // Use localhost in dev, vercel url in production
-          const baseUrl = isDev ? 'http://localhost:5173/' : 'https://zuleai.vercel.app/';
+          let baseUrl = isDev ? DEV_URL : 'https://zuleai.vercel.app';
+          if (!baseUrl.endsWith('/')) baseUrl += '/';
           const authUrl = `${baseUrl}?desktop_login=true&port=${port}&state=${stateNonce}`;
           
           // Open the system default browser
