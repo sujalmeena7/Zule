@@ -154,7 +154,7 @@ function createMainWindow(): void {
     minWidth: 900,
     minHeight: 600,
     title: 'Zule AI',
-    icon: path.join(__dirname, '../public/favicon.png'),
+    icon: path.join(__dirname, '../public/favicon.ico'),
     backgroundColor: '#0a0a12',
     // Render the page even before show so the first paint after
     // setContentProtection() is fully composited.
