@@ -4,7 +4,7 @@
 
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowRight, Loader2, Shield, Zap, Sparkles, Eye, EyeOff } from 'lucide-react';
+import { ArrowRight, Loader2, Shield, Zap, Sparkles, Eye, EyeOff, CheckCircle2 } from 'lucide-react';
 import { useAuth } from '../firebase/AuthContext';
 import { isElectron } from '../hooks/useElectronBridge';
 import { sendPasswordResetEmail, signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
@@ -314,9 +314,24 @@ export function AuthPage() {
                     animate={{ opacity: 1, scale: 1 }}
                     style={{ textAlign: 'center', padding: '2rem', marginTop: '2rem' }}
                   >
-                    <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🎉</div>
-                    <h2 style={{ color: 'white', marginBottom: '0.5rem' }}>Success!</h2>
-                    {success}
+                    <motion.div 
+                      initial={{ scale: 0.8, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      transition={{ delay: 0.1, type: 'spring', stiffness: 200, damping: 15 }}
+                      style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'center' }}
+                    >
+                      <motion.div
+                        animate={{ boxShadow: ['0 0 0px 0px rgba(16, 185, 129, 0)', '0 0 40px 10px rgba(16, 185, 129, 0.3)', '0 0 0px 0px rgba(16, 185, 129, 0)'] }}
+                        transition={{ duration: 2.5, repeat: Infinity, ease: 'easeInOut' }}
+                        style={{ borderRadius: '50%', display: 'flex', background: 'rgba(16, 185, 129, 0.1)', padding: '1rem' }}
+                      >
+                        <CheckCircle2 size={48} color="#10b981" strokeWidth={1.5} />
+                      </motion.div>
+                    </motion.div>
+                    <h2 style={{ color: 'white', marginBottom: '0.75rem', fontWeight: 600, letterSpacing: '-0.5px' }}>Authentication complete</h2>
+                    <p style={{ color: '#94a3b8', fontSize: '0.95rem', lineHeight: '1.5' }}>
+                      You have successfully authenticated. You can safely close this tab and return to the Zule desktop app.
+                    </p>
                   </motion.div>
                 ) : desktopLoginState ? (
                   <motion.div
