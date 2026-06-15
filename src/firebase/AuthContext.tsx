@@ -14,6 +14,7 @@ import {
   type User,
 } from 'firebase/auth';
 import { auth } from './config';
+import { useElectronBridge } from '../hooks/useElectronBridge';
 
 interface AuthContextType {
   user: User | null;
@@ -32,6 +33,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const { isElectron, electron } = useElectronBridge();
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       setUser(firebaseUser);
@@ -39,6 +42,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     return unsubscribe;
   }, []);
+
+  // ── Electron Firebase Auth Relay ──────────────────────────────────────────
+  // Listen for the relayed postMessage payload from the popup window and 
+  // manually dispatch it on the local window so Firebase Web SDK completes the login!
+  useEffect(() => {
+    if (isElectron && electron?.onFirebaseAuthMessage) {
+      const cleanup = electron.onFirebaseAuthMessage((message) => {
+        console.log('[AuthContext] Received Firebase popup payload via IPC relay');
+        window.dispatchEvent(new MessageEvent('message', {
+          data: message,
+          // Firebase strictly checks the origin. We must match the auth domain.
+          origin: `https://${auth.app.options.authDomain}`
+        }));
+      });
+      return cleanup;
+    }
+  }, [isElectron, electron]);
 
   const signIn = async (email: string, password: string) => {
     await signInWithEmailAndPassword(auth, email, password);

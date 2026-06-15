@@ -8,7 +8,46 @@
 
 import { contextBridge, ipcRenderer } from 'electron';
 
-// ── Type-safe API exposed to the renderer ────────────────────────────────────
+// ── Popup Context Interceptor (Firebase Auth Fix) ─────────────────────────
+// When this preload runs inside a popup window (e.g., the Google sign-in window),
+// window.opener exists. We inject a script to intercept Firebase's cross-origin
+// postMessage attempt and route it securely over Electron IPC instead.
+if (window.opener) {
+  // Inject script to override window.opener in the page's isolated world
+  const script = document.createElement('script');
+  script.textContent = `
+    const originalOpener = window.opener;
+    window.opener = {
+      postMessage: function(message, targetOrigin) {
+        // Broadcast to the preload script listening on window
+        window.postMessage({ type: 'FIREBASE_AUTH_RELAY', payload: message }, '*');
+        
+        // Also try the original opener just in case
+        if (originalOpener && originalOpener.postMessage) {
+          try { originalOpener.postMessage(message, targetOrigin); } catch (e) {}
+        }
+      }
+    };
+  `;
+  
+  // Attach as soon as possible
+  if (document.documentElement) {
+    document.documentElement.appendChild(script);
+  } else {
+    document.addEventListener('DOMContentLoaded', () => {
+      document.documentElement.appendChild(script);
+    });
+  }
+
+  // Listen for the relayed message and forward to the main process
+  window.addEventListener('message', (event) => {
+    if (event.data?.type === 'FIREBASE_AUTH_RELAY') {
+      ipcRenderer.send('firebase-popup-message', event.data.payload);
+    }
+  });
+}
+
+// ── Type-safe API exposed to the renderer (Main Window Only) ───────────────
 
 const electronAPI = {
   /** Identifier so the React app can detect Electron environment. */
@@ -101,6 +140,15 @@ const electronAPI = {
     return () => ipcRenderer.removeListener('overlay-error', handler);
   },
 
+  // ── Authentication Relay ──────────────────────────────────────────────────
+
+  /** Listen for Firebase Auth payload relayed from the auth popup via IPC. */
+  onFirebaseAuthMessage: (callback: (message: any) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, message: any) => callback(message);
+    ipcRenderer.on('firebase-auth-message', handler);
+    return () => ipcRenderer.removeListener('firebase-auth-message', handler);
+  },
+
   // ── Global Shortcuts (Phase 3) ───────────────────────────────────────────
 
   /** Listen for global shortcut events from the main process. */
@@ -123,8 +171,10 @@ const electronAPI = {
   > => ipcRenderer.invoke('get-desktop-sources'),
 };
 
-// Expose the API to the renderer's window object
-contextBridge.exposeInMainWorld('electronAPI', electronAPI);
+// Only expose the API in the main dashboard window, not the auth popup
+if (!window.opener) {
+  contextBridge.exposeInMainWorld('electronAPI', electronAPI);
+}
 
 // ── TypeScript declaration for the renderer ──────────────────────────────────
 // This type is consumed by src/hooks/useElectronBridge.ts

@@ -174,6 +174,7 @@ function createMainWindow(): void {
           autoHideMenuBar: true,
           parent: mainWindow!,
           webPreferences: {
+            preload: PRELOAD, // Inject preload script to intercept postMessage
             contextIsolation: true,
             nodeIntegration: false,
             sandbox: false,
@@ -186,19 +187,21 @@ function createMainWindow(): void {
     return { action: 'deny' };
   });
 
-  // Handle Firebase auth popup callback — when the child window navigates to
-  // the Firebase auth handler, inject a script that relays the result back
-  // to the parent window via IPC (since window.opener doesn't work in Electron).
-  mainWindow.webContents.on('did-create-window', (childWindow) => {
-    childWindow.webContents.on('will-navigate', (_event, url) => {
-      // When the auth handler finishes, the popup tries to close itself.
-      // We give it a moment then close it ourselves.
-      if (url.includes('firebaseapp.com/__/auth/handler')) {
-        setTimeout(() => {
-          if (!childWindow.isDestroyed()) {
-            childWindow.close();
-          }
-        }, 2000);
+  // Handle Firebase auth popup callback via IPC relay
+  // The injected preload script intercepts window.opener.postMessage and sends it to us.
+  ipcMain.on('firebase-popup-message', (_event, message) => {
+    // Relay the message to the parent dashboard window
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('firebase-auth-message', message);
+    }
+    
+    // Automatically close any auth popups
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (win !== mainWindow && !win.isDestroyed()) {
+        const url = win.webContents.getURL();
+        if (url.includes('firebaseapp.com') || url.includes('accounts.google.com')) {
+          win.close();
+        }
       }
     });
   });
