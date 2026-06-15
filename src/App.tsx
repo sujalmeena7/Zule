@@ -69,6 +69,14 @@ function AppContent() {
     );
   }
 
+  // Check if this is a deep-link for desktop authentication
+  const isDesktopLogin = new URLSearchParams(window.location.search).get('desktop_login') === 'true';
+
+  // Force AuthPage for desktop login handoff, bypassing all other routes
+  if (isDesktopLogin) {
+    return <AuthPage />;
+  }
+
   if (currentPage === 'landing') {
     return <LandingPage />;
   }
@@ -81,12 +89,8 @@ function AppContent() {
     return <BlogPost />;
   }
 
-  // Check if this is a deep-link for desktop authentication
-  const isDesktopLogin = new URLSearchParams(window.location.search).get('desktop_login') === 'true';
-
   // Web browser: only allow public marketing pages, block dashboard access
-  // Unless we are explicitly doing a desktop deep-link login!
-  if (!isElectron() && !isDesktopLogin) {
+  if (!isElectron()) {
     return <LandingPage />;
   }
 
