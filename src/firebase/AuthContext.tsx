@@ -29,6 +29,15 @@ const AuthContext = createContext<AuthContextType | null>(null);
 
 const googleProvider = new GoogleAuthProvider();
 
+// Hijack window.open to keep a reference to the popup window so we can
+// satisfy Firebase's strict event.source validation.
+let currentPopup: Window | null = null;
+const originalWindowOpen = window.open;
+window.open = function(...args) {
+  currentPopup = originalWindowOpen.apply(this, args);
+  return currentPopup;
+};
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -49,11 +58,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (isElectron && electron?.onFirebaseAuthMessage) {
       const cleanup = electron.onFirebaseAuthMessage((message) => {
-        console.log('[AuthContext] Received Firebase popup payload via IPC relay');
+        console.log('[AuthContext] Received Firebase popup payload via IPC relay:', message);
         window.dispatchEvent(new MessageEvent('message', {
           data: message,
-          // Firebase strictly checks the origin. We must match the auth domain.
-          origin: `https://${auth.app.options.authDomain}`
+          // Firebase strictly checks the origin and source.
+          origin: `https://${auth.app.options.authDomain}`,
+          source: currentPopup || window
         }));
       });
       return cleanup;
