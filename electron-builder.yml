@@ -14,6 +14,7 @@ directories:
 files:
   - dist/**/*
   - dist-electron/**/*
+  - public/favicon.ico
   - public/favicon.png
 
 win:
@@ -21,7 +22,7 @@ win:
     - target: nsis
       arch:
         - x64
-  icon: public/favicon.png
+  icon: public/favicon.ico
 
 nsis:
   oneClick: false
