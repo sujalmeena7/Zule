@@ -10,24 +10,32 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 // ── Popup Context Interceptor (Firebase Auth Fix) ─────────────────────────
 // When this preload runs inside a popup window (e.g., the Google sign-in window),
-// window.opener exists. We inject a script to intercept Firebase's cross-origin
-// postMessage attempt and route it securely over Electron IPC instead.
-if (window.opener) {
+// we inject a script to intercept Firebase's cross-origin postMessage attempt 
+// and route it securely over Electron IPC instead.
+const isAuthPopup = window.location.href.includes('accounts.google.com') || window.location.href.includes('firebaseapp.com');
+
+if (isAuthPopup) {
   // Inject script to override window.opener in the page's isolated world
   const script = document.createElement('script');
   script.textContent = `
     const originalOpener = window.opener;
-    window.opener = {
+    const fakeOpener = {
       postMessage: function(message, targetOrigin) {
-        // Broadcast to the preload script listening on window
         window.postMessage({ type: 'FIREBASE_AUTH_RELAY', payload: message }, '*');
-        
-        // Also try the original opener just in case
         if (originalOpener && originalOpener.postMessage) {
           try { originalOpener.postMessage(message, targetOrigin); } catch (e) {}
         }
       }
     };
+    try {
+      Object.defineProperty(window, 'opener', {
+        get: () => fakeOpener,
+        set: () => {},
+        configurable: true
+      });
+    } catch (err) {
+      window.opener = fakeOpener;
+    }
   `;
   
   // Attach as soon as possible
@@ -172,7 +180,7 @@ const electronAPI = {
 };
 
 // Only expose the API in the main dashboard window, not the auth popup
-if (!window.opener) {
+if (!isAuthPopup) {
   contextBridge.exposeInMainWorld('electronAPI', electronAPI);
 }
 

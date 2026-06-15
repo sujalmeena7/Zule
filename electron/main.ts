@@ -93,6 +93,15 @@ function relaxCSPForElectron(): void {
       );
     }
 
+    // Strip COOP/COEP headers that isolate popups and break Firebase Auth
+    // "Cross-Origin-Opener-Policy policy would block the window.closed call."
+    if (headers['cross-origin-opener-policy']) {
+      delete headers['cross-origin-opener-policy'];
+    }
+    if (headers['cross-origin-embedder-policy']) {
+      delete headers['cross-origin-embedder-policy'];
+    }
+
     callback({ responseHeaders: headers });
   });
 }
