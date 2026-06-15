@@ -164,7 +164,7 @@ export function AuthPage() {
                 animate={{ scale: [1, 1.3, 1], opacity: [0.3, 0.6, 0.3] }}
                 transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
               />
-              <img src="/logo.png" alt="Zule AI" />
+              <img src="/favicon.svg" alt="Zule AI" />
             </motion.div>
 
             {/* Title with letter-by-letter reveal */}

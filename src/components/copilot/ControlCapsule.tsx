@@ -124,7 +124,7 @@ export function ControlCapsule({
       )}
 
       <div className="capsule-logo">
-        <img src="/logo.png" alt="Zule AI" />
+        <img src="/favicon.svg" alt="Zule AI" />
       </div>
 
       <button
