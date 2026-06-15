@@ -1,18 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>https://zule.ai/</loc>
+    <loc>https://zuleai.vercel.app/</loc>
     <lastmod>2025-06-15</lastmod>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
   </url>
   <url>
-    <loc>https://zule.ai/#features</loc>
+    <loc>https://zuleai.vercel.app/#features</loc>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>https://zule.ai/#faq</loc>
+    <loc>https://zuleai.vercel.app/#faq</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
