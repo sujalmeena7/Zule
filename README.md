@@ -3,7 +3,7 @@
   <h1>Zule AI</h1>
   <p><strong>Your Undetectable, Local-First AI Meeting Assistant</strong></p>
   <p>
-    <a href="https://github.com/sujalmeena7/Zule/releases/latest/download/Zule-Setup.exe">
+    <a href="https://github.com/sujalmeena7/Zule/releases/latest/download/ZuleAI-setup.exe">
       <img src="https://img.shields.io/badge/Download-Windows-blue?style=for-the-badge&logo=windows" alt="Download Windows" />
     </a>
   </p>
@@ -39,7 +39,7 @@ This project is built with modern web and desktop technologies to ensure high pe
 ### For Users
 
 Ready to upgrade your meetings? Download the latest Windows installer directly from our releases page:
-👉 **[Download Zule AI Setup (.exe)](https://github.com/sujalmeena7/Zule/releases/latest/download/Zule-Setup.exe)**
+👉 **[Download Zule AI Setup (.exe)](https://github.com/sujalmeena7/Zule/releases/latest/download/ZuleAI-setup.exe)**
 
 ### For Developers
 

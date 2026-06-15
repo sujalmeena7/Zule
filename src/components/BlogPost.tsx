@@ -68,7 +68,7 @@ export function BlogPost() {
     );
   }
 
-  const DOWNLOAD_URL_WIN = 'https://github.com/sujalmeena7/Zule/releases/latest/download/Zule-Setup.exe';
+  const DOWNLOAD_URL_WIN = 'https://github.com/sujalmeena7/Zule/releases/latest/download/ZuleAI-setup.exe';
   const handleDownload = () => window.open(DOWNLOAD_URL_WIN, '_blank');
 
   return (

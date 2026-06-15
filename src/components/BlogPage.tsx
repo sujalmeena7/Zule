@@ -30,7 +30,7 @@ export function BlogPage() {
             <div className="landing-nav-links">
               <a href="#" onClick={(e) => { e.preventDefault(); actions.navigateTo('landing'); }}>Home</a>
             </div>
-            <button className="nav-cta" onClick={() => window.open('https://github.com/sujalmeena7/Zule/releases/latest/download/Zule-Setup.exe', '_blank')}>Get Zule</button>
+            <button className="nav-cta" onClick={() => window.open('https://github.com/sujalmeena7/Zule/releases/latest/download/ZuleAI-setup.exe', '_blank')}>Get Zule</button>
           </motion.nav>
         </header>
       </div>
