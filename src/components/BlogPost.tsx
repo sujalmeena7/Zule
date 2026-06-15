@@ -80,7 +80,7 @@ export function BlogPost() {
             style={{ cursor: 'pointer' }}
             onClick={() => actions.navigateTo('landing')}
           >
-            <img src="/favicon.svg" alt="Zule logo" className="landing-logo-icon" />
+            <img src="./favicon.svg" alt="Zule logo" className="landing-logo-icon" />
             <span>Zule AI</span>
           </motion.div>
           <nav className="landing-nav">

@@ -69,7 +69,7 @@ export function LandingPage() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, ease: "easeOut" }}
           >
-            <img src="/favicon.svg" alt="Zule logo" className="landing-logo-icon" />
+            <img src="./favicon.svg" alt="Zule logo" className="landing-logo-icon" />
             <span>Zule AI</span>
           </motion.div>
           <motion.nav 
@@ -117,7 +117,7 @@ export function LandingPage() {
             animate={{ opacity: 1, scale: 1 }}
             transition={{ duration: 0.8, ease: "easeOut" }}
           >
-            <img src="/favicon.svg" alt="Zule" style={{ width: 14, height: 14 }} />
+            <img src="./favicon.svg" alt="Zule" style={{ width: 14, height: 14 }} />
             Zule 2.0 is now live
           </motion.div>
           
@@ -579,7 +579,7 @@ export function LandingPage() {
           <div className="footer-top">
             <div className="footer-brand">
               <div className="footer-logo">
-                <img src="/favicon.svg" alt="Zule Logo" className="footer-logo-icon" style={{ width: '24px', height: '24px' }} />
+                <img src="./favicon.svg" alt="Zule Logo" className="footer-logo-icon" style={{ width: '24px', height: '24px' }} />
                 Zule
               </div>
             </div>

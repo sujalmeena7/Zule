@@ -1117,7 +1117,7 @@
 .footer-logo-icon {
   width: 24px;
   height: 24px;
-  background-image: url('/favicon.svg');
+  background-image: url('../assets/favicon.svg');
   background-size: cover;
   background-position: center;
   border-radius: 4px;

@@ -19,7 +19,7 @@ export function BlogPage() {
             initial={{ opacity: 0, y: -20 }}
             animate={{ opacity: 1, y: 0 }}
           >
-            <img src="/favicon.svg" alt="Zule logo" className="landing-logo-icon" />
+            <img src="./favicon.svg" alt="Zule logo" className="landing-logo-icon" />
             <span>Zule AI</span>
           </motion.div>
           <motion.nav 
