@@ -29,15 +29,6 @@ const AuthContext = createContext<AuthContextType | null>(null);
 
 const googleProvider = new GoogleAuthProvider();
 
-// Hijack window.open to keep a reference to the popup window so we can
-// satisfy Firebase's strict event.source validation.
-let currentPopup: Window | null = null;
-const originalWindowOpen = window.open;
-window.open = function(...args) {
-  currentPopup = originalWindowOpen.apply(this, args);
-  return currentPopup;
-};
-
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -52,23 +43,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return unsubscribe;
   }, []);
 
-  // ── Electron Firebase Auth Relay ──────────────────────────────────────────
-  // Listen for the relayed postMessage payload from the popup window and 
-  // manually dispatch it on the local window so Firebase Web SDK completes the login!
-  useEffect(() => {
-    if (isElectron && electron?.onFirebaseAuthMessage) {
-      const cleanup = electron.onFirebaseAuthMessage((message) => {
-        console.log('[AuthContext] Received Firebase popup payload via IPC relay:', message);
-        window.dispatchEvent(new MessageEvent('message', {
-          data: message,
-          // Firebase strictly checks the origin and source.
-          origin: `https://${auth.app.options.authDomain}`,
-          source: currentPopup || window
-        }));
-      });
-      return cleanup;
-    }
-  }, [isElectron, electron]);
+
 
   const signIn = async (email: string, password: string) => {
     await signInWithEmailAndPassword(auth, email, password);
@@ -79,21 +54,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signInWithGoogle = async () => {
-    // In Electron, signInWithPopup needs special handling.
-    // The popup window is allowed via setWindowOpenHandler in main.ts.
-    // We need to ensure the popup can communicate back.
-    try {
-      await signInWithPopup(auth, googleProvider);
-    } catch (err: unknown) {
-      // If popup fails (common in Electron), try with redirect as fallback
-      const message = err instanceof Error ? err.message : '';
-      if (message.includes('popup') || message.includes('cross-origin')) {
-        // Fallback: open Google OAuth URL in system browser isn't practical
-        // for getting the token back. Re-throw to surface the error.
-        throw err;
-      }
-      throw err;
+    if (isElectron && electron?.loginViaBrowser) {
+      // 1. Electron deep-link flow: opens the system browser to the web app
+      const idToken = await electron.loginViaBrowser();
+      // 2. Construct the Google credential using the idToken
+      const credential = GoogleAuthProvider.credential(idToken);
+      // 3. Log the user into Firebase locally
+      await signInWithCredential(auth, credential);
+      return;
     }
+    
+    // Normal web flow
+    await signInWithPopup(auth, googleProvider);
   };
 
   const logout = async () => {

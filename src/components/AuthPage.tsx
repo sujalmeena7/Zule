@@ -7,7 +7,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowRight, Loader2, Shield, Zap, Sparkles, Eye, EyeOff } from 'lucide-react';
 import { useAuth } from '../firebase/AuthContext';
 import { isElectron } from '../hooks/useElectronBridge';
-import { sendPasswordResetEmail } from 'firebase/auth';
+import { sendPasswordResetEmail, signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
 import { auth } from '../firebase/config';
 import './AuthPage.css';
 
@@ -22,6 +22,21 @@ export function AuthPage() {
   const [loading, setLoading] = useState(false);
   const [step, setStep] = useState<'email' | 'password'>('email');
   const [showLogin, setShowLogin] = useState(false);
+
+  // Desktop Deep-Link Login State
+  const [desktopLoginState, setDesktopLoginState] = useState<{ port: string; state: string } | null>(null);
+
+  // Check URL params on mount
+  useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('desktop_login') === 'true') {
+      setDesktopLoginState({
+        port: params.get('port') || '',
+        state: params.get('state') || '',
+      });
+      setShowLogin(true); // Skip welcome splash
+    }
+  });
 
   const handleEmailSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -63,11 +78,38 @@ export function AuthPage() {
     setError('');
     setLoading(true);
     try {
-      await signInWithGoogle();
+      if (desktopLoginState) {
+        // We are the middleman browser for the Desktop app!
+        const provider = new GoogleAuthProvider();
+        const result = await signInWithPopup(auth, provider);
+        const credential = GoogleAuthProvider.credentialFromResult(result);
+        if (!credential || !credential.idToken) {
+          throw new Error('Failed to retrieve Google ID Token');
+        }
+
+        // Post the token back to the waiting Electron local server
+        const response = await fetch(`http://127.0.0.1:${desktopLoginState.port}/token`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            idToken: credential.idToken,
+            state: desktopLoginState.state
+          })
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to hand off token to the Zule Desktop App. Try again.');
+        }
+
+        setSuccess('Authentication successful! You can safely close this tab and return to the Zule app.');
+      } else {
+        // Normal web app or Desktop app calling its own native bridge
+        await signInWithGoogle();
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Google sign-in failed';
       if (!message.includes('popup-closed-by-user')) {
-        setError('Google sign-in failed. Please try again.');
+        setError(message || 'Google sign-in failed. Please try again.');
       }
     } finally {
       setLoading(false);
@@ -250,7 +292,7 @@ export function AuthPage() {
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.2 }}
               >
-                {isSignUp ? 'Create account' : 'Welcome back'}
+                {desktopLoginState ? 'Zule Desktop Login' : (isSignUp ? 'Create account' : 'Welcome back')}
               </motion.h1>
               <motion.p
                 className="auth-subtitle"
@@ -258,11 +300,34 @@ export function AuthPage() {
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.3 }}
               >
-                {isSignUp ? 'Sign up to get started' : 'Sign in to your account'}
+                {desktopLoginState 
+                  ? 'Sign in to authenticate the desktop app'
+                  : (isSignUp ? 'Sign up to get started' : 'Sign in to your account')}
               </motion.p>
 
               <AnimatePresence mode="wait">
-                {step === 'email' ? (
+                {desktopLoginState && success ? (
+                  <motion.div
+                    key="desktop-success"
+                    className="auth-success"
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    style={{ textAlign: 'center', padding: '2rem', marginTop: '2rem' }}
+                  >
+                    <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🎉</div>
+                    <h2 style={{ color: 'white', marginBottom: '0.5rem' }}>Success!</h2>
+                    {success}
+                  </motion.div>
+                ) : desktopLoginState ? (
+                  <motion.div
+                    key="desktop-login"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    style={{ marginTop: '2rem' }}
+                  >
+                    {/* Render only Google button for desktop handoff */}
+                  </motion.div>
+                ) : step === 'email' ? (
                   <motion.form
                     key="email-step"
                     className="auth-email-form"
@@ -354,10 +419,12 @@ export function AuthPage() {
                 </motion.div>
               )}
 
-              {/* Google sign-in works seamlessly in Electron via the preload interceptor! */}
-              <div className="auth-divider">
-                <span>OR</span>
-              </div>
+              {/* Google sign-in works seamlessly via deep-link! */}
+              {!desktopLoginState && (
+                <div className="auth-divider">
+                  <span>OR</span>
+                </div>
+              )}
 
               <motion.button
                 className="auth-social-btn"
@@ -380,22 +447,26 @@ export function AuthPage() {
                 <ArrowRight size={16} className="auth-social-arrow" />
               </motion.button>
 
-              <motion.div
-                className="auth-switch"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ delay: 0.6 }}
-              >
-                {isSignUp ? (
-                  <p>Already have an account? <button onClick={() => { setIsSignUp(false); setError(''); setStep('email'); }}>Sign in</button></p>
-                ) : (
-                  <p>Don't have an account? <button onClick={() => { setIsSignUp(true); setError(''); setStep('email'); }}>Sign up</button></p>
-                )}
-              </motion.div>
+              {!desktopLoginState && (
+                <motion.div
+                  className="auth-switch"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ delay: 0.6 }}
+                >
+                  {isSignUp ? (
+                    <p>Already have an account? <button onClick={() => { setIsSignUp(false); setError(''); setStep('email'); }}>Sign in</button></p>
+                  ) : (
+                    <p>Don't have an account? <button onClick={() => { setIsSignUp(true); setError(''); setStep('email'); }}>Sign up</button></p>
+                  )}
+                </motion.div>
+              )}
 
-              <button className="auth-back-btn" onClick={() => setShowLogin(false)}>
-                ← Back
-              </button>
+              {!desktopLoginState && (
+                <button className="auth-back-btn" onClick={() => setShowLogin(false)}>
+                  ← Back
+                </button>
+              )}
             </div>
           </motion.div>
         )}

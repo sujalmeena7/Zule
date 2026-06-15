@@ -22,6 +22,8 @@ import {
 } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import http from 'node:http';
+import crypto from 'node:crypto';
 import { OverlayManager } from './overlayManager';
 
 // ── Paths ────────────────────────────────────────────────────────────────────
@@ -167,51 +169,104 @@ function createMainWindow(): void {
     },
   });
 
-  // Allow Firebase auth popups (Google sign-in) to open in a new window.
-  // Without this handler, Electron blocks popup windows by default.
-  // The popup needs to share the same session/partition as the parent
-  // so Firebase can communicate the auth result back.
+  // Allow normal external links to open in the system browser
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    // Allow Firebase/Google auth popups — they need to open as child windows
-    // with the same session so postMessage works for credential relay.
-    if (url.includes('accounts.google.com') || url.includes('firebaseapp.com') || url.includes('googleapis.com')) {
-      return {
-        action: 'allow',
-        overrideBrowserWindowOptions: {
-          width: 500,
-          height: 700,
-          autoHideMenuBar: true,
-          parent: mainWindow!,
-          webPreferences: {
-            preload: PRELOAD, // Inject preload script to intercept postMessage
-            contextIsolation: true,
-            nodeIntegration: false,
-            sandbox: false,
-          },
-        },
-      };
-    }
-    // For other URLs, open in the system browser
     shell.openExternal(url);
     return { action: 'deny' };
   });
 
-  // Handle Firebase auth popup callback via IPC relay
-  // The injected preload script intercepts window.opener.postMessage and sends it to us.
-  ipcMain.on('firebase-popup-message', (_event, message) => {
-    // Relay the message to the parent dashboard window
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('firebase-auth-message', message);
-    }
-    
-    // Automatically close any auth popups
-    BrowserWindow.getAllWindows().forEach((win) => {
-      if (win !== mainWindow && !win.isDestroyed()) {
-        const url = win.webContents.getURL();
-        if (url.includes('firebaseapp.com') || url.includes('accounts.google.com')) {
-          win.close();
+  // Handle Firebase auth via system browser deep-link
+  ipcMain.handle('login-via-browser', async () => {
+    return new Promise((resolve, reject) => {
+      // 1. Generate a secure random state/nonce to prevent CSRF
+      const stateNonce = crypto.randomBytes(32).toString('hex');
+      
+      // 2. Create the temporary HTTP server
+      const server = http.createServer((req, res) => {
+        // Set CORS headers so the web app can POST to this local server
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+        if (req.method === 'OPTIONS') {
+          res.writeHead(204);
+          res.end();
+          return;
         }
-      }
+
+        if (req.method === 'POST' && req.url === '/token') {
+          let body = '';
+          req.on('data', chunk => body += chunk.toString());
+          req.on('end', () => {
+            try {
+              const data = JSON.parse(body);
+              if (data.state !== stateNonce) {
+                res.writeHead(403, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Invalid state nonce' }));
+                return;
+              }
+              
+              // Success!
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ success: true }));
+              
+              // Clean up and resolve
+              cleanup();
+              
+              // Bring the Electron app back to the foreground
+              if (mainWindow) {
+                if (mainWindow.isMinimized()) mainWindow.restore();
+                mainWindow.show();
+                mainWindow.focus();
+                app.focus({ steal: true });
+              }
+              
+              resolve(data.idToken);
+            } catch (err) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Invalid request' }));
+            }
+          });
+          return;
+        }
+
+        res.writeHead(404);
+        res.end();
+      });
+
+      // 3. Handle timeouts (5 minutes)
+      const timeoutId = setTimeout(() => {
+        cleanup();
+        reject(new Error('Authentication timed out'));
+      }, 5 * 60 * 1000);
+
+      const cleanup = () => {
+        clearTimeout(timeoutId);
+        server.close();
+      };
+
+      // 4. Start the server on a dynamic port (listen(0))
+      server.listen(0, '127.0.0.1', () => {
+        const address = server.address();
+        if (address && typeof address !== 'string') {
+          const port = address.port;
+          // Construct the deep link to the web app
+          // Use localhost in dev, vercel url in production
+          const baseUrl = isDev ? 'http://localhost:5173/' : 'https://zuleai.vercel.app/';
+          const authUrl = `${baseUrl}?desktop_login=true&port=${port}&state=${stateNonce}`;
+          
+          // Open the system default browser
+          shell.openExternal(authUrl);
+        } else {
+          cleanup();
+          reject(new Error('Failed to start local auth server'));
+        }
+      });
+      
+      server.on('error', (err) => {
+        cleanup();
+        reject(err);
+      });
     });
   });
 
