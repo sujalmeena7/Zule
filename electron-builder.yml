@@ -29,6 +29,7 @@ nsis:
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: Zule AI
+  artifactName: ZuleAI-setup.exe
 
 # Auto-update configuration (Phase 4)
 publish:
