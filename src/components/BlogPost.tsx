@@ -2,7 +2,6 @@ import { motion } from 'framer-motion';
 import { useZule } from '../context/ZuleContext';
 import { blogPosts } from '../data/blogPosts';
 import { Calendar, Clock, User, Download, ArrowLeft } from 'lucide-react';
-import React from 'react';
 import './BlogPost.css';
 
 // A very simple regex-based markdown parser since we don't have a library

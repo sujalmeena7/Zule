@@ -1137,7 +1137,6 @@
 
 .mode-2-card-root {
   -webkit-app-region: drag;
-  app-region: drag;
 }
 
 .mode-2-card-root button,
@@ -1146,7 +1145,6 @@
 .mode-2-card-root [role="button"],
 .mode-2-card-root .card-scroll-body {
   -webkit-app-region: no-drag;
-  app-region: no-drag;
 }
 
 /* ============================================

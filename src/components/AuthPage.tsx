@@ -6,7 +6,6 @@ import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowRight, Loader2, Shield, Zap, Sparkles, Eye, EyeOff, CheckCircle2 } from 'lucide-react';
 import { useAuth } from '../firebase/AuthContext';
-import { isElectron } from '../hooks/useElectronBridge';
 import { sendPasswordResetEmail, signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
 import { auth } from '../firebase/config';
 import './AuthPage.css';

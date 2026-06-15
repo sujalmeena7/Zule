@@ -75,7 +75,6 @@ export function ControlCapsule({
   onToggleMode,
   isStealth,
   onToggleStealth,
-  onHideWindow,
 }: ControlCapsuleProps) {
   // Use overlay mode toggle if provided, otherwise fall back to hide/show toggle
   const handleChevronClick = onToggleMode ?? onToggleHidden;

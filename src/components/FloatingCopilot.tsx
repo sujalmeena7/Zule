@@ -13,7 +13,6 @@ import { useCrossWindowSync } from '../hooks/useCrossWindowSync';
 import { useElectronBridge } from '../hooks/useElectronBridge';
 import { clampPosition } from '../utils/geometry';
 import { speakerManager } from '../brain/speakerManager';
-import { generateMeetingSummary } from '../brain/summaryEngine';
 import { persistPlaceholderMeeting, generateSummaryWithTimeout } from '../brain/stopSession';
 import { buildContextWindow } from '../brain/contextManager';
 import type { TranscriptLine, CitationInfo } from '../brain/contextManager';
@@ -106,7 +105,6 @@ export function FloatingCopilot() {
 
   // State
   const [isHidden, setIsHidden] = useState(false);
-  const [isInvisible, setIsInvisible] = useState(false);
   const [isPanicHidden, setIsPanicHidden] = useState(false);
   // Screen-capture stealth state. OverlayManager.create() applies
   // setContentProtection(true) by default, so the overlay is invisible
@@ -120,16 +118,11 @@ export function FloatingCopilot() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
   const [streamingText, setStreamingText] = useState('');
-  // Echo the most-recent user question above the AI response so the user
-  // can see what they asked. Cleared when the user explicitly resets the
-  // mode (handleModeChange) or stops the session.
-  const [lastQuestion, setLastQuestion] = useState<string | null>(null);
   // Chat history: accumulates all Q&A pairs for the session
   const [chatHistory, setChatHistory] = useState<{ id: string; role: 'user' | 'assistant'; text: string; isSimulated?: boolean }[]>([]);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [aiSuggestionCount, setAiSuggestionCount] = useState(0);
   const [coaching, setCoaching] = useState<SentimentResult | null>(null);
-  const [showCoaching, setShowCoaching] = useState(true);
   const [activeSpeakerId, setActiveSpeakerId] = useState(() => speakerManager.getActiveSpeaker().id);
   const [modalitiesUsed, setModalitiesUsed] = useState<('audio' | 'screen' | 'knowledge' | 'memory')[]>([]);
   const [citations, setCitations] = useState<CitationInfo[]>([]);
@@ -256,7 +249,7 @@ export function FloatingCopilot() {
   // Sync state to detached window
   useEffect(() => {
     broadcastState({
-      isDetached: isInvisible,
+      isDetached: false,
       transcript: speech.transcript,
       interimText: speech.interimText,
       streamingText,
@@ -267,7 +260,7 @@ export function FloatingCopilot() {
       coaching,
       activeMode,
     });
-  }, [isInvisible, speech.transcript, speech.interimText, streamingText, aiResponse, isLoading, isStreaming, elapsedTime, coaching, activeMode, broadcastState]);
+  }, [speech.transcript, speech.interimText, streamingText, aiResponse, isLoading, isStreaming, elapsedTime, coaching, activeMode, broadcastState]);
 
   // Auto-scroll transcript
   useEffect(() => {
@@ -278,30 +271,6 @@ export function FloatingCopilot() {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatHistory, streamingText]);
-
-  const handleToggleDetach = useCallback(() => {
-    if (isElectronEnv) {
-      // In Electron: toggle content protection (real OS-level stealth)
-      const newStealth = !isInvisible;
-      electronAPI.setContentProtection(newStealth);
-      setIsInvisible(newStealth);
-      toast.success(newStealth ? 'Stealth mode ON — invisible to screen share' : 'Stealth mode OFF');
-    } else {
-      // Web fallback: open detached popup window
-      if (!isInvisible) {
-        const width = 450;
-        const height = 600;
-        const left = window.screen.width - width - 20;
-        const top = 100;
-        window.open(
-          window.location.origin + window.location.pathname + '#detached',
-          `width=${width},height=${height},left=${left},top=${top},menubar=no,toolbar=no,location=no,status=no`
-        );
-        toast.success('Detached window opened');
-      }
-      setIsInvisible(!isInvisible);
-    }
-  }, [isInvisible, isElectronEnv, electronAPI]);
 
   // Dedicated screen-share stealth toggle, wired to the segmented eye/eye-off
   // toggle on the control capsule. Calls the unified `toggleVisibilityProtection`
@@ -567,7 +536,6 @@ export function FloatingCopilot() {
   const handleSubmit = useCallback(() => {
     if (inputText.trim()) {
       const q = inputText.trim();
-      setLastQuestion(q);
       // Append user message to chat history
       setChatHistory(prev => [...prev, { id: generateId(), role: 'user', text: q }]);
       // Auto-grow the overlay when asking a question (Cluely parity).
@@ -577,7 +545,6 @@ export function FloatingCopilot() {
       triggerAIRef.current(q);
       setInputText('');
     } else {
-      setLastQuestion('(using current screen / conversation)');
       // Append user message to chat history
       setChatHistory(prev => [...prev, { id: generateId(), role: 'user', text: '(using current screen / conversation)' }]);
       if (isNativeOverlay && overlayModeRef.current === 'expanded') {
@@ -636,7 +603,6 @@ export function FloatingCopilot() {
       // Echo what we're asking so the user sees feedback.
       const query = inputText.trim();
       const echoed = query || 'What do you see on my screen?';
-      setLastQuestion(echoed);
       // Append user message to chat history
       setChatHistory(prev => [...prev, { id: generateId(), role: 'user', text: echoed }]);
       if (query) setInputText('');
@@ -654,7 +620,6 @@ export function FloatingCopilot() {
   const handleModeChange = useCallback((mode: CopilotMode) => {
     setActiveMode(mode);
     setAiResponse(null);
-    setLastQuestion(null);
     setChatHistory([]);
   }, []);
 
@@ -768,19 +733,7 @@ export function FloatingCopilot() {
           </button>
 
           <div className="copilot-bg-content">
-            {isInvisible && !isHidden && (
-              <div className="detached-warning" style={{ padding: '20px', textAlign: 'center', color: 'var(--text-secondary)' }}>
-                <div style={{ marginBottom: '10px' }}>
-                  <Sparkles size={24} color="var(--primary-color)" />
-                </div>
-                <h4>Copilot is Detached</h4>
-                <p style={{ fontSize: '13px', marginTop: '8px' }}>
-                  The UI is currently running in a separate, invisible window to prevent it from showing on screen shares.
-                </p>
-              </div>
-            )}
-
-            {isGeneratingSummary && !isHidden && !isInvisible && (
+            {isGeneratingSummary && !isHidden && (
               <div className="detached-warning" style={{ padding: '20px', textAlign: 'center', color: 'var(--primary-color)' }}>
                 <div style={{ marginBottom: '10px' }}>
                   <Sparkles size={24} className="spin" />
@@ -813,7 +766,7 @@ export function FloatingCopilot() {
           and dragging the capsule moves the native window (Req 10.4). */}
       <div
         ref={dragRef}
-        className={`copilot-overlay ${isInvisible ? 'invisible-mode' : ''} ${isNativeOverlay ? `native-overlay-mode mode-2-card-root overlay-${overlayMode}` : ''}`}
+        className={`copilot-overlay ${isNativeOverlay ? `native-overlay-mode mode-2-card-root overlay-${overlayMode}` : ''}`}
         data-zule-stealth="true"
         role="region"
         aria-label="Zule AI copilot"

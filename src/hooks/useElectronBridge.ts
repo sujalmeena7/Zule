@@ -33,6 +33,8 @@ const browserFallback: ElectronAPI = {
   onGlobalShortcut: () => () => {},
   loginViaBrowser: async () => '',
   getDesktopSources: async () => [],
+  toggleVisibilityProtection: async () => false,
+  switchToOverlay: async () => false,
 };
 
 export interface UseElectronBridgeResult {
