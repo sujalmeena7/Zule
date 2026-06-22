@@ -2,12 +2,12 @@
 // Zule AI — Settings Page
 // ============================================
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Key, Palette, Keyboard, Database, Trash2, Plus, FileText,
   Sun, Moon, Shield, Upload, Eye, EyeOff, CheckCircle2, Wand2,
   ArrowUp, ArrowDown, Power, Server, ShieldCheck, Play, Clock,
-  Gauge, Lock, Globe
+  Gauge, Lock, Globe, Mic, RefreshCw
 } from 'lucide-react';
 import { database as knowledgeBase, type KBDocument, type ProviderConfig } from '../data/database';
 import { SHORTCUT_DEFINITIONS } from '../hooks/useKeyboardShortcuts';
@@ -17,6 +17,7 @@ import './Settings.css';
 
 import { useZule } from '../context/ZuleContext';
 import { useZuleError } from '../hooks/useZuleError';
+import { useAutoUpdate } from '../hooks/useAutoUpdate';
 import type { RedactionRule, RedactionEntity } from '../types/redaction';
 import { apply as applyRedaction } from '../brain/redaction';
 import { SpendPanel } from './SpendPanel';
@@ -26,8 +27,41 @@ import {
   DEFAULT_TRANSCRIPT_MAX_LINES,
 } from '../data/retention';
 import type { PrivacyMode } from '../utils/sessionPolicy';
+import { telemetry } from '../brain/telemetry';
+import { dequantizeFromStorage } from '../brain/vectorStore';
+import { chunkIndexId } from '../data/vectorIndexHydration';
+import type { VADSensitivity } from '../brain/transcription/vad';
+import { vadSensitivityBus } from '../brain/transcription/vadSensitivityBus';
 
 const SUPPORTED_DOC_EXTENSIONS = new Set(['txt', 'md', 'json', 'pdf', 'docx']);
+
+/**
+ * Renderer-side mirror of `electron/embeddingService.ts::EMBED_BATCH_SIZE`.
+ * Must stay in sync with the main-process constant — the renderer issues
+ * one `embed:generateBatch` IPC per window of this many chunks (design
+ * §"Components and Interfaces / Batched Embedding Service" and
+ * Requirement 1.5 / Property 3). The renderer cannot import from
+ * `electron/` directly because it lives under a different tsconfig
+ * project; the constant is intentionally duplicated here.
+ */
+const EMBED_BATCH_SIZE = 32;
+
+/**
+ * Split a flat array into successive windows of at most `size` items.
+ * The last window may be shorter. For non-positive `size`, the items
+ * are returned as a single window so callers degrade gracefully rather
+ * than spinning forever. Used by `handleAddDocument` to drive one
+ * `embed:generateBatch` IPC per window.
+ */
+function chunkArray<T>(items: readonly T[], size: number): T[][] {
+  if (items.length === 0) return [];
+  if (size <= 0) return [items.slice()];
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    out.push(items.slice(i, i + size));
+  }
+  return out;
+}
 
 const BUILT_IN_ENTITIES: { id: RedactionEntity; label: string }[] = [
   { id: 'email', label: 'Email' },
@@ -68,6 +102,42 @@ export function Settings() {
   const { apiKey, theme, customModes } = state;
   const { updateApiKey, updateTheme, saveCustomMode, deleteCustomMode } = actions;
   const notifyError = useZuleError();
+
+  // Auto-Update State (task 10.2, Requirements 3.1–3.7)
+  const { state: updateState, check: checkForUpdate } = useAutoUpdate();
+  const [upToDate, setUpToDate] = useState(false);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const prevStatusRef = useRef(updateState.status);
+
+  // Track status transitions to show "up to date" or error messages
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = updateState.status;
+
+    // When transitioning from 'checking' to 'idle' without going through
+    // 'available', it means no update was found → show confirmation
+    if (prev === 'checking' && updateState.status === 'idle') {
+      if (updateState.error) {
+        // Error during check — display failure category message
+        const errorMessages: Record<string, string> = {
+          'unreachable': 'Could not reach update server',
+          'timeout': 'Update check timed out',
+          'server-error': 'Update server returned an error',
+          'network': 'Network error during update check',
+          'storage': 'Insufficient storage',
+          'integrity': 'Integrity check failed',
+        };
+        setUpdateError(errorMessages[updateState.error.category] || 'Update check failed');
+        setUpToDate(false);
+      } else {
+        // No update found — show "up to date" for 5 seconds
+        setUpdateError(null);
+        setUpToDate(true);
+        const timer = setTimeout(() => setUpToDate(false), 5000);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [updateState.status, updateState.error]);
 
   const [localKey, setLocalKey] = useState(apiKey);
   const [showKey, setShowKey] = useState(false);
@@ -114,6 +184,43 @@ export function Settings() {
   const [uiLocale, setUiLocale] = useState<LocaleCode>('en');
   const [recognitionLanguage, setRecognitionLanguage] = useState('en-US');
   const [ocrLanguage, setOcrLanguage] = useState('eng');
+
+  // Transcription State (VAD sensitivity — task 11.1)
+  // The 3-level dial persisted in `STORE_SETTINGS` under the stable key
+  // `vadSensitivity`. `medium` is the documented default
+  // (Requirement 7.6) and matches the un-gated baseline so existing
+  // users see consistent behaviour on first upgrade. The control is
+  // disabled when the local Whisper transcription pipeline is in a
+  // failed runtime state — mirroring the same `isSupported` checks
+  // `useSystemAudioTranscription` performs (Requirement 7.5).
+  const [vadSensitivity, setVadSensitivity] = useState<VADSensitivity>('medium');
+  const transcriptionSupport = useMemo<{
+    supported: boolean;
+    reason: string | null;
+  }>(() => {
+    const electronAPI =
+      typeof window !== 'undefined' ? window.electronAPI : undefined;
+    const whisperBridge = electronAPI?.whisperTranscribe;
+    if (typeof whisperBridge !== 'function') {
+      return {
+        supported: false,
+        reason:
+          'Local Whisper transcription is unavailable in this environment.',
+      };
+    }
+    const hasMediaDevices =
+      typeof navigator !== 'undefined' &&
+      !!navigator.mediaDevices &&
+      !!navigator.mediaDevices.getDisplayMedia;
+    if (!hasMediaDevices) {
+      return {
+        supported: false,
+        reason:
+          'System-audio capture (getDisplayMedia) is not available on this platform.',
+      };
+    }
+    return { supported: true, reason: null };
+  }, []);
 
   // Load KB documents
   useEffect(() => {
@@ -174,6 +281,21 @@ export function Settings() {
       setEnabledEntities(entities);
       setRegexRules(regexes);
     });
+  }, []);
+
+  // Load persisted VAD sensitivity (task 11.1, Requirement 7.2). A
+  // corrupt or unrecognised stored value falls back to `medium`, the
+  // documented default (Requirement 7.6).
+  useEffect(() => {
+    knowledgeBase
+      .getSetting<VADSensitivity>('vadSensitivity', 'medium')
+      .then((saved) => {
+        const sensitivity: VADSensitivity =
+          saved === 'low' || saved === 'medium' || saved === 'high'
+            ? saved
+            : 'medium';
+        setVadSensitivity(sensitivity);
+      });
   }, []);
 
   // Load retention settings from IndexedDB
@@ -280,6 +402,30 @@ export function Settings() {
     toast.success(`OCR language set to "${lang}"`);
   }, []);
 
+  // --- Transcription Handlers (VAD sensitivity, task 11.1) ---
+
+  // Persist the new sensitivity, then broadcast on the
+  // `vadSensitivityBus` so any in-flight loopback / microphone capture
+  // recomputes its threshold on the next chunk without restarting the
+  // capture stream (Requirements 7.2, 7.4 and Property 18). The
+  // database read is awaited so a subsequent reload sees the same
+  // value that's already live on the bus.
+  const handleVadSensitivityChange = useCallback(
+    async (level: VADSensitivity) => {
+      setVadSensitivity(level);
+      try {
+        await knowledgeBase.setSetting('vadSensitivity', level);
+      } catch (error) {
+        console.error('[Settings] Failed to persist VAD sensitivity:', error);
+        toast.error('Failed to save transcription sensitivity.');
+        return;
+      }
+      vadSensitivityBus.publish({ type: 'change', value: level });
+      toast.success(`Transcription sensitivity set to "${level}"`);
+    },
+    [],
+  );
+
   // --- Data Retention Handlers ---
 
   const handleSaveRetention = useCallback(async () => {
@@ -384,22 +530,114 @@ export function Settings() {
     setIsUploading(true);
     try {
       const { chunkText } = await import('../utils/documentParser');
-      
+
       const chunks = chunkText(text);
 
-      // Store text-only chunks without vectors. The ONNX WASM backend
-      // (onnxruntime-web@1.14.0 pinned by @xenova/transformers@2.17)
-      // is binary-incompatible with Electron 42's V8 and segfaults
-      // (ACCESS_VIOLATION 0xC0000005) when loading the embedding model.
-      // Since a native crash can't be caught by try/catch, we skip
-      // embedding entirely for now. Documents are searchable via keyword
-      // matching. Semantic search can be re-enabled once onnxruntime-web
-      // is upgraded to a version compatible with this Electron build, or
-      // when the embedding pipeline is moved to the main process (Node.js
-      // with onnxruntime-node, which doesn't have this incompatibility).
-      const chunksWithVectors = chunks.map((chunk) => ({ text: chunk, vector: [] as number[] }));
+      // Generate a semantic embedding per chunk so the Knowledge Base is
+      // searchable by meaning (not just keywords). Embedding inference runs
+      // in the main process via `embed:generateBatch` (one IPC per window
+      // of `EMBED_BATCH_SIZE` chunks; design §"Components and Interfaces /
+      // Batched Embedding Service" and Requirements 1.5, 1.6). On any
+      // batched-call failure we fall back to per-chunk `embed:generate`
+      // for that window only, keeping successful windows unchanged
+      // (Requirement 1.7). If a per-chunk fallback also throws we store
+      // a zero-length vector so the document still persists — the chunk
+      // is still keyword-searchable and `database.search` skips empty
+      // vectors.
+      const { vectorStore } = await import('../brain/vectorStore');
 
-      await knowledgeBase.addDocument(title || newDocTitle || 'Untitled Document', text, newDocType, chunksWithVectors);
+      const batchBridge =
+        typeof window !== 'undefined' ? window.electronAPI?.embedGenerateBatch : undefined;
+
+      const vectors: number[][] = new Array<number[]>(chunks.length);
+      const windows = chunkArray(chunks, EMBED_BATCH_SIZE);
+
+      let cursor = 0;
+      for (const win of windows) {
+        const offset = cursor;
+        cursor += win.length;
+        const t0 = performance.now();
+        try {
+          if (typeof batchBridge !== 'function') {
+            // No batched bridge available (e.g. non-Electron runtime);
+            // jump straight to the per-chunk fallback for this window.
+            throw new Error('embedGenerateBatch bridge unavailable');
+          }
+          const { vectors: batchVectors } = await batchBridge(win);
+          for (let i = 0; i < win.length; i++) {
+            vectors[offset + i] = batchVectors[i] ?? [];
+          }
+          // Telemetry: one `embed.batch` event per resolved batched IPC
+          // carrying `batchSize` and `durationMs` (Requirement 10.1,
+          // Property 19). Emitted only on the success path so the
+          // `batchSize` field always equals the input window length and
+          // `durationMs` reflects a real batched-IPC measurement.
+          telemetry.emit({
+            kind: 'embed.batch',
+            batchSize: win.length,
+            durationMs: performance.now() - t0,
+          });
+        } catch (batchErr) {
+          // Per-batch try/catch fallback: fall through to per-chunk
+          // `embed:generate` for the chunks in this window only.
+          // Successful earlier/later windows retain their batched
+          // vectors (Requirement 1.7).
+          console.warn('[Settings] batched embedding failed; falling back to per-chunk:', batchErr);
+          for (let i = 0; i < win.length; i++) {
+            try {
+              vectors[offset + i] = await vectorStore.generateEmbedding(win[i]);
+            } catch (chunkErr) {
+              console.warn('[Settings] per-chunk embedding failed; storing text-only chunk:', chunkErr);
+              vectors[offset + i] = [];
+            }
+          }
+        }
+      }
+
+      const chunksWithVectors = chunks.map((chunk, i) => ({
+        text: chunk,
+        vector: vectors[i] ?? [],
+      }));
+
+      const persisted = await knowledgeBase.addDocument(
+        title || newDocTitle || 'Untitled Document',
+        text,
+        newDocType,
+        chunksWithVectors,
+      );
+
+      // After persistence, push the new chunks into the main-process
+      // Vector_Index so the next `database.search` finds them via the
+      // ANN path above `QUANTIZATION_THRESHOLD` (Requirement 2.5).
+      // Each chunk is decoded via `dequantizeFromStorage` so the IPC
+      // payload is always a Float32 `number[]` regardless of whether
+      // the chunk was persisted raw or int8-quantized (Requirement 4.1,
+      // design §"Quantized-storage compatibility"). The id shape matches
+      // `vectorIndexHydration.ts::chunkIndexId` so add / remove / query
+      // all agree on `${docId}#${chunkIndex}`. Empty vectors (e.g.
+      // fallback chunks where every embedding attempt failed) are
+      // filtered out so the native HNSW addon never sees a zero-length
+      // input. Failures are non-fatal: the linear-scan fallback below
+      // the threshold and the cold-start rebuild on next boot keep
+      // correctness intact, so a transient index hiccup must not block
+      // the upload UX.
+      const api = typeof window !== 'undefined' ? window.electronAPI : undefined;
+      if (typeof api?.vectorIndexAddBatch === 'function') {
+        try {
+          const items = persisted.chunks
+            .map((chunk, i) => ({
+              id: chunkIndexId(persisted.id, i),
+              vector: dequantizeFromStorage(chunk),
+            }))
+            .filter((item) => item.vector.length > 0);
+          if (items.length > 0) {
+            await api.vectorIndexAddBatch(items);
+          }
+        } catch (indexErr) {
+          console.warn('[Settings] vectorIndex:addBatch failed:', indexErr);
+        }
+      }
+
       const updated = await knowledgeBase.getAllDocuments();
       setDocuments(updated);
       setNewDocTitle('');
@@ -959,6 +1197,50 @@ export function Settings() {
         </div>
       </section>
 
+      {/* Transcription (VAD sensitivity — task 11.1, Requirement 7.1) */}
+      <section className="settings-section glass-card animate-slide-up" style={{ animationDelay: '0.23s' }}>
+        <div className="section-header">
+          <Mic size={18} />
+          <h2>Transcription</h2>
+        </div>
+        <p className="section-desc">
+          Adjust how aggressively the loopback and microphone pipelines
+          filter out silence before sending audio to the local Whisper
+          engine. Higher sensitivity skips more silent chunks; lower
+          sensitivity transcribes more borderline audio.
+        </p>
+
+        <div className="setting-row">
+          <div className="setting-label">
+            <span className="setting-name">VAD Sensitivity</span>
+            <span className="setting-desc">
+              {transcriptionSupport.supported
+                ? 'Live changes take effect on the next captured chunk without restarting capture.'
+                : transcriptionSupport.reason}
+            </span>
+          </div>
+          <div
+            className="theme-toggle"
+            role="radiogroup"
+            aria-label="VAD sensitivity"
+          >
+            {(['low', 'medium', 'high'] as const).map((level) => (
+              <button
+                key={level}
+                type="button"
+                role="radio"
+                aria-checked={vadSensitivity === level}
+                className={`theme-btn ${vadSensitivity === level ? 'active' : ''}`}
+                onClick={() => handleVadSensitivityChange(level)}
+                disabled={!transcriptionSupport.supported}
+              >
+                {level.charAt(0).toUpperCase() + level.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
+
       {/* Keyboard Shortcuts */}
       <section className="settings-section glass-card animate-slide-up" style={{ animationDelay: '0.25s' }}>
         <div className="section-header">
@@ -1255,6 +1537,36 @@ export function Settings() {
           <span className="pill pill-green">🔒 100% Local Storage</span>
           <span className="pill pill-green">🚫 Zero Server Data</span>
           <span className="pill pill-green">🔐 End-to-End Private</span>
+        </div>
+      </section>
+
+      {/* Updates (task 10.2, Requirements 3.1–3.7) */}
+      <section className="settings-section glass-card animate-slide-up" style={{ animationDelay: '0.34s' }}>
+        <div className="section-header">
+          <RefreshCw size={18} />
+          <h2>Updates</h2>
+        </div>
+        <div className="setting-row">
+          <div className="setting-label">
+            <span className="setting-name">Version {updateState.currentVersion}</span>
+            <span className="setting-desc">
+              {upToDate && "You're up to date"}
+              {updateError && updateError}
+              {!upToDate && !updateError && 'Check if a newer version of Zule is available.'}
+            </span>
+          </div>
+          <button
+            className="btn-primary"
+            onClick={() => {
+              setUpdateError(null);
+              setUpToDate(false);
+              checkForUpdate();
+            }}
+            disabled={updateState.status === 'checking' || updateState.status === 'downloading'}
+            style={{ padding: '8px 20px', fontSize: '0.82rem' }}
+          >
+            {updateState.status === 'checking' ? 'Checking...' : 'Check for updates'}
+          </button>
         </div>
       </section>
     </div>

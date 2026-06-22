@@ -75,12 +75,27 @@ const mappings = [
   // fetches its WASM blobs from a CDN unless `env.backends.onnx.wasm.wasmPaths`
   // is set. We mirror the dist files so the runtime can be served from the
   // application origin.
+  //
+  // NOTE: @huggingface/transformers@3 nests its own onnxruntime-web under
+  // `node_modules/@huggingface/transformers/node_modules/onnxruntime-web`, so
+  // the source is that nested dist (the top-level package is not installed).
+  // onnxruntime-web@1.22 ships a single SIMD-threaded build plus a JSEP variant
+  // that carries the WebGPU kernels; both the `.wasm` payloads and their `.mjs`
+  // loaders must be mirrored.
   {
-    from: join(nodeModules, 'onnxruntime-web', 'dist'),
+    id: 'onnx',
+    from: join(
+      nodeModules,
+      '@huggingface',
+      'transformers',
+      'node_modules',
+      'onnxruntime-web',
+      'dist',
+    ),
     to: join(publicVendor, 'onnx'),
     match: (name) =>
-      (name.startsWith('ort-wasm') || name === 'ort-wasm-threaded.worker.js') &&
-      (name.endsWith('.wasm') || name.endsWith('.js')),
+      name.startsWith('ort-wasm-simd-threaded') &&
+      (name.endsWith('.wasm') || name.endsWith('.mjs')),
   },
 ];
 
@@ -135,6 +150,26 @@ export function copyVendorAssets({ silent = false } = {}) {
   for (const mapping of mappings) {
     const count = applyMapping(mapping);
     summary.push({ to: mapping.to, copied: count });
+
+    // The ONNX runtime is required for on-device inference (Whisper +
+    // embeddings). If its mapping copies nothing AND the destination is empty,
+    // the source path is almost certainly wrong (e.g. a dependency hoist moved
+    // onnxruntime-web). Warn loudly — a silent zero-copy here previously
+    // shipped stale WASM and broke the WASM fallback. (We only warn when the
+    // destination is also empty, so an up-to-date idempotent skip stays quiet.)
+    if (mapping.id === 'onnx' && count === 0) {
+      const destEmpty =
+        !existsSync(mapping.to) || readdirSync(mapping.to).length === 0;
+      const srcMissing = !existsSync(mapping.from);
+      if (destEmpty || srcMissing) {
+        console.warn(
+          `[copy-vendor] WARNING: ONNX runtime assets not mirrored. ` +
+            `source=${mapping.from} (exists: ${!srcMissing}). ` +
+            `On-device inference (Whisper / embeddings) will fail to load the ` +
+            `WASM backend. Check the onnxruntime-web install path.`,
+        );
+      }
+    }
   }
   if (!silent) {
     const total = summary.reduce((sum, e) => sum + e.copied, 0);

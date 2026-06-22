@@ -7,7 +7,7 @@
 //     500 ms, 1 000 ms) up to `MAX_INIT_ATTEMPTS` attempts and then
 //     fails subsequent calls with a typed `VectorIndexInitError`.
 //
-// The `@xenova/transformers` `pipeline` factory is mocked so the test
+// The `@huggingface/transformers` `pipeline` factory is mocked so the test
 // suite can deterministically simulate transient and persistent
 // failures without loading a real model.
 
@@ -20,8 +20,14 @@ import { dirname, resolve } from 'node:path';
 // `vi.mock` can reach it.
 const pipelineMock = vi.hoisted(() => vi.fn());
 
-vi.mock('@xenova/transformers', () => ({
-  env: { allowLocalModels: false, useBrowserCache: true },
+vi.mock('@huggingface/transformers', () => ({
+  env: {
+    allowLocalModels: false,
+    allowRemoteModels: true,
+    useBrowserCache: true,
+    localModelPath: '',
+    backends: { onnx: { wasm: {} } },
+  },
   pipeline: pipelineMock,
 }));
 

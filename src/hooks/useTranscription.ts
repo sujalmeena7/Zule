@@ -58,13 +58,17 @@ export function useTranscription(opts: UseTranscriptionOptions = {}): UseTranscr
     provider: _providerType = 'web-speech',
     confidenceThreshold = 0.30,
     speakerId = 'speaker-1',
-    speakerRole = 'user',
+    speakerRole = 'other',
   } = opts;
 
   const [transcript, setTranscript] = useState<TranscriptionLine[]>([]);
   const [interimText, setInterimText] = useState('');
   const [isListening, setIsListening] = useState(false);
-  const [isSupported, setIsSupported] = useState(true);
+  const [isSupported, setIsSupported] = useState(
+    () =>
+      typeof window !== 'undefined' &&
+      ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition),
+  );
 
   const providerRef = useRef<WebSpeechProvider | null>(null);
   const unsubscribesRef = useRef<Off[]>([]);

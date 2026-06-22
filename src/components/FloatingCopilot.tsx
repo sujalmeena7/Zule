@@ -3,9 +3,10 @@
 // Decomposed into sub-components with bug fixes
 // ============================================
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { ArrowLeft, Sparkles } from 'lucide-react';
 import { useTranscription } from '../hooks/useTranscription';
+import { useSystemAudioTranscription } from '../hooks/useSystemAudioTranscription';
 import { useScreenCapture } from '../hooks/useScreenCapture';
 import { useDraggable } from '../hooks/useDraggable';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
@@ -34,6 +35,8 @@ import { SuggestionCard } from './copilot/SuggestionCard';
 import { QuickActions } from './copilot/QuickActions';
 import { InputBar } from './copilot/InputBar';
 import { useOverlayMode } from '../overlay/useOverlayMode';
+import { UpdateIndicator } from './UpdateIndicator';
+import { useAutoUpdate } from '../hooks/useAutoUpdate';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -126,9 +129,29 @@ export function FloatingCopilot() {
   const [activeSpeakerId, setActiveSpeakerId] = useState(() => speakerManager.getActiveSpeaker().id);
   const [modalitiesUsed, setModalitiesUsed] = useState<('audio' | 'screen' | 'knowledge' | 'memory')[]>([]);
   const [citations, setCitations] = useState<CitationInfo[]>([]);
+  const [recognitionLanguage, setRecognitionLanguage] = useState<string | null>(null);
+
+  // Load speech recognition language from settings before starting the mic
+  useEffect(() => {
+    knowledgeBase.getSetting<string>('recognitionLanguage', 'en-US').then((lang) => {
+      setRecognitionLanguage(lang);
+    });
+  }, []);
 
   // Hooks
-  const speech = useTranscription();
+  // Mic pipeline — the user's own voice. Tagged role 'user' so the
+  // Question_Detector short-circuits on it (it should fire on the *other*
+  // party, not on the user).
+  const speech = useTranscription({
+    speakerId: 'speaker-1',
+    speakerRole: 'user',
+    ...(recognitionLanguage ? { language: recognitionLanguage } : {}),
+  });
+  // System-audio (loopback) pipeline — the remote party's voice via Whisper.
+  // Opt-in; tagged role 'other'. Lines are merged into `mergedTranscript`.
+  const systemAudio = useSystemAudioTranscription(
+    recognitionLanguage ? { language: recognitionLanguage } : undefined,
+  );
   const screen = useScreenCapture();
   const { position, setPosition, dragRef, handleRef } = useDraggable();
   const { broadcastState } = useCrossWindowSync('host');
@@ -142,6 +165,47 @@ export function FloatingCopilot() {
     setMode: setOverlayMode,
     modeAnnouncement,
   } = useOverlayMode();
+
+  // Auto-update state for the overlay indicator (Requirements 7.1, 7.3)
+  const { state: updateState } = useAutoUpdate();
+
+  // Single transcript feeding the AI / detectors / UI: mic lines (role 'user')
+  // and system-audio lines (role 'other') merged in timestamp order. Both
+  // already carry epoch-ms timestamps, so a stable sort interleaves them.
+  const mergedTranscript = useMemo(
+    () =>
+      [...speech.transcript, ...systemAudio.lines].sort(
+        (a, b) => a.timestamp - b.timestamp,
+      ),
+    [speech.transcript, systemAudio.lines],
+  );
+
+  // Live captions: a short rolling window of the most recent transcribed lines
+  // (so text reads continuously instead of vanishing as new speech arrives),
+  // plus any in-progress interim text appended as a live, pulsing line. Mic
+  // interim is real partial text; system-audio (Whisper) interim is just a '...'
+  // working placeholder, so only mic interim is surfaced as live text.
+  const CAPTION_HISTORY = 3;
+  const liveCaptions = useMemo(() => {
+    const recent = mergedTranscript
+      .slice(-CAPTION_HISTORY)
+      .map((l, i) => ({
+        key: l.id ?? `final-${i}`,
+        text: l.text,
+        role: l.speakerRole,
+        live: false,
+      }));
+    if (speech.interimText) {
+      recent.push({
+        key: 'interim',
+        text: speech.interimText,
+        role: 'user' as const,
+        live: true,
+      });
+    }
+    // Keep the window bounded even with the interim line appended.
+    return recent.slice(-CAPTION_HISTORY);
+  }, [speech.interimText, mergedTranscript]);
 
   // Ref mirrors overlayMode so callbacks always read the current value
   // without needing it in their dependency array (which causes stale closures).
@@ -172,6 +236,7 @@ export function FloatingCopilot() {
           setIsHidden(true);
           setIsPanicHidden(true);
           speech.pause();
+          systemAudio.pause();
           if (screen.isCapturing) screen.stopCapture();
           if (abortControllerRef.current) abortControllerRef.current.abort();
           break;
@@ -197,6 +262,9 @@ export function FloatingCopilot() {
   const isStreamingRef = useRef(false);
   // Bug Fix #3: ref guard so speech.start() fires only once
   const speechStartedRef = useRef(false);
+  // Tracks whether the main mic was listening before in-bar dictation began,
+  // so we only resume a mic the user hadn't already paused.
+  const dictationWasListening = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const summaryAbortControllerRef = useRef<AbortController | null>(null);
   // Generation counter for discarding late tokens from aborted streams (Req 12.2)
@@ -204,8 +272,8 @@ export function FloatingCopilot() {
   // Req 12.5: Stable refs for values that change every transcript update,
   // so triggerAI's useCallback deps remain stable and the autonomous-detection
   // useEffects do not re-fire on every render.
-  const transcriptRef = useRef(speech.transcript);
-  transcriptRef.current = speech.transcript;
+  const transcriptRef = useRef(mergedTranscript);
+  transcriptRef.current = mergedTranscript;
   const screenTextRef = useRef(screen.screenText);
   screenTextRef.current = screen.screenText;
   // Ref for keyframe capture so triggerAI can access it stably (Req 23.3)
@@ -250,7 +318,7 @@ export function FloatingCopilot() {
   useEffect(() => {
     broadcastState({
       isDetached: false,
-      transcript: speech.transcript,
+      transcript: mergedTranscript,
       interimText: speech.interimText,
       streamingText,
       aiResponse,
@@ -260,12 +328,12 @@ export function FloatingCopilot() {
       coaching,
       activeMode,
     });
-  }, [speech.transcript, speech.interimText, streamingText, aiResponse, isLoading, isStreaming, elapsedTime, coaching, activeMode, broadcastState]);
+  }, [mergedTranscript, speech.interimText, streamingText, aiResponse, isLoading, isStreaming, elapsedTime, coaching, activeMode, broadcastState]);
 
   // Auto-scroll transcript
   useEffect(() => {
     transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [speech.transcript]);
+  }, [mergedTranscript]);
 
   // Auto-scroll chat to latest message
   useEffect(() => {
@@ -306,15 +374,18 @@ export function FloatingCopilot() {
   // All actions happen synchronously within the same event-loop tick (~<200ms)
   const handlePanicHide = useCallback(() => {
     if (isPanicHidden) {
-      // Resume: show overlay, resume mic, but do NOT auto-restart screen capture
+      // Resume: show overlay, resume mic, but do NOT auto-restart screen
+      // capture OR system-audio capture (parity with screen — the user
+      // re-enables system audio manually via the headphones toggle).
       setIsHidden(false);
       setIsPanicHidden(false);
       speech.resume();
     } else {
-      // Panic: hide overlay, mute mic, stop capture, pause autonomous AI
+      // Panic: hide overlay, mute mic + system audio, stop capture, pause AI
       setIsHidden(true);
       setIsPanicHidden(true);
       speech.pause();
+      systemAudio.pause();
       if (screen.isCapturing) {
         screen.stopCapture();
       }
@@ -323,28 +394,28 @@ export function FloatingCopilot() {
         abortControllerRef.current.abort();
       }
     }
-  }, [isPanicHidden, speech, screen]);
+  }, [isPanicHidden, speech, systemAudio, screen]);
 
   // Handle coaching and simulated response updates
   useEffect(() => {
-    if (speech.transcript.length === 0) return;
-    const fullText = speech.transcript.map(l => l.text).join(' ');
+    if (mergedTranscript.length === 0) return;
+    const fullText = mergedTranscript.map(l => l.text).join(' ');
     const totalWords = fullText.split(/\s+/).length;
     const analysis = getFullAnalysis(fullText, totalWords, elapsedTime);
     setCoaching(analysis);
-  }, [speech.transcript, elapsedTime]);
+  }, [mergedTranscript, elapsedTime]);
 
   // Autonomous question detection
   // Req 12.5: Call triggerAIRef.current() so this effect does NOT depend on triggerAI
   useEffect(() => {
     if (isPanicHidden) return; // Paused during panic hide (Requirement 15.8)
-    if (speech.transcript.length > 0) {
-      const recentContext = speech.transcript.slice(-3); // Get last 3 lines for context
+    if (mergedTranscript.length > 0) {
+      const recentContext = mergedTranscript.slice(-3); // Get last 3 lines for context
       questionDetectorRef.current.onNewContext(recentContext, async () => {
         await triggerAIRef.current();
       });
     }
-  }, [speech.transcript, isPanicHidden]);
+  }, [mergedTranscript, isPanicHidden]);
 
   // Predictive pre-warming detection
   // Req 12.5: Call triggerAIRef.current() so this effect does NOT depend on triggerAI
@@ -360,12 +431,15 @@ export function FloatingCopilot() {
   }, [speech.interimText, isPanicHidden]);
 
   // Bug Fix #3: Start mic by default — check isSupported AND use ref guard
+  // Wait for recognitionLanguage to load from IndexedDB before starting
   useEffect(() => {
-    if (speech.isSupported && !speechStartedRef.current) {
+    if (speech.isSupported && !speechStartedRef.current && recognitionLanguage !== null) {
       speechStartedRef.current = true;
-      speech.start();
+      speech.start().catch((err) => {
+        console.error('[FloatingCopilot] Auto-start mic failed:', err);
+      });
     }
-  }, []);
+  }, [speech.isSupported, recognitionLanguage]);
 
   // Bug Fix #1: triggerAI uses isStreamingRef instead of stale isStreaming closure
   // Req 12.2: Manual-override abort — abort in-flight request, discard late tokens via requestId
@@ -627,18 +701,32 @@ export function FloatingCopilot() {
     // Prevent double-click while summary is in flight (Requirement 27.4)
     if (isGeneratingSummary) return;
 
-    speech.stop();
+    const flushedLine = speech.stop();
+    systemAudio.disable();
     screen.stopCapture();
     questionDetectorRef.current.reset();
 
     setIsGeneratingSummary(true);
 
-    const transcriptLines = speech.transcript.map(l => ({
+    // Build transcript from the merged mic + system-audio lines, plus the
+    // flushed interim line from stop() to avoid data loss. Re-sort so the
+    // flushed line lands in timestamp order.
+    const rawLines = [...mergedTranscript];
+    if (flushedLine) {
+      rawLines.push(flushedLine);
+      rawLines.sort((a, b) => a.timestamp - b.timestamp);
+    }
+    const transcriptLines = rawLines.map(l => ({
       id: l.id,
       text: l.text,
       timestamp: l.timestamp,
       speaker: l.speakerId,
       isInterim: l.isInterim,
+      speakerRole: l.speakerRole,
+      asrConfidence: l.asrConfidence,
+      language: l.language,
+      detection: l.detection,
+      provider: l.provider,
     }));
 
     // Step 1: Persist placeholder meeting FIRST (Requirement 27.1)
@@ -674,7 +762,7 @@ export function FloatingCopilot() {
 
     // Navigate to meeting detail with the final meeting state
     stopCopilot(result.meeting);
-  }, [speech, screen, activeMode, elapsedTime, aiSuggestionCount, coaching, apiKey, stopCopilot, isGeneratingSummary]);
+  }, [speech, systemAudio, mergedTranscript, screen, activeMode, elapsedTime, aiSuggestionCount, coaching, apiKey, stopCopilot, isGeneratingSummary]);
 
   // Nudge step for 8-direction reposition shortcuts (Req 18.4)
   const NUDGE_PX = 40;
@@ -776,6 +864,9 @@ export function FloatingCopilot() {
             : { left: position.x, top: position.y }
         }
       >
+        {/* Update indicator — absolutely positioned, no layout impact (Req 7.1, 7.3) */}
+        {isNativeOverlay && <UpdateIndicator status={updateState.status} />}
+
         <ControlCapsule
           isHidden={isHidden}
           onToggleHidden={() => setIsHidden(!isHidden)}
@@ -785,6 +876,12 @@ export function FloatingCopilot() {
           onToggleMode={toggleMode}
           isStealth={isStealth}
           onToggleStealth={isElectronEnv ? handleToggleStealth : undefined}
+          isSystemAudioActive={systemAudio.isActive}
+          onToggleSystemAudio={
+            systemAudio.isSupported
+              ? () => { void (systemAudio.isActive ? systemAudio.disable() : systemAudio.enable()); }
+              : undefined
+          }
         />
 
         {/* aria-live announcer for mode transitions (Requirement 13.5) */}
@@ -843,6 +940,20 @@ export function FloatingCopilot() {
               <span>{MODE_CONFIGS[activeMode].icon}</span>
               <span>{MODE_CONFIGS[activeMode].label}</span>
             </div>
+            {/* Manual "Assist now" — forces an AI answer from the recent
+                transcript even when no question was auto-detected (auto-detect
+                can miss when transcription is imperfect). */}
+            <button
+              type="button"
+              className="card-assist-now-btn"
+              onClick={() => triggerAI()}
+              disabled={isLoading || isStreaming}
+              aria-label="Get an AI answer now from the recent conversation"
+              title="Assist now — answer based on what was just said"
+            >
+              <Sparkles size={13} />
+              <span>Assist now</span>
+            </button>
             {isNativeOverlay && !isCompact && (
               <button
                 type="button"
@@ -862,6 +973,25 @@ export function FloatingCopilot() {
               ratings, and follow-ups. When content overflows, only this region scrolls.
               Header and bottom controls stay permanently anchored. */}
           <div className="card-scroll-body">
+            {/* Live captions — confirm transcription is working at a glance.
+                A short rolling window of recent lines (newest last), labelled by
+                speaker, with any in-progress speech shown as a live pulsing line.
+                Only rendered when system audio or mic is active. */}
+            {(systemAudio.isActive || speech.isListening) && liveCaptions.length > 0 && (
+              <div className="live-caption-stack" aria-live="polite" aria-label="Live transcript">
+                {liveCaptions.map((c) => (
+                  <div
+                    key={c.key}
+                    className={`live-caption live-caption-${c.role} ${c.live ? 'is-live' : ''}`}
+                  >
+                    <span className="live-caption-speaker">
+                      {c.role === 'user' ? 'You' : 'Them'}
+                    </span>
+                    <span className="live-caption-text">{c.text}</span>
+                  </div>
+                ))}
+              </div>
+            )}
             {/* Render full chat history */}
             {chatHistory.map((msg) => (
               msg.role === 'user' ? (
@@ -948,6 +1078,16 @@ export function FloatingCopilot() {
             inputRef={inputRef}
             onUseScreen={handleUseScreen}
             isScreenActive={screen.isCapturing && sendScreenKeyframe}
+            onDictationStart={() => {
+              // Pause the main mic so the two SpeechRecognition instances on
+              // the same mic don't collide and kill the main pipeline.
+              dictationWasListening.current = speech.isListening;
+              speech.pause();
+            }}
+            onDictationEnd={() => {
+              if (dictationWasListening.current) speech.resume();
+              dictationWasListening.current = false;
+            }}
           />
         </div>
       </div>

@@ -1,0 +1,290 @@
+/* ============================================
+   Zule AI — Update Banner Styles
+   ============================================
+   Renders in normal document flow (not position: fixed) so it pushes
+   dashboard content down rather than overlapping it (Requirement 4.10).
+   Uses the existing glass-card container class for visual consistency.
+*/
+
+.update-banner {
+  margin-bottom: 16px;
+  padding: 20px 24px;
+  animation: update-banner-enter 0.25s ease-out;
+}
+
+.update-banner-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.update-banner-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.update-banner-current {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+/* Release notes section */
+.update-banner-notes {
+  margin-top: 8px;
+}
+
+.update-banner-notes-content {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  max-height: 300px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* Markdown content styling within release notes */
+.update-banner-notes-content h1,
+.update-banner-notes-content h2,
+.update-banner-notes-content h3 {
+  color: var(--text-primary);
+  margin-top: 12px;
+  margin-bottom: 8px;
+}
+
+.update-banner-notes-content h1 { font-size: 1.1rem; }
+.update-banner-notes-content h2 { font-size: 1rem; }
+.update-banner-notes-content h3 { font-size: 0.9rem; }
+
+.update-banner-notes-content p {
+  margin: 6px 0;
+}
+
+.update-banner-notes-content ul,
+.update-banner-notes-content ol {
+  padding-left: 20px;
+  margin: 6px 0;
+}
+
+.update-banner-notes-content li {
+  margin: 4px 0;
+}
+
+.update-banner-notes-content code {
+  background: rgba(255, 255, 255, 0.06);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+}
+
+.update-banner-notes-content pre {
+  background: rgba(0, 0, 0, 0.2);
+  padding: 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin: 8px 0;
+}
+
+.update-banner-notes-content pre code {
+  background: none;
+  padding: 0;
+}
+
+.update-banner-notes-content a {
+  color: #60a5fa;
+  text-decoration: underline;
+}
+
+.update-banner-notes-content blockquote {
+  border-left: 3px solid var(--glass-border);
+  padding-left: 12px;
+  margin: 8px 0;
+  color: var(--text-secondary);
+  opacity: 0.85;
+}
+
+.update-banner-notes-content table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 8px 0;
+}
+
+.update-banner-notes-content th,
+.update-banner-notes-content td {
+  border: 1px solid var(--glass-border);
+  padding: 6px 10px;
+  text-align: left;
+  font-size: 0.8rem;
+}
+
+.update-banner-notes-content th {
+  background: rgba(255, 255, 255, 0.04);
+  font-weight: 600;
+}
+
+/* Expand/collapse button for truncated notes */
+.update-banner-expand-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 4px 12px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.update-banner-expand-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+}
+
+.update-banner-expand-btn:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 2px;
+}
+
+/* Placeholder text when release notes unavailable */
+.update-banner-placeholder {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  font-style: italic;
+  opacity: 0.7;
+  margin: 4px 0;
+}
+
+/* Entry animation */
+@keyframes update-banner-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .update-banner {
+    animation: none;
+  }
+}
+
+/* ─── Action Buttons ─────────────────────────────────────────────────────── */
+
+.update-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--glass-border);
+}
+
+.update-banner-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 18px;
+  border-radius: var(--radius-pill);
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s, box-shadow 0.15s;
+  border: none;
+  line-height: 1.4;
+}
+
+.update-banner-btn:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 2px;
+}
+
+.update-banner-btn:disabled,
+.update-banner-btn[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* Primary action button */
+.update-banner-btn-primary {
+  background: #3b82f6;
+  color: #fff;
+}
+
+.update-banner-btn-primary:hover:not(:disabled) {
+  background: #2563eb;
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+}
+
+.update-banner-btn-primary:active:not(:disabled) {
+  background: #1d4ed8;
+}
+
+/* Secondary action button */
+.update-banner-btn-secondary {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary);
+  border: 1px solid var(--glass-border);
+}
+
+.update-banner-btn-secondary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text-primary);
+}
+
+.update-banner-btn-secondary:active:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* ─── Download Progress ──────────────────────────────────────────────────── */
+
+.update-banner-progress {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.update-banner-progress-bar {
+  width: 100%;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.update-banner-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3b82f6, #60a5fa);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.update-banner-progress-text {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── Inline Error Message ───────────────────────────────────────────────── */
+
+.update-banner-error {
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 6px;
+  color: #f87171;
+  font-size: 0.8rem;
+  font-weight: 500;
+}

@@ -2,7 +2,7 @@
 // Zule AI — Keyboard Shortcuts Hook
 // ============================================
 
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useRef } from 'react';
 
 export interface ShortcutConfig {
   key: string;
@@ -14,9 +14,12 @@ export interface ShortcutConfig {
 }
 
 export function useKeyboardShortcuts(shortcuts: ShortcutConfig[]): void {
+  const shortcutsRef = useRef(shortcuts);
+  shortcutsRef.current = shortcuts;
+
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
-      for (const shortcut of shortcuts) {
+      for (const shortcut of shortcutsRef.current) {
         const ctrlMatch = shortcut.ctrl ? (e.ctrlKey || e.metaKey) : !(e.ctrlKey || e.metaKey);
         const shiftMatch = shortcut.shift ? e.shiftKey : !e.shiftKey;
         const altMatch = shortcut.alt ? e.altKey : !e.altKey;
@@ -30,7 +33,7 @@ export function useKeyboardShortcuts(shortcuts: ShortcutConfig[]): void {
         }
       }
     },
-    [shortcuts]
+    [],
   );
 
   useEffect(() => {

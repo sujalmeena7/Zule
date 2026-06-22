@@ -122,6 +122,15 @@
   color: var(--text-primary);
 }
 
+.theme-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.theme-btn:disabled:hover {
+  color: var(--text-secondary);
+}
+
 /* Knowledge Base */
 .add-doc-form {
   display: flex;

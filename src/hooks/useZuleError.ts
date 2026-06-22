@@ -252,7 +252,7 @@ export function emitErrorTelemetryPlaceholder(e: ZuleError): void {
   // Dev-only breadcrumb. Replaced by Telemetry_Module.emit later.
   if (import.meta.env?.DEV) {
     // eslint-disable-next-line no-console
-    console.debug('[telemetry:error]', meta);
+    console.debug('[telemetry:error]', JSON.stringify(meta));
   }
 }
 

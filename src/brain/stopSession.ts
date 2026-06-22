@@ -92,11 +92,14 @@ export async function generateSummaryWithTimeout(
   }
 
   try {
-    const summaryPromise = generateMeetingSummary(meeting.transcript, apiKey);
+    const summaryPromise = generateMeetingSummary(meeting.transcript, apiKey, controller.signal);
 
     // Timeout race (Requirement 27.3)
     const timeoutPromise = new Promise<'timeout'>((resolve) => {
-      timeoutId = setTimeout(() => resolve('timeout'), SUMMARY_TIMEOUT_MS);
+      timeoutId = setTimeout(() => {
+        controller.abort(); // Abort the underlying fetch on timeout
+        resolve('timeout');
+      }, SUMMARY_TIMEOUT_MS);
     });
 
     const result = await Promise.race([

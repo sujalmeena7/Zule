@@ -188,10 +188,12 @@ export function useCrossWindowSync(
   const hostLossTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const onActionRef = useRef(onAction);
   const onHostLossRef = useRef(onHostLoss);
+  const stateRef = useRef(initialState || {});
 
   // Keep refs up-to-date without re-running the effect
   onActionRef.current = onAction;
   onHostLossRef.current = onHostLoss;
+  stateRef.current = state;
 
   useEffect(() => {
     const { transport, isFallback } = createTransport();
@@ -223,7 +225,7 @@ export function useCrossWindowSync(
             const response: SyncMessage = {
               kind: 'snapshot-response',
               version: versionRef.current,
-              payload: state as SyncState,
+              payload: stateRef.current as SyncState,
             };
             transport.send(response);
           }

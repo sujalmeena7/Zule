@@ -29,8 +29,14 @@ import {
 // `vi.mock` can reach it. Mirrors the pattern used by
 // `vectorStore.test.ts`.
 const pipelineMock = vi.hoisted(() => vi.fn());
-vi.mock('@xenova/transformers', () => ({
-  env: { allowLocalModels: false, useBrowserCache: true },
+vi.mock('@huggingface/transformers', () => ({
+  env: {
+    allowLocalModels: false,
+    allowRemoteModels: true,
+    useBrowserCache: true,
+    localModelPath: '',
+    backends: { onnx: { wasm: {} } },
+  },
   pipeline: pipelineMock,
 }));
 

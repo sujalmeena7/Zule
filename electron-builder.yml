@@ -7,6 +7,22 @@ appId: com.zule.ai
 productName: Zule AI
 copyright: Copyright © 2024 Zule AI
 
+# ── Process-name masking (optional stealth knob) ────────────────────────────
+#
+# Proctoring software (Honorlock, Safe Exam Browser, etc.) inspects the
+# process list for unrecognised executables before flagging them, in
+# addition to scanning for screen-capture leaks. The `executableName` field
+# below controls the .exe filename that lands in the user's Task Manager
+# and Windows process list. By default it inherits from `productName`, so
+# the binary is `Zule AI.exe`.
+#
+# To run under a less identifiable name, uncomment the line below and
+# replace with a generic helper-style identifier (e.g. `DesktopHelper`,
+# `InputAssistant`). DO NOT impersonate a Windows system process name —
+# AVs flag exes that mimic `svchost.exe`, `lsass.exe`, etc. as malware.
+#
+# executableName: DesktopHelper
+
 directories:
   buildResources: public
   output: release
@@ -16,6 +32,23 @@ files:
   - dist-electron/**/*
   - public/favicon.ico
   - public/favicon.png
+  # The native ML stack is externalized (not bundled) — it must be packaged
+  # from node_modules so the main process can require it at runtime. npm nests
+  # transformers' own deps (onnxruntime-node, onnxruntime-common, sharp,
+  # @huggingface/jinja) UNDER @huggingface/transformers/node_modules/, so this
+  # single glob captures the whole stack including the native binaries.
+  - node_modules/@huggingface/transformers/**/*
+
+# Native binaries (.node, .dll) cannot be loaded from inside the asar archive,
+# so unpack the ML stack to app.asar.unpacked/. onnxruntime-node ships
+# onnxruntime_binding.node + onnxruntime.dll/DirectML.dll; sharp ships native
+# image bindings. The whisper model files are read from dist/vendor (inside
+# asar is fine — they're read via fs, which Electron serves transparently).
+asarUnpack:
+  - node_modules/@huggingface/transformers/node_modules/onnxruntime-node/**/*
+  - node_modules/@huggingface/transformers/node_modules/sharp/**/*
+  - "**/*.node"
+  - "**/*.dll"
 
 win:
   target:
@@ -35,5 +68,5 @@ nsis:
 # Auto-update configuration (Phase 4)
 publish:
   provider: github
-  owner: zule-ai
-  repo: zule
+  owner: sujalmeena7
+  repo: Zule

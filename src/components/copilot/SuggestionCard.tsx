@@ -2,7 +2,7 @@
 // Zule AI — Suggestion Card Sub-Component
 // ============================================
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Sparkles, Loader2, AlertTriangle, ThumbsUp, ThumbsDown } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -52,14 +52,16 @@ export function SuggestionCard({
   };
 
   // Reset rating when response changes
-  const responseText = aiResponse?.text ?? null;
   const [lastResponseText, setLastResponseText] = useState<string | null>(null);
-  if (responseText !== lastResponseText) {
-    setLastResponseText(responseText);
-    if (userRating !== null) {
-      setUserRating(null);
+  useEffect(() => {
+    const currentText = aiResponse?.text ?? null;
+    if (currentText !== lastResponseText) {
+      setLastResponseText(currentText);
+      if (userRating !== null) {
+        setUserRating(null);
+      }
     }
-  }
+  }, [aiResponse?.text]);
 
   return (
     <>

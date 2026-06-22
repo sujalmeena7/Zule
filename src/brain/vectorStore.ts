@@ -2,7 +2,7 @@
 // Zule AI — Local Vector Embeddings (Transformers.js)
 // ============================================
 //
-// Wraps the `@xenova/transformers` `feature-extraction` pipeline and
+// Wraps the `@huggingface/transformers` `feature-extraction` pipeline and
 // implements the Vector_Index v2 contract from design.md §7.
 //
 // Defects fixed by task 5.1:
@@ -47,73 +47,17 @@
 // consumers (`database.ts`, `summaryEngine.ts`, `Settings.tsx`,
 // `ModelLoader.tsx`) compile without changes.
 
-import { pipeline, env } from '@xenova/transformers';
+import { pipeline } from '@huggingface/transformers';
 import type { ZuleError } from '../types/errors';
 import { modelDownloadRegistry } from './modelDownloadRegistry';
+// Importing this module configures the shared Transformers.js `env` (model
+// paths, WASM paths, single-threaded backend) exactly once for the whole app.
+import './transformersEnv';
 import {
   quantize,
   dequantize,
   type QuantizedVector,
 } from './vectorMath';
-
-// Embedding-model resolution strategy (privacy / stealth / offline):
-//   - Prefer the self-hosted model mirrored into `public/vendor/models/`
-//     by `scripts/fetch-models.mjs` (served from the application origin at
-//     `/vendor/models/`). This means no network call to huggingface.co on
-//     the common path.
-//   - Keep `allowRemoteModels = true` as a fallback so that if the local
-//     copy is ever missing (e.g. the mirror step was skipped), the runtime
-//     still degrades to the remote HuggingFace fetch. The HF CSP
-//     `connect-src` entries in index.html exist for exactly this fallback.
-//   - `useBrowserCache = true` so even the fallback path is fetched at most
-//     once and then served from IndexedDB.
-env.allowLocalModels = true;
-env.allowRemoteModels = true;
-env.useBrowserCache = true;
-// Path is relative to the application origin; Transformers.js appends
-// `<modelId>/<file>` to it (e.g. `/vendor/models/Xenova/all-MiniLM-L6-v2/
-// onnx/model_quantized.onnx`).
-env.localModelPath = '/vendor/models/';
-
-// Self-host the ONNX runtime WASM (Transformers.js inference backend) so
-// it loads from the application origin rather than a third-party CDN
-// (Requirement 15.7, 21.5). The dist files from `onnxruntime-web` are
-// mirrored into `public/vendor/onnx/` by `scripts/copy-vendor.mjs`,
-// which is invoked from the `zule:copy-vendor` Vite plugin on
-// dev-server start and at `buildStart` of every production build.
-//
-// Guarded against test mocks of the `env` object that omit the nested
-// `backends` shape (see `vectorStore.test.ts`).
-type OnnxWasmFlags = {
-  wasmPaths?: string;
-  numThreads?: number;
-  simd?: boolean;
-  proxy?: boolean;
-};
-type OnnxBackends = { onnx?: { wasm?: OnnxWasmFlags } };
-const envBackends = (env as unknown as { backends?: OnnxBackends }).backends;
-if (envBackends?.onnx?.wasm) {
-  envBackends.onnx.wasm.wasmPaths = '/vendor/onnx/';
-  // Force the SINGLE-THREADED WASM backend. The multi-threaded backend
-  // (`ort-wasm-threaded`) requires SharedArrayBuffer, which is only
-  // available when the page is cross-origin isolated (COOP: same-origin
-  // + COEP: require-corp). The Vite dev server and the Electron file://
-  // load do not set those headers, so the threaded backend's worker
-  // spin-up hard-crashes the renderer process. numThreads = 1 selects the
-  // non-threaded `ort-wasm` build, which has no SharedArrayBuffer
-  // dependency and runs fine in a non-isolated context.
-  envBackends.onnx.wasm.numThreads = 1;
-  // Run inference on the main thread rather than an ONNX proxy worker —
-  // the embedding model is small and the proxy worker path is another
-  // place that can fail without SharedArrayBuffer.
-  envBackends.onnx.wasm.proxy = false;
-  // Disable the SIMD WASM build. onnxruntime-web@1.14.0 (pinned by
-  // @xenova/transformers@2.17) ships a SIMD kernel that segfaults
-  // (Windows ACCESS_VIOLATION, exit 0xC0000005) under the very new
-  // Electron 42 / V8 build. The plain `ort-wasm.wasm` kernel is slower
-  // but stable. If onnxruntime-web is later upgraded this can be removed.
-  envBackends.onnx.wasm.simd = false;
-}
 
 export type ProgressCallback = (progress: {
   status: string;
@@ -412,14 +356,7 @@ export class VectorStore {
     this.initAttemptCount = priorAttempts + 1;
 
     try {
-      this.extractor = (await pipeline(
-        'feature-extraction',
-        this.modelId,
-        {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          progress_callback: (data: any) => this.dispatchProgress(data),
-        },
-      )) as typeof this.extractor;
+      this.extractor = (await this.loadExtractor()) as typeof this.extractor;
       this.inFlightInit = null;
       deferred.resolve();
     } catch (error) {
@@ -439,6 +376,50 @@ export class VectorStore {
         deferred.reject(error);
       }
     }
+  }
+
+  /**
+   * Load the feature-extraction pipeline, preferring WebGPU for speed and
+   * falling back to single-threaded WASM if WebGPU is unavailable or fails to
+   * initialize. WebGPU needs neither SharedArrayBuffer nor cross-origin
+   * isolation, so it sidesteps the COOP/COEP header strip in main.ts.
+   *
+   * `dtype: 'q8'` is used for BOTH devices so the vendored quantized model
+   * (`onnx/model_quantized.onnx`) is always the file that loads — a WebGPU
+   * fp32 request would instead fetch the non-vendored `model.onnx`. MiniLM is
+   * tiny and q8 is more than accurate enough for retrieval.
+   */
+  private async loadExtractor(): Promise<unknown> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const progress_callback = (data: any) => this.dispatchProgress(data);
+
+    const webgpuAvailable =
+      typeof navigator !== 'undefined' &&
+      'gpu' in navigator &&
+      (navigator as { gpu?: unknown }).gpu != null;
+
+    if (webgpuAvailable) {
+      try {
+        return await pipeline('feature-extraction', this.modelId, {
+          device: 'webgpu',
+          dtype: 'q8',
+          progress_callback,
+        } as Parameters<typeof pipeline>[2]);
+      } catch (err) {
+        // WebGPU init failed (driver/adapter issue) — fall through to WASM.
+        // eslint-disable-next-line no-console
+        console.warn(
+          '[vectorStore] WebGPU pipeline init failed; falling back to WASM:',
+          err,
+        );
+      }
+    }
+
+    return pipeline('feature-extraction', this.modelId, {
+      device: 'wasm',
+      dtype: 'q8',
+      progress_callback,
+    } as Parameters<typeof pipeline>[2]);
   }
 
   private sleep(ms: number): Promise<void> {
@@ -477,6 +458,18 @@ export class VectorStore {
       return cached.slice();
     }
     this.cacheMisses += 1;
+
+    // Prefer the native main-process embedding service when running in Electron.
+    // The renderer's onnxruntime-web backend crashes the process (0xC0000005),
+    // so inference must happen out-of-process. Everything else (this LRU,
+    // quantization, cosine similarity) stays in the renderer.
+    const embedBridge =
+      typeof window !== 'undefined' ? window.electronAPI?.embedGenerate : undefined;
+    if (typeof embedBridge === 'function') {
+      const { vector } = await embedBridge(text);
+      this.cachePut(text, vector.slice());
+      return vector;
+    }
 
     while (!this.extractor) {
       if (this.initAttemptCount >= MAX_INIT_ATTEMPTS) {
@@ -646,3 +639,57 @@ export class VectorStore {
 
 /** Singleton used across the app. */
 export const vectorStore = new VectorStore();
+
+// ====================================================================
+// Module-level helper for the Vector_Index integration (Requirement 4.1)
+// ====================================================================
+
+/**
+ * Structural shape of a Knowledge_Base chunk's vector storage as it
+ * lives in IndexedDB. Mirrors the persisted `KBChunk` fields without
+ * pulling `database.ts` into this module (which would create a cycle:
+ * `database.ts` already imports from `vectorStore.ts`).
+ *
+ * Exactly one of `vector` / `vectorQ` is populated for any well-formed
+ * chunk; the consumer must defend against the legacy "neither populated"
+ * case the same way the linear-scan path in `database.search` does.
+ */
+export interface StoredChunkVector {
+  /** Full-precision Float32 embedding (raw / pre-quantization rows). */
+  vector?: readonly number[];
+  /** Int8-quantized embedding (rows persisted above the threshold). */
+  vectorQ?: QuantizedVector;
+}
+
+/**
+ * Renderer-side wrapper that decodes a stored chunk into a Float32
+ * `number[]` regardless of which encoding it was persisted in. This is
+ * the helper consumed by `database.ts` whenever it needs to ship a
+ * chunk vector across the `vectorIndex:addBatch` IPC boundary
+ * (Requirement 4.1, design §"Quantized-storage compatibility").
+ *
+ * Returns:
+ *   - `chunk.vector` (as a plain `number[]`) when the chunk is stored
+ *     raw and the field is non-empty
+ *   - `Array.from(dequantize(chunk.vectorQ))` when the chunk is stored
+ *     in int8-quantized form
+ *   - `[]` for the legacy / malformed case where neither field carries
+ *     data (matches the defensive branch in `database.search`)
+ *
+ * Pure: no module state read or written, no IPC, no logging. The
+ * returned array is element-wise equal to (and disjoint from) the
+ * persisted form, so callers can pass it across the IPC boundary
+ * without risk of mutating the IndexedDB row.
+ */
+export function dequantizeFromStorage(chunk: StoredChunkVector): number[] {
+  if (chunk.vector && chunk.vector.length > 0) {
+    // Defensive copy: the caller may freeze, mutate, or transfer the
+    // result, and we don't want to leak a reference to the IndexedDB
+    // row's underlying array.
+    return Array.from(chunk.vector);
+  }
+  if (chunk.vectorQ && chunk.vectorQ.data.length > 0) {
+    return Array.from(dequantize(chunk.vectorQ));
+  }
+  return [];
+}

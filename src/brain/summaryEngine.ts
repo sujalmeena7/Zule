@@ -191,6 +191,7 @@ export function parseSummaryResponse(
 export async function generateMeetingSummary(
   transcript: TranscriptLine[],
   apiKey: string,
+  signal?: AbortSignal,
 ): Promise<MeetingSummaryResult> {
   const fullTranscriptText = transcript.map(l => `[${l.speaker}]: ${l.text}`).join('\n');
 
@@ -206,8 +207,16 @@ export async function generateMeetingSummary(
     // First attempt
     const prompt = buildSummaryPrompt(fullTranscriptText);
     const response = await generateAIResponse(
-      { systemPrompt: '', knowledgeContext: '', transcriptContext: '', screenContext: '', userQuery: '', fullPrompt: prompt },
+      {
+        systemPrompt: 'You are an expert executive assistant.',
+        knowledgeContext: '',
+        transcriptContext: `Full transcript:\n${fullTranscriptText.substring(0, 3000)}`,
+        screenContext: '',
+        userQuery: 'Generate a structured meeting summary.',
+        fullPrompt: prompt,
+      },
       apiKey,
+      signal,
     );
 
     let result = parseSummaryResponse(response.text, transcript);
@@ -216,8 +225,16 @@ export async function generateMeetingSummary(
     if (!result) {
       const retryPrompt = buildStrictRetryPrompt(fullTranscriptText);
       const retryResponse = await generateAIResponse(
-        { systemPrompt: 'You are a JSON-only assistant. Respond ONLY with valid JSON, nothing else.', knowledgeContext: '', transcriptContext: '', screenContext: '', userQuery: '', fullPrompt: retryPrompt },
+        {
+          systemPrompt: 'You are a JSON-only assistant. Respond ONLY with valid JSON, nothing else.',
+          knowledgeContext: '',
+          transcriptContext: `Full transcript:\n${fullTranscriptText.substring(0, 3000)}`,
+          screenContext: '',
+          userQuery: 'Generate a structured meeting summary as JSON.',
+          fullPrompt: retryPrompt,
+        },
         apiKey,
+        signal,
       );
       result = parseSummaryResponse(retryResponse.text, transcript);
     }

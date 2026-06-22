@@ -36,6 +36,19 @@ import {
  * domain-specific fields. No field accepts arbitrary user content
  * (transcript text, screen text, API keys). This structurally prevents
  * content leakage into telemetry (Requirement 19.5).
+ *
+ * The `embed.batch`, `vectorIndex.query`, and `vad.skipped` variants
+ * are added by the AI Pipeline Performance feature and carry only
+ * numeric measurements and fixed string-literal pipeline tags — no
+ * free-form payload — so the existing structural Property 51 holds
+ * for them too (ai-pipeline-performance Requirements 10.1, 10.2,
+ * 10.3, 10.4).
+ *
+ * The `update.*` variants are added by the Auto-Updater feature and
+ * carry only version strings, trigger literals, duration numbers, and
+ * error category tags. No OS user name, machine ID, network address,
+ * file path, or release-notes body is included in any update telemetry
+ * payload (auto-updater Requirements 9.1, 9.2, 9.3, 9.4, 9.5, 9.6).
  */
 export type MetricEvent =
   | { kind: 'ttft'; ms: number; modelId: string; providerId: string }
@@ -49,7 +62,15 @@ export type MetricEvent =
   | { kind: 'memory.size'; chunks: number }
   | { kind: 'tokens'; promptTokens: number; completionTokens: number; modelId: string; providerId: string }
   | { kind: 'error'; name: string; message: string; stack: string; breadcrumb: string[] }
-  | { kind: 'latency.degraded' };
+  | { kind: 'latency.degraded' }
+  | { kind: 'embed.batch'; batchSize: number; durationMs: number }
+  | { kind: 'vectorIndex.query'; k: number; resultCount: number; durationMs: number }
+  | { kind: 'vad.skipped'; pipeline: 'loopback' | 'microphone' }
+  | { kind: 'update.checked'; currentVersion: string; trigger: 'startup' | 'manual' }
+  | { kind: 'update.available'; currentVersion: string; availableVersion: string }
+  | { kind: 'update.downloaded'; availableVersion: string; durationMs: number }
+  | { kind: 'update.installed'; currentVersion: string }
+  | { kind: 'update.error'; stage: 'check' | 'download' | 'integrity' | 'install'; category: string };
 
 // ---------------------------------------------------------------------
 // Stored row shape

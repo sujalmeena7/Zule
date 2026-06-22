@@ -14,7 +14,7 @@
 
 import type { ContextWindow } from './contextManager';
 import { database } from '../data/database';
-import { AI_Provider_Router } from './providerRouter';
+import { AI_Provider_Router, VaultLockedError, OfflineError } from './providerRouter';
 import type { PromptInput, StreamCallbacks as RouterStreamCallbacks, ProviderResponse } from '../types/ai';
 
 // --- Legacy types (kept for backwards compat) ----------------------------
@@ -219,7 +219,11 @@ export async function generateAIResponse(
     const response = await routerInstance.complete(prompt, { signal });
     return toAIResponse(response);
   } catch (error) {
-    // Fallback to simulation on any error (preserves old behaviour)
+    // Re-throw vault-locked and offline errors so callers can surface them
+    if (error instanceof VaultLockedError || error instanceof OfflineError) {
+      throw error;
+    }
+    // Fallback to simulation on transport/provider errors (preserves old behaviour)
     console.warn('AI provider call failed, falling back to simulation:', error);
     const { SimulationAdapter } = await import('./providers/simulation');
     const simAdapter = new SimulationAdapter();
@@ -272,6 +276,10 @@ export async function streamAIResponse(
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       throw error; // Let abort errors propagate
+    }
+    // Re-throw vault-locked and offline errors so callers can surface them
+    if (error instanceof VaultLockedError || error instanceof OfflineError) {
+      throw error;
     }
     // Fallback: stream via simulation (preserves old behaviour)
     console.warn('[aiProvider] ❌ AI streaming FAILED, falling back to simulation:', error);

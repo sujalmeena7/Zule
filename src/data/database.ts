@@ -54,6 +54,8 @@ import {
 } from './kbRetention';
 import {
   searchChunks,
+  DEFAULT_MAX_RESULTS,
+  DEFAULT_SIMILARITY_THRESHOLD,
   type KBSearchOptions,
 } from './kbSearch';
 
@@ -66,7 +68,7 @@ export interface StoredMeeting {
   startedAt: number;
   endedAt: number;
   duration: number;
-  transcript: Array<{ id: string; text: string; timestamp: number; speaker: string }>;
+  transcript: Array<{ id: string; text: string; timestamp: number; speaker: string; speakerRole?: string; asrConfidence?: number; language?: string; detection?: string; provider?: string }>;
   summary: string;
   /** Tracks summary generation lifecycle (Requirement 27.3). */
   aiSummaryStatus?: 'pending' | 'ok' | 'failed';
@@ -669,6 +671,51 @@ export async function migrateApiKeyToProviderCipher(
   return { migrated: true, providerId: 'gemini' };
 }
 
+// --- Vector_Index removal notifier ----------------------------------------
+//
+// Every code path in this module that deletes one or more chunk rows from
+// `STORE_DOCUMENTS` must also notify the main-process Vector_Index so its
+// in-memory HNSW graph drops the matching label entries (Requirement 2.6).
+// The Vector_Index keys each entry by `${docId}#${chunkIndex}` — the same
+// canonical id format used by `vectorIndexHydration.ts::chunkIndexId` and
+// by the upload-time insert path in `Settings.handleAddDocument`. The
+// formula is intentionally inlined here rather than imported, because
+// `vectorIndexHydration.ts` already imports from this module and a back-
+// import would create a circular dependency. The two sites must stay in
+// sync; the comment in `chunkIndexId` documents the convention.
+//
+// Failures are swallowed: a missing bridge (e.g. running outside Electron)
+// or a main-process error must never block the IndexedDB delete from
+// being reported as successful. The renderer-side linear-scan fallback in
+// `database.search` plus the self-healing rebuild in
+// `hydrateVectorIndexOnBoot` together guarantee correctness even if a
+// `vectorIndex:remove` call is dropped on the floor.
+async function notifyVectorIndexRemove(
+  docId: string,
+  chunkCount: number,
+): Promise<void> {
+  if (chunkCount <= 0) return;
+  if (typeof window === 'undefined') return;
+  const remove = window.electronAPI?.vectorIndexRemove;
+  if (typeof remove !== 'function') return;
+
+  const calls: Array<Promise<unknown>> = [];
+  for (let i = 0; i < chunkCount; i++) {
+    // Mirror of `vectorIndexHydration.ts::chunkIndexId(docId, i)`.
+    const id = `${docId}#${i}`;
+    calls.push(
+      remove(id).catch((err) => {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[database] vectorIndex:remove failed for ${id}:`,
+          err,
+        );
+      }),
+    );
+  }
+  await Promise.allSettled(calls);
+}
+
 // --- ID Generation ---
 
 function generateId(): string {
@@ -924,12 +971,37 @@ export const database = {
   async removeDocument(id: string): Promise<void> {
     try {
       const db = await openDB();
-      await new Promise<void>((resolve, reject) => {
+
+      // Read the document's chunk count and delete it inside a single
+      // readwrite transaction so the two operations are atomic. We need
+      // the chunk count to drive the `vectorIndex:remove` notifications
+      // below (Requirement 2.6) — once the row is gone there is no way
+      // to recover the per-chunk ids that were registered with the
+      // main-process Vector_Index. Issuing both ops on the same
+      // transaction guarantees the count corresponds to the row that
+      // is actually being removed.
+      const chunkCount = await new Promise<number>((resolve, reject) => {
         const tx = db.transaction(STORE_DOCUMENTS, 'readwrite');
-        tx.objectStore(STORE_DOCUMENTS).delete(id);
-        tx.oncomplete = () => resolve();
+        const store = tx.objectStore(STORE_DOCUMENTS);
+        let count = 0;
+        const getReq = store.get(id);
+        getReq.onsuccess = () => {
+          const existing = getReq.result as KBDocument | undefined;
+          count = existing?.chunks?.length ?? 0;
+        };
+        getReq.onerror = () => reject(getReq.error);
+        // `delete` is idempotent — issuing it for an absent key is a
+        // no-op, matching the pre-existing contract.
+        store.delete(id);
+        tx.oncomplete = () => resolve(count);
         tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error ?? new Error('transaction aborted'));
       });
+
+      // (Requirement 2.6) Notify the main-process Vector_Index that
+      // every chunk of this document has been removed. Fire-and-forget
+      // per chunk index; failures here cannot fail the removal.
+      await notifyVectorIndexRemove(id, chunkCount);
 
       // (Requirement 6.7) Drop every cached query embedding so a search
       // that was about to return chunks from the deleted document
@@ -981,6 +1053,22 @@ export const database = {
    * lives in {@link searchChunks} so it can be exercised by Property
    * 17 without requiring a real Transformers.js pipeline.
    *
+   * Two search paths share this entry point (Requirements 2.1, 2.2,
+   * 4.2, 4.4):
+   *
+   *   - **ANN path** — when the live chunk count is at or above
+   *     `QUANTIZATION_THRESHOLD` and the `vectorIndex:query` IPC bridge
+   *     is reachable, the query embedding is shipped to the main-process
+   *     HNSW graph. Hits come back as stable `${docId}#${chunkIndex}`
+   *     ids (the same convention {@link buildIndexedItemsFromDocuments}
+   *     uses on insert) which we map back to the original chunk text.
+   *   - **Linear-scan fallback** — for smaller Knowledge_Bases, or when
+   *     the ANN bridge is unavailable, the call falls through to the
+   *     legacy `searchChunks` linear scan in `kbSearch.ts`. This keeps
+   *     the existing `kbSearch.test.ts` assertions intact
+   *     (Requirements 4.4, 9.2) and is naturally pure (no
+   *     `dequantizeFromStorage` invocation, satisfying Property 12).
+   *
    * For source-compatibility with the legacy `search(query, maxResults)`
    * call shape (still used by `contextManager.ts` until task 10 lands),
    * the second argument may also be a plain `number`, which is treated
@@ -992,7 +1080,13 @@ export const database = {
   ): Promise<string[]> {
     if (!query.trim()) return [];
     try {
-      const { vectorStore } = await import('../brain/vectorStore');
+      const { vectorStore, QUANTIZATION_THRESHOLD } = await import(
+        '../brain/vectorStore'
+      );
+      // Embed the query through the existing `embed:generate` channel
+      // (delegated from `vectorStore.generateEmbedding` when the IPC
+      // bridge is present, with the renderer-side LRU on top — design
+      // §"Components and Interfaces / Vector_Index Service").
       const queryVector = await vectorStore.generateEmbedding(query);
 
       const allDocs = await this.getAllDocuments();
@@ -1002,6 +1096,71 @@ export const database = {
           ? { maxResults: opts }
           : opts ?? {};
 
+      const threshold =
+        resolvedOpts.similarityThreshold ?? DEFAULT_SIMILARITY_THRESHOLD;
+      const maxResultsRaw = resolvedOpts.maxResults ?? DEFAULT_MAX_RESULTS;
+      const maxResults =
+        Number.isFinite(maxResultsRaw) && maxResultsRaw > 0
+          ? Math.floor(maxResultsRaw)
+          : 0;
+      if (maxResults === 0) return [];
+
+      // Total live chunk count drives the ANN/linear-scan switch. The
+      // walk is cheap (just `chunks.length` per document) and avoids
+      // pulling in `kbRetention.totalChunkCount` purely for the policy
+      // gate.
+      let totalChunks = 0;
+      for (const doc of allDocs) totalChunks += doc.chunks.length;
+
+      const queryBridge =
+        typeof window !== 'undefined'
+          ? window.electronAPI?.vectorIndexQuery
+          : undefined;
+
+      // ── ANN path (Requirements 2.1, 2.2, 4.2) ────────────────────
+      // Above the quantization threshold and with the IPC bridge
+      // present, route the query through the HNSW graph in the main
+      // process. The hit ids match the `${docId}#${chunkIndex}` form
+      // produced by `buildIndexedItemsFromDocuments` on insert/rebuild.
+      if (
+        totalChunks >= QUANTIZATION_THRESHOLD &&
+        typeof queryBridge === 'function'
+      ) {
+        try {
+          const hits = await queryBridge(queryVector, maxResults);
+          if (hits.length > 0) {
+            const idToText = new Map<string, string>();
+            for (const doc of allDocs) {
+              for (let i = 0; i < doc.chunks.length; i++) {
+                idToText.set(`${doc.id}#${i}`, doc.chunks[i].text);
+              }
+            }
+            const out: string[] = [];
+            for (const hit of hits) {
+              if (hit.score < threshold) continue;
+              const text = idToText.get(hit.id);
+              if (typeof text === 'string') out.push(text);
+              if (out.length >= maxResults) break;
+            }
+            return out;
+          }
+          // hits.length === 0 falls through to the linear scan as a
+          // safety net: a not-yet-hydrated index (e.g. boot hydration
+          // still in flight) would otherwise return no results despite
+          // the KB having relevant content.
+        } catch (annErr) {
+          console.warn(
+            '[database.search] ANN query failed; falling back to linear scan:',
+            annErr,
+          );
+        }
+      }
+
+      // ── Linear-scan fallback (Requirements 4.4, 9.2) ─────────────
+      // Untouched legacy path — preserves the existing `kbSearch.ts`
+      // contract and, crucially, is the only branch exercised when the
+      // KB is below `QUANTIZATION_THRESHOLD` (Property 12: never invokes
+      // `dequantizeFromStorage` for chunks stored as raw `vector`).
       return searchChunks(
         allDocs,
         queryVector,
@@ -1396,6 +1555,15 @@ export const database = {
       tx.onabort = () => reject(tx.error ?? new Error('transaction aborted'));
     });
 
+    // (Requirement 2.6) Notify the main-process Vector_Index that
+    // every chunk of every evicted document has been removed. The
+    // `before` snapshot still carries chunk counts even though the
+    // rows have just been deleted from IndexedDB.
+    for (const doc of before) {
+      if (!evictedSet.has(doc.id)) continue;
+      await notifyVectorIndexRemove(doc.id, doc.chunks?.length ?? 0);
+    }
+
     // (Requirement 6.7) Document deletion invalidates cached query
     // results referencing chunks from those documents. The query
     // cache is keyed by query text, not by chunk reference, so we
@@ -1467,6 +1635,12 @@ export const database = {
       tx.onerror = () => reject(tx.error);
       tx.onabort = () => reject(tx.error ?? new Error('transaction aborted'));
     });
+
+    // (Requirement 2.6) Notify the main-process Vector_Index that
+    // every chunk of every quota-evicted document has been removed.
+    for (const doc of toDelete) {
+      await notifyVectorIndexRemove(doc.id, doc.chunks?.length ?? 0);
+    }
 
     return { deletedDocuments: toDelete.length, deletedChunks: removedChunks };
   },

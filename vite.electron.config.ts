@@ -59,24 +59,15 @@ export default defineConfig({
         ),
       },
       {
-        // Stub out the entire ML inference stack. @xenova/transformers
-        // depends on onnxruntime-web@1.14.0 which segfaults under
-        // Electron 42's V8. Until it's upgraded, the stub prevents Vite
-        // from trying to resolve the missing dist/ directory and prevents
-        // the renderer from ever touching the broken WASM backend.
-        find: /^@xenova\/transformers$/,
+        // @huggingface/transformers (v3) statically imports `onnxruntime-node`
+        // in its ONNX backend, even though it only *uses* it under Node. That
+        // package is CJS with a native binding and no browser entry, so we
+        // alias it to an empty (non-throwing) stub for the sandboxed renderer.
+        // The web backend (onnxruntime-web — WebGPU/WASM) runs inference here.
+        find: /^onnxruntime-node$/,
         replacement: path.resolve(
           __dirname,
-          'src/brain/transformers-stub.ts',
-        ),
-      },
-      {
-        // onnxruntime-web dist is missing / incompatible — stub to prevent
-        // Vite import analysis failures on any transitive import.
-        find: /^onnxruntime-web/,
-        replacement: path.resolve(
-          __dirname,
-          'src/brain/transformers-stub.ts',
+          'src/brain/onnxruntime-node-stub.ts',
         ),
       },
     ],
@@ -86,13 +77,16 @@ export default defineConfig({
   // ESM so it doesn't need pre-bundling (and pre-bundling its 30 MB
   // worker would stall Vite startup).
   optimizeDeps: {
-    include: [],
-    // Exclude the ML inference stack from dependency analysis. The ONNX WASM
-    // backend (onnxruntime-web@1.14.0) is binary-incompatible with Electron
-    // 42's V8 and segfaults on instantiation. We've disabled embedding in the
-    // renderer for now; excluding these ensures Vite never tries to resolve or
-    // bundle them (which fails anyway since onnxruntime-web/dist is missing).
-    exclude: ['@xenova/transformers', 'onnxruntime-web', 'onnxruntime-node'],
+    // Pre-bundle the ML inference stack so esbuild resolves the large ESM graph
+    // once and HMR stays stable. We only list the top-level package by its bare
+    // name — `onnxruntime-web` is nested under @huggingface/transformers's own
+    // node_modules, so it is NOT resolvable by bare specifier from the project
+    // root (listing it here fails dependency resolution). esbuild follows it
+    // transitively when it pre-bundles @huggingface/transformers.
+    include: ['@huggingface/transformers'],
+    // onnxruntime-node is the native Node backend — never used in the renderer
+    // and aliased to an empty stub above. Keep it out of dependency analysis.
+    exclude: ['onnxruntime-node'],
   },
 
   plugins: [
@@ -108,7 +102,26 @@ export default defineConfig({
           build: {
             outDir: 'dist-electron',
             rollupOptions: {
-              external: ['electron', 'node:path', 'node:url'],
+              // The native ML stack (transformers' node build + onnxruntime-node
+              // + its peer sharp) must NOT be bundled — it ships native `.node`/
+              // `.dll` binaries and is loaded from node_modules at runtime via a
+              // dynamic import in whisperService.ts. Externalize so Rollup leaves
+              // the `import('@huggingface/transformers')` as a runtime require.
+              external: [
+                'electron',
+                'node:path',
+                'node:url',
+                'node:module',
+                '@huggingface/transformers',
+                'onnxruntime-node',
+                'sharp',
+                // `hnswlib-node` is the native HNSW addon used by
+                // electron/vectorIndexService.ts. Like the other native
+                // bindings above it must be loaded from node_modules at
+                // runtime; bundling would inline the .node binary path
+                // resolution and break the addon load.
+                'hnswlib-node',
+              ],
             },
           },
         },
@@ -150,7 +163,7 @@ export default defineConfig({
       output: {
         manualChunks(id: string) {
           // Heavy ML runtime — Vector_Index + Whisper (Requirement 21.1)
-          if (id.includes('@xenova/transformers') || id.includes('onnxruntime')) {
+          if (id.includes('@huggingface/transformers') || id.includes('onnxruntime')) {
             return 'vendor-transformers';
           }
           // Heavy computer vision — OCR_Worker (Requirement 21.1)

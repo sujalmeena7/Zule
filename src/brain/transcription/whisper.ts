@@ -17,11 +17,30 @@
 // - (Requirement 2.4) Stamps every transcript line with
 //   `provider: 'local-whisper'` and the detected language tag.
 
-import { pipeline, env } from '@xenova/transformers';
+import { pipeline } from '@huggingface/transformers';
+// Configures the shared Transformers.js `env` (vendor model + WASM paths,
+// single-threaded backend). Importing here makes Whisper self-sufficient — it
+// no longer depends on vectorStore being imported first.
+import '../transformersEnv';
 import type { TranscriptionLine } from '../../types/transcription';
 import type { ZuleError } from '../../types/errors';
 import { modelDownloadRegistry } from '../modelDownloadRegistry';
 import type { Off, TranscriptionEvent, TranscriptionEventCallback } from './webSpeech';
+// VAD gate (Requirements 6.1, 6.2, 6.3, 7.3, 7.4, 10.3) — energy-based
+// renderer-side gate inserted between PCM capture and the
+// `whisper:transcribe` IPC. The microphone path runs the gate
+// per-chunk in `processAccumulatedAudio`. The persisted sensitivity
+// setting is read on `start` and live updates are received via
+// `vadSensitivityBus`.
+import {
+  scoreChunk,
+  mapSensitivityToThreshold,
+  VAD_DISABLE_FOR_TEST,
+  type VADSensitivity,
+} from './vad';
+import { vadSensitivityBus } from './vadSensitivityBus';
+import { telemetry } from '../telemetry';
+import { database } from '../../data/database';
 
 // ---- Configuration ----
 
@@ -30,7 +49,7 @@ import type { Off, TranscriptionEvent, TranscriptionEventCallback } from './webS
  * starts. Users can swap to larger variants (e.g. `Xenova/whisper-small`)
  * via Settings in a future task.
  */
-export const DEFAULT_WHISPER_MODEL = 'Xenova/whisper-tiny.en' as const;
+export const DEFAULT_WHISPER_MODEL = 'Xenova/whisper-base.en' as const;
 
 /**
  * Processing interval in milliseconds. Audio is buffered and sent to the
@@ -43,6 +62,53 @@ const PROCESS_INTERVAL_MS = 2000;
  * Sample rate expected by Whisper models (16 kHz mono).
  */
 const TARGET_SAMPLE_RATE = 16000;
+
+/**
+ * Robustly probe for a WORKING WebGPU adapter. `'gpu' in navigator` is not
+ * enough — it can be true while `requestAdapter()` returns null (no compatible
+ * GPU, blocklisted driver, headless/remote session). We must confirm an actual
+ * adapter exists before asking Transformers.js to run on WebGPU, otherwise it
+ * silently falls through to the WASM backend.
+ *
+ * Why this matters: the onnxruntime-web WASM backend has a history of *natively
+ * crashing* the Electron renderer (the original reason the whole ML stack was
+ * stubbed). A native crash cannot be caught by try/catch, so we must avoid
+ * reaching the WASM path on machines where it is unstable — see `loadModel`.
+ */
+async function probeWebGPU(): Promise<boolean> {
+  try {
+    const gpu = (navigator as unknown as { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;
+    if (!gpu || typeof gpu.requestAdapter !== 'function') return false;
+    const adapter = await gpu.requestAdapter();
+    return adapter != null;
+  } catch {
+    return false;
+  }
+}
+
+// ---- Non-speech token filtering ----
+
+/**
+ * Whisper hallucinates bracketed/parenthesised annotation tokens when fed
+ * silence or non-speech noise (e.g. `[BLANK_AUDIO]`, `[ Silence ]`, `(music)`,
+ * `[Music]`, `[inaudible]`, `[ Pause ]`). These are not real speech and must
+ * never reach the transcript or the dictation input field.
+ *
+ * Strategy: remove any fully-bracketed/parenthesised segment, then trim. If the
+ * remaining text is empty (or just punctuation), the caller drops the segment.
+ */
+export function stripNonSpeechTokens(text: string): string {
+  const cleaned = text
+    // Remove [...] and (...) groups (the common annotation forms).
+    .replace(/[\[(][^\])]*[\])]/g, ' ')
+    // Collapse whitespace.
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // If what's left is empty or only punctuation/symbols, treat as silence.
+  if (!cleaned || !/[\p{L}\p{N}]/u.test(cleaned)) return '';
+  return cleaned;
+}
 
 // ---- Progress callback type (same shape as vectorStore) ----
 
@@ -71,6 +137,27 @@ export interface WhisperProviderOptions {
    * Production default is 2000 ms.
    */
   processIntervalMs?: number;
+  /**
+   * Try the WebGPU backend before WASM. Defaults to FALSE: the onnxruntime-web
+   * WebGPU/JSEP backend natively crashes the Electron renderer on session
+   * build (observed on Electron 42, uncatchable), so by default we use the WASM
+   * backend only. Set true to force WebGPU first on machines where it's proven
+   * stable.
+   *
+   * NOTE: only relevant when running inference in-renderer (no `transcribeFn`).
+   * When a `transcribeFn` is supplied, inference happens out-of-process and
+   * this option is ignored.
+   */
+  preferWebGPU?: boolean;
+  /**
+   * Inject an external inference function. When provided, the provider does
+   * NOT load any in-renderer ML model — it only CAPTURES audio and delegates
+   * transcription to this function (one chunk of 16 kHz mono Float32 PCM in,
+   * recognised text out). This is how system-audio transcription runs Whisper
+   * in the Electron main process (onnxruntime-node) instead of the renderer,
+   * which crashes on the WASM/WebGPU engine (0xC0000005).
+   */
+  transcribeFn?: (pcm: Float32Array, opts: { language: string }) => Promise<string>;
 }
 
 // ---- Internal types ----
@@ -104,9 +191,18 @@ export class WhisperProvider {
   private speakerId: string;
   private speakerRole: 'user' | 'other';
   private processIntervalMs: number;
+  private preferWebGPU: boolean;
+  private transcribeFn?: (pcm: Float32Array, opts: { language: string }) => Promise<string>;
 
   // Audio pipeline
   private mediaStream: MediaStream | null = null;
+  /**
+   * Whether this provider acquired `mediaStream` itself (via getUserMedia).
+   * When false, the stream was supplied externally (e.g. a system-audio
+   * loopback stream) and its lifecycle is owned by the caller — teardown
+   * must not stop its tracks.
+   */
+  private _ownsStream = false;
   private audioContext: AudioContext | null = null;
   private sourceNode: MediaStreamAudioSourceNode | null = null;
   private processorNode: ScriptProcessorNode | null = null;
@@ -120,12 +216,30 @@ export class WhisperProvider {
   // Line counter for unique ids
   private lineCounter = 0;
 
+  // ---- VAD gate state (Requirements 6.1, 6.2, 6.3, 7.3, 7.4, 10.3) ----
+  /**
+   * Speech threshold in `[0, 1]` used by `scoreChunk`. Initialised from
+   * the documented default (`medium`) and overwritten in `start()` from
+   * the persisted `vadSensitivity` setting. Mutated synchronously by the
+   * `vadSensitivityBus` subscriber so live changes apply to the next
+   * chunk without restarting capture (Requirement 7.4).
+   */
+  private speechThreshold: number = mapSensitivityToThreshold('medium');
+  /**
+   * Unsubscribe callback for the active `vadSensitivityBus` subscription.
+   * Set in `start()` and called from `stop()` so live sensitivity
+   * listeners are released on teardown.
+   */
+  private vadUnsubscribe: (() => void) | null = null;
+
   constructor(opts: WhisperProviderOptions = {}) {
     this.modelId = opts.modelId ?? DEFAULT_WHISPER_MODEL;
     this.language = opts.language ?? 'en';
     this.speakerId = opts.speakerId ?? 'speaker-1';
     this.speakerRole = opts.speakerRole ?? 'user';
     this.processIntervalMs = opts.processIntervalMs ?? PROCESS_INTERVAL_MS;
+    this.preferWebGPU = opts.preferWebGPU ?? false;
+    this.transcribeFn = opts.transcribeFn;
   }
 
   // ---- Public getters ----
@@ -227,6 +341,13 @@ export class WhisperProvider {
    *          loading fails or the user cancels.
    */
   async loadModel(): Promise<void> {
+    // Capture-only mode: inference is delegated to an external function (the
+    // main-process onnxruntime-node service), so there is no in-renderer model
+    // to load. Mark ready and return.
+    if (this.transcribeFn) {
+      this._isModelLoaded = true;
+      return;
+    }
     if (this._isModelLoaded && this.transcriber) return;
     if (this._isCancelled) {
       throw new Error('Model download was cancelled');
@@ -242,28 +363,82 @@ export class WhisperProvider {
     });
 
     try {
-      this.transcriber = (await pipeline(
-        'automatic-speech-recognition',
-        this.modelId,
-        {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          progress_callback: (data: any) => {
-            if (this._isCancelled) {
-              // The library does not expose a direct abort mechanism,
-              // but we stop processing once cancel is set.
-              return;
-            }
-            this.dispatchProgress({
-              status: data.status ?? 'progress',
-              name: data.name ?? this.modelId,
-              file: data.file ?? '',
-              progress: data.progress ?? 0,
-              loaded: data.loaded ?? 0,
-              total: data.total ?? 0,
-            });
-          },
-        },
-      )) as unknown as WhisperPipeline;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const progress_callback = (data: any) => {
+        if (this._isCancelled) {
+          // The library does not expose a direct abort mechanism, but we
+          // stop processing once cancel is set.
+          return;
+        }
+        this.dispatchProgress({
+          status: data.status ?? 'progress',
+          name: data.name ?? this.modelId,
+          file: data.file ?? '',
+          progress: data.progress ?? 0,
+          loaded: data.loaded ?? 0,
+          total: data.total ?? 0,
+        });
+      };
+
+      // Backend selection. We learned the hard way (user testing on Electron
+      // 42) that the onnxruntime-web **WebGPU/JSEP** backend NATIVELY CRASHES
+      // the renderer the instant it builds a session — independent of model
+      // size (both fp32 and q8 crashed). A native GPU crash is uncatchable, so
+      // there is no "try WebGPU, catch, fall back" — by the time it throws, the
+      // renderer is already dead. Therefore the only safe order is to NOT touch
+      // WebGPU by default.
+      //
+      // Default order: WASM (single-threaded, q8) only. onnxruntime-web 1.22's
+      // WASM build is a different binary from the 1.14 one that originally
+      // segfaulted, so it is the candidate for a stable on-device backend.
+      // WebGPU can be force-enabled via `preferWebGPU` once it's proven stable
+      // on a given machine.
+      //
+      // q8 weights are used on every backend (decoder ~30 MB) and are vendored
+      // offline (scripts/fetch-models.mjs).
+      type Backend = 'webgpu' | 'wasm';
+      const order: Backend[] = [];
+      if (this.preferWebGPU) {
+        // Opt-in: try WebGPU first (only if an adapter actually exists).
+        if (await probeWebGPU()) order.push('webgpu');
+      }
+      order.push('wasm');
+
+      // eslint-disable-next-line no-console
+      console.info(
+        `[whisper] backend order: [${order.join(', ')}] ` +
+          `(preferWebGPU=${this.preferWebGPU})`,
+      );
+
+      let transcriber: WhisperPipeline | null = null;
+      let lastErr: unknown = null;
+      for (const device of order) {
+        try {
+          // eslint-disable-next-line no-console
+          console.info(`[whisper] loading model on ${device} (q8)…`);
+          transcriber = (await pipeline(
+            'automatic-speech-recognition',
+            this.modelId,
+            { device, dtype: 'q8', progress_callback } as Parameters<typeof pipeline>[2],
+          )) as unknown as WhisperPipeline;
+          // eslint-disable-next-line no-console
+          console.info(`[whisper] ${device} model ready.`);
+          break;
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn(`[whisper] ${device} pipeline init failed:`, err);
+          lastErr = err;
+          transcriber = null;
+        }
+      }
+
+      if (!transcriber) {
+        throw lastErr instanceof Error
+          ? lastErr
+          : new Error('whisper:all-backends-failed');
+      }
+
+      this.transcriber = transcriber;
 
       this._isModelLoaded = true;
 
@@ -330,6 +505,12 @@ export class WhisperProvider {
     language?: string;
     speakerId?: string;
     speakerRole?: 'user' | 'other';
+    /**
+     * Externally-supplied audio stream (e.g. a system-audio loopback stream).
+     * When provided, the provider transcribes this stream instead of opening
+     * the microphone, and does NOT own/stop the stream on teardown.
+     */
+    stream?: MediaStream;
   }): Promise<void> {
     if (opts?.language) this.language = opts.language;
     if (opts?.speakerId) this.speakerId = opts.speakerId;
@@ -342,20 +523,54 @@ export class WhisperProvider {
       await this.loadModel();
     }
 
-    // Request microphone access
+    // VAD: read persisted sensitivity and configure the speech threshold
+    // (Requirement 7.3). Falls back to `medium` if the setting is missing
+    // or the read fails so dictation still works against a sane default.
     try {
-      this.mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          sampleRate: TARGET_SAMPLE_RATE,
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-        },
-      });
+      const sensitivity = await database.getSetting<VADSensitivity>(
+        'vadSensitivity',
+        'medium',
+      );
+      this.speechThreshold = mapSensitivityToThreshold(sensitivity);
     } catch {
-      const error: ZuleError = { kind: 'transcription.permission-denied' };
-      this.emit('error', error);
-      return;
+      this.speechThreshold = mapSensitivityToThreshold('medium');
+    }
+
+    // VAD: subscribe to live sensitivity changes (Requirement 7.4). The
+    // listener mutates `speechThreshold` synchronously so the next
+    // captured chunk is judged against the new threshold without
+    // restarting audio capture. The unsubscribe is released in `stop()`.
+    if (this.vadUnsubscribe !== null) {
+      // Defensive: a prior `start()` left a subscription dangling.
+      this.vadUnsubscribe();
+      this.vadUnsubscribe = null;
+    }
+    this.vadUnsubscribe = vadSensitivityBus.subscribe((event) => {
+      this.speechThreshold = mapSensitivityToThreshold(event.value);
+    });
+
+    if (opts?.stream) {
+      // Use the supplied stream (caller owns its lifecycle). It is fed into
+      // the 16 kHz AudioContext below, which auto-resamples any source rate.
+      this.mediaStream = opts.stream;
+      this._ownsStream = false;
+    } else {
+      // Request microphone access — this provider owns the resulting stream.
+      try {
+        this.mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            sampleRate: TARGET_SAMPLE_RATE,
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+          },
+        });
+        this._ownsStream = true;
+      } catch {
+        const error: ZuleError = { kind: 'transcription.permission-denied' };
+        this.emit('error', error);
+        return;
+      }
     }
 
     // Set up audio processing pipeline
@@ -401,6 +616,13 @@ export class WhisperProvider {
       this.processTimer = null;
     }
 
+    // VAD: release the live-sensitivity subscription on teardown
+    // (Requirements 7.4 partner — symmetric to the `start()` subscribe).
+    if (this.vadUnsubscribe !== null) {
+      this.vadUnsubscribe();
+      this.vadUnsubscribe = null;
+    }
+
     // Process any remaining buffered audio synchronously — we'll emit
     // the result after teardown. Since processing is async, we capture
     // any remaining buffer and process it later.
@@ -413,11 +635,15 @@ export class WhisperProvider {
     // We can't await here (matching WebSpeechProvider.stop() sync signature),
     // so we fire-and-forget the final segment.
     if (remainingBuffer && remainingBuffer.length > 0) {
-      void this.processAudioSegment(remainingBuffer).then((line) => {
-        if (line) {
-          this.emit('line', line);
-        }
-      });
+      // Gate the trailing flush too: "Run `scoreChunk` before each
+      // `whisper:transcribe` IPC" (Requirement 6.1).
+      if (this.vadGate(remainingBuffer)) {
+        void this.processAudioSegment(remainingBuffer).then((line) => {
+          if (line) {
+            this.emit('line', line);
+          }
+        });
+      }
     }
 
     return null;
@@ -467,6 +693,70 @@ export class WhisperProvider {
   // ---- Private audio processing ----
 
   /**
+   * VAD gate (Requirements 6.1, 6.2, 10.3): score `audio` and decide
+   * whether to forward it to the `whisper:transcribe` IPC. Returns
+   * `true` if the chunk should be transcribed, `false` if it should be
+   * silently dropped.
+   *
+   * Behaviour:
+   *   - Honours `VAD_DISABLE_FOR_TEST.enabled` — when true, every chunk
+   *     forwards (returns `true`) so the loopback integration tests
+   *     keep their assertions (Requirement 9.3 partner).
+   *   - Skips the IPC and emits exactly one `vad.skipped` telemetry
+   *     event with `pipeline: 'microphone'` per gated chunk
+   *     (Requirement 10.3, Property 21).
+   *   - On a thrown VAD or an out-of-range score the chunk is forwarded
+   *     anyway and a typed `transcription.vad-failed` error event is
+   *     emitted. Forwarding-on-failure preserves transcription
+   *     correctness if the VAD itself goes wrong (Property 15).
+   */
+  private vadGate(audio: Float32Array): boolean {
+    if (VAD_DISABLE_FOR_TEST.enabled) return true;
+
+    let result: ReturnType<typeof scoreChunk> | null = null;
+    try {
+      result = scoreChunk(audio, { speechThreshold: this.speechThreshold });
+    } catch (err) {
+      telemetry.emit({
+        kind: 'error',
+        name: 'transcription.vad-failed',
+        message: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error && err.stack ? err.stack : '',
+        breadcrumb: ['vad:scoreChunk:threw', 'pipeline:microphone'],
+      });
+      return true;
+    }
+
+    const score = result.score;
+    if (
+      typeof score !== 'number' ||
+      !Number.isFinite(score) ||
+      score < 0 ||
+      score > 1
+    ) {
+      telemetry.emit({
+        kind: 'error',
+        name: 'transcription.vad-failed',
+        message: `invalid VAD score ${String(score)}`,
+        stack: '',
+        breadcrumb: ['vad:scoreChunk:invalid-score', 'pipeline:microphone'],
+      });
+      return true;
+    }
+
+    if (!result.isSpeech) {
+      // Sub-threshold: skip the IPC. Do NOT emit any line/interim event,
+      // and crucially do NOT touch `audioContext`, `processorNode`,
+      // `mediaStream`, or `_isListening` — Property 16 requires those to
+      // remain `===` across consecutive silent chunks (Requirement 6.3).
+      telemetry.emit({ kind: 'vad.skipped', pipeline: 'microphone' });
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
    * Collect all buffered audio chunks into a single Float32Array and
    * clear the buffer.
    */
@@ -492,6 +782,13 @@ export class WhisperProvider {
     const audio = this.collectAudioBuffer();
     if (!audio || audio.length === 0) return;
 
+    // VAD gate (Requirement 6.1): score the chunk before any IPC and
+    // before emitting any UI signal. Sub-threshold chunks are dropped
+    // silently — no `interim`, no `line`, no `whisper:transcribe` —
+    // which keeps the dictation session state untouched (Requirement
+    // 6.3 / Property 16).
+    if (!this.vadGate(audio)) return;
+
     // Emit interim indicator while processing
     this.emit('interim', '...');
 
@@ -506,16 +803,31 @@ export class WhisperProvider {
    * if text was produced, or null if the segment was silence/empty.
    */
   private async processAudioSegment(audio: Float32Array): Promise<TranscriptionLine | null> {
-    if (!this.transcriber) return null;
-
     try {
-      const result = await this.transcriber(audio, {
-        language: this.language,
-        task: 'transcribe',
-        return_timestamps: true,
-      });
+      let text: string | undefined;
 
-      const text = result.text?.trim();
+      if (this.transcribeFn) {
+        // Capture-only mode: delegate inference out-of-process (main-process
+        // onnxruntime-node). Returns recognised text directly.
+        text = (await this.transcribeFn(audio, { language: this.language }))?.trim();
+      } else {
+        // In-renderer inference (legacy path).
+        if (!this.transcriber) return null;
+        const result = await this.transcriber(audio, {
+          language: this.language,
+          task: 'transcribe',
+          return_timestamps: true,
+        });
+        text = result.text?.trim();
+      }
+
+      if (!text) return null;
+
+      // Whisper emits non-speech annotation tokens during silence/noise, e.g.
+      // `[BLANK_AUDIO]`, `[ Silence ]`, `(music)`, `[Music]`, `[inaudible]`.
+      // Strip them; if nothing meaningful remains, drop the segment so the
+      // input field isn't spammed during silence.
+      text = stripNonSpeechTokens(text);
       if (!text) return null;
 
       this.lineCounter++;
@@ -577,10 +889,15 @@ export class WhisperProvider {
       this.audioContext = null;
     }
     if (this.mediaStream) {
-      for (const track of this.mediaStream.getTracks()) {
-        track.stop();
+      // Only stop tracks for streams we own. Externally-supplied streams
+      // (e.g. system-audio loopback) are torn down by their owner.
+      if (this._ownsStream) {
+        for (const track of this.mediaStream.getTracks()) {
+          track.stop();
+        }
       }
       this.mediaStream = null;
+      this._ownsStream = false;
     }
   }
 }

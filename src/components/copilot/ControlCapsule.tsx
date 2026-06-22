@@ -4,7 +4,7 @@
 // ============================================
 
 import type { RefCallback } from 'react';
-import { Square, ChevronDown, Eye } from 'lucide-react';
+import { Square, ChevronDown, Eye, Headphones } from 'lucide-react';
 
 /**
  * Chrome-style incognito glyph: fedora silhouette + round glasses.
@@ -64,6 +64,11 @@ interface ControlCapsuleProps {
   /** Optional: callback to fully hide the overlay window from the screen.
    *  The user brings it back via the global shortcut (Ctrl+Shift+H). */
   onHideWindow?: () => void;
+  /** Optional: whether system-audio (loopback) transcription is active. */
+  isSystemAudioActive?: boolean;
+  /** Optional: toggle system-audio capture. When omitted (e.g. unsupported
+   *  environment), the headphones button is hidden. */
+  onToggleSystemAudio?: () => void;
 }
 
 export function ControlCapsule({
@@ -75,6 +80,8 @@ export function ControlCapsule({
   onToggleMode,
   isStealth,
   onToggleStealth,
+  isSystemAudioActive,
+  onToggleSystemAudio,
 }: ControlCapsuleProps) {
   // Use overlay mode toggle if provided, otherwise fall back to hide/show toggle
   const handleChevronClick = onToggleMode ?? onToggleHidden;
@@ -119,6 +126,30 @@ export function ControlCapsule({
           <span className="stealth-icon stealth-icon-eyeoff" aria-hidden="true">
             <IncognitoIcon size={14} strokeWidth={1.85} />
           </span>
+        </button>
+      )}
+
+      {onToggleSystemAudio && (
+        <button
+          type="button"
+          className={`capsule-sysaudio-toggle ${isSystemAudioActive ? 'is-active' : ''}`}
+          onClick={onToggleSystemAudio}
+          aria-label={
+            isSystemAudioActive
+              ? 'Listening to system audio — click to stop'
+              : 'Hear the other party — transcribe system audio (works with headphones)'
+          }
+          aria-pressed={isSystemAudioActive}
+          title={
+            isSystemAudioActive
+              ? "Listening to system audio — Zule is hearing the other party's voice. Click to stop."
+              : "Hear the other party\nTranscribes your computer's audio (the other person's voice), so Zule can answer their questions — even with headphones on. Click to start."
+          }
+        >
+          <Headphones size={14} strokeWidth={2} />
+          {isSystemAudioActive && (
+            <span className="sysaudio-listening-dot" aria-hidden="true" />
+          )}
         </button>
       )}
 

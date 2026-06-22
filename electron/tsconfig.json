@@ -5,12 +5,21 @@
     "moduleResolution": "bundler",
     "lib": ["ES2022", "DOM"],
     "outDir": "../dist-electron",
-    "rootDir": ".",
+    "rootDir": "..",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["*.ts"]
+  // Pulls in only the canonical Vector_Index IPC payload types from
+  // `src/types/vectorIndex.ts` so the preload bridge and main-process
+  // services can share one shape. We deliberately avoid a glob over
+  // `../src/types/` because other files in that folder transitively import
+  // renderer-only modules (e.g. `src/types/sync.ts` -> `src/brain/...`)
+  // whose DOM-type usage conflicts with the electron lib config.
+  // `rootDir: ".."` is required so the cross-folder file is permitted; the
+  // electron build is produced by Vite/Rollup, not tsc, so the wider
+  // rootDir has no effect on emit.
+  "include": ["*.ts", "../src/types/vectorIndex.ts"]
 }

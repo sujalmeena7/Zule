@@ -39,9 +39,10 @@ export default defineConfig({
   plugins: [react(), copyVendorPlugin()],
   resolve: {
     alias: {
-      // @xenova/transformers is used in vectorStore.ts but only runs in Electron.
-      // For the web/landing page build, stub it out so the build doesn't fail.
-      '@xenova/transformers': path.resolve(__dirname, 'src/brain/transformers-stub.ts'),
+      // The ML stack (@huggingface/transformers + onnxruntime-web) only runs in
+      // the Electron renderer. For the web/landing-page build, stub it out so
+      // the ~100MB ONNX graph is never pulled into the bundle.
+      '@huggingface/transformers': path.resolve(__dirname, 'src/brain/transformers-stub.ts'),
     },
   },
   build: {

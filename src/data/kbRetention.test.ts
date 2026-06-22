@@ -366,8 +366,14 @@ describe('applyKBRetention — Property 19: retention cap and eviction order', (
 // (Requirement 6.7 wiring).
 
 const pipelineMock = vi.hoisted(() => vi.fn());
-vi.mock('@xenova/transformers', () => ({
-  env: { allowLocalModels: false, useBrowserCache: true },
+vi.mock('@huggingface/transformers', () => ({
+  env: {
+    allowLocalModels: false,
+    allowRemoteModels: true,
+    useBrowserCache: true,
+    localModelPath: '',
+    backends: { onnx: { wasm: {} } },
+  },
   pipeline: pipelineMock,
 }));
 

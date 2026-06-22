@@ -23,7 +23,7 @@
 // Expanded_Mode: 480×320, shows control bar + chips + input
 // Maximized_Mode: 480×680, shows scrollable response area + chips + input
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { useElectronBridge, isElectron } from '../hooks/useElectronBridge';
 
 export type OverlayMode = 'compact' | 'expanded' | 'maximized';
@@ -86,6 +86,7 @@ export interface UseOverlayModeResult {
 export function useOverlayMode(initialMode: OverlayMode = 'compact'): UseOverlayModeResult {
   const [mode, setModeState] = useState<OverlayMode>(initialMode);
   const [modeAnnouncement, setModeAnnouncement] = useState('');
+  const shrinkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { api } = useElectronBridge();
 
   const setMode = useCallback(
@@ -121,7 +122,11 @@ export function useOverlayMode(initialMode: OverlayMode = 'compact'): UseOverlay
         // Shrinking: animate card out, then resize.
         setModeAnnouncement(announcementFor(newMode));
         if (electron) {
-          setTimeout(() => api.resizeOverlay(width, height), CARD_TRANSITION_MS);
+          if (shrinkTimerRef.current) clearTimeout(shrinkTimerRef.current);
+          shrinkTimerRef.current = setTimeout(() => {
+            api.resizeOverlay(width, height);
+            shrinkTimerRef.current = null;
+          }, CARD_TRANSITION_MS);
         }
         return newMode;
       });

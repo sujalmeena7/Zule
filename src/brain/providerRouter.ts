@@ -37,6 +37,15 @@ import { isRetryableError } from './providers/http';
  */
 const LOCAL_PROVIDER_NAMES = new Set<string>(['ollama', 'simulation']);
 
+/**
+ * How long to skip a provider after it returns HTTP 429 (rate-limited /
+ * quota-exceeded). Without this, a provider with an exhausted quota is retried
+ * on every single request — wasting a full round-trip and adding latency before
+ * failing over to the next provider every time. After a 429 we skip it for this
+ * window so subsequent requests go straight to the next provider.
+ */
+const RATE_LIMIT_COOLDOWN_MS = 5 * 60 * 1000;
+
 // --- Error types ---------------------------------------------------------
 
 /**
@@ -93,6 +102,24 @@ export class AI_Provider_Router {
   private priority: string[] = [];
   private vaultLocked = true; // Default locked — safe default per Requirement 15.2
   private offline = false; // Tracks navigator.onLine — Requirement 20.1
+  // Provider name → epoch ms until which it is skipped after a 429.
+  private rateLimitedUntil = new Map<string, number>();
+
+  /** True if `name` is currently in a post-429 cooldown window. */
+  private isRateLimited(name: string): boolean {
+    const until = this.rateLimitedUntil.get(name);
+    if (until === undefined) return false;
+    if (Date.now() >= until) {
+      this.rateLimitedUntil.delete(name);
+      return false;
+    }
+    return true;
+  }
+
+  /** Record a 429 so this provider is skipped for the cooldown window. */
+  private markRateLimited(name: string): void {
+    this.rateLimitedUntil.set(name, Date.now() + RATE_LIMIT_COOLDOWN_MS);
+  }
 
   // --- Registration & configuration --------------------------------------
 
@@ -201,6 +228,13 @@ export class AI_Provider_Router {
           lastError = new VaultLockedError(adapter.name);
           continue;
         }
+        // Skip a provider that recently returned 429 (quota/rate limited) so we
+        // don't waste a round-trip on it every request during the cooldown.
+        if (this.isRateLimited(adapter.name)) {
+          console.log(`[Router] Skipping ${adapter.name} (rate-limited cooldown)`);
+          lastError = new Error(`${adapter.name} is rate-limited (cooldown)`);
+          continue;
+        }
       }
 
       try {
@@ -215,6 +249,12 @@ export class AI_Provider_Router {
         // If the signal was aborted, do NOT failover — surface the abort.
         if (opts.signal?.aborted) {
           throw makeAbortError();
+        }
+
+        // 429 → start a cooldown so we skip this provider on later requests.
+        if (is429Error(err)) {
+          this.markRateLimited(adapter.name);
+          console.log(`[Router] ${adapter.name} rate-limited (429) — cooling down`);
         }
 
         // Only failover on retryable errors (transport / 5xx / timeout)
@@ -278,6 +318,10 @@ export class AI_Provider_Router {
           lastError = new VaultLockedError(adapter.name);
           continue;
         }
+        if (this.isRateLimited(adapter.name)) {
+          lastError = new Error(`${adapter.name} is rate-limited (cooldown)`);
+          continue;
+        }
       }
 
       try {
@@ -288,6 +332,10 @@ export class AI_Provider_Router {
 
         if (opts.signal?.aborted) {
           throw makeAbortError();
+        }
+
+        if (is429Error(err)) {
+          this.markRateLimited(adapter.name);
         }
 
         if (isFailoverError(err)) {
@@ -351,6 +399,20 @@ export class AI_Provider_Router {
  * Uses `isRetryableError` from `http.ts` plus timeout (AbortError from
  * per-request timeout, NOT from the caller's signal).
  */
+/**
+ * True if the error represents an HTTP 429 (rate-limited / quota exceeded).
+ * Adapters attach a numeric `.status`; we also sniff the message as a fallback
+ * (e.g. "GeminiAdapter: HTTP 429").
+ */
+function is429Error(err: unknown): boolean {
+  if (err && typeof err === 'object') {
+    const status = (err as { status?: unknown }).status;
+    if (status === 429) return true;
+  }
+  if (err instanceof Error && /\b429\b/.test(err.message)) return true;
+  return false;
+}
+
 function isFailoverError(err: unknown): boolean {
   // Transport errors and 5xx are retryable → failover
   if (isRetryableError(err)) return true;

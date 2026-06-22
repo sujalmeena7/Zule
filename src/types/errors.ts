@@ -20,6 +20,11 @@ export type ZuleError =
   | { kind: 'transcription.no-speech' }
   | { kind: 'transcription.audio-capture' }
   | { kind: 'transcription.network'; recoverable: true }
+  | {
+      kind: 'transcription.vad-failed';
+      pipeline: 'loopback' | 'microphone';
+      cause: 'threw' | 'invalid-score';
+    }
 
   // Screen_Capture_Module
   | { kind: 'screen.permission-denied' }
@@ -31,6 +36,16 @@ export type ZuleError =
 
   // Vector_Index (Transformers.js embedding pipeline)
   | { kind: 'vector-index.init-failed'; attempts: number }
+  | { kind: 'vector-index.query-invalid'; reason: 'k-non-positive' | 'dim-mismatch' }
+  | {
+      kind: 'vector-index.snapshot-corrupt';
+      reason:
+        | 'truncated'
+        | 'manifest-missing'
+        | 'version-mismatch'
+        | 'dim-mismatch'
+        | 'modelId-mismatch';
+    }
 
   // AI_Provider_Router and Provider_Adapters
   | { kind: 'provider.network'; providerId: string }

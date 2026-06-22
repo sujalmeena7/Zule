@@ -6,8 +6,11 @@ import {
   Play, Clock, Sparkles, Mic, Code, Briefcase, Target,
   ShoppingCart, Trash2, BarChart3, FileText, ChevronRight, Wand2
 } from 'lucide-react';
+import { useMemo } from 'react';
 import { MODE_CONFIGS, type CopilotMode } from '../brain/modePrompts';
 import { formatDuration, formatRelativeTime } from '../utils/formatters';
+import { useAutoUpdate } from '../hooks/useAutoUpdate';
+import { UpdateBanner } from './UpdateBanner';
 
 import './Dashboard.css';
 
@@ -25,16 +28,39 @@ export function Dashboard() {
   const { state, actions } = useZule();
   const { meetings, customModes } = state;
   const { startCopilot, viewMeeting, deleteMeeting } = actions;
-  
-  const totalMeetings = meetings.length;
-  const totalTime = meetings.reduce((acc, m) => acc + m.duration, 0);
-  const totalSuggestions = meetings.reduce((acc, m) => acc + m.aiSuggestionCount, 0);
-  const avgConfidence = totalMeetings > 0
-    ? Math.round(meetings.reduce((acc, m) => acc + m.avgConfidence, 0) / totalMeetings)
-    : 0;
+
+  const { state: updateState, dismissed, download, cancel, install, defer, dismiss } = useAutoUpdate();
+
+  const stats = useMemo(() => {
+    let totalTime = 0, totalSuggestions = 0, totalConfidence = 0;
+    for (const m of meetings) {
+      totalTime += m.duration;
+      totalSuggestions += m.aiSuggestionCount;
+      totalConfidence += m.avgConfidence;
+    }
+    return {
+      totalMeetings: meetings.length,
+      totalTime,
+      totalSuggestions,
+      avgConfidence: meetings.length > 0 ? Math.round(totalConfidence / meetings.length) : 0,
+    };
+  }, [meetings]);
+
+  const recentMeetings = useMemo(() => [...meetings].reverse(), [meetings]);
 
   return (
     <div className="dashboard">
+      {/* Update Banner — renders in normal flow, pushes content down (Req 4.10) */}
+      <UpdateBanner
+        state={updateState}
+        dismissed={dismissed}
+        onDownload={download}
+        onCancel={cancel}
+        onInstall={install}
+        onDefer={defer}
+        onDismiss={dismiss}
+      />
+
       {/* Hero Section */}
       <section className="dash-hero">
         <div className="hero-content">
@@ -66,7 +92,7 @@ export function Dashboard() {
               <Briefcase size={22} />
             </div>
             <div className="stat-content">
-              <span className="stat-value">{totalMeetings}</span>
+              <span className="stat-value">{stats.totalMeetings}</span>
               <span className="stat-label">Total Sessions</span>
             </div>
           </div>
@@ -75,7 +101,7 @@ export function Dashboard() {
               <Clock size={22} />
             </div>
             <div className="stat-content">
-              <span className="stat-value">{formatDuration(totalTime)}</span>
+              <span className="stat-value">{formatDuration(stats.totalTime)}</span>
               <span className="stat-label">Time Tracked</span>
             </div>
           </div>
@@ -84,7 +110,7 @@ export function Dashboard() {
               <Sparkles size={22} />
             </div>
             <div className="stat-content">
-              <span className="stat-value">{totalSuggestions}</span>
+              <span className="stat-value">{stats.totalSuggestions}</span>
               <span className="stat-label">AI Suggestions</span>
             </div>
           </div>
@@ -93,7 +119,7 @@ export function Dashboard() {
               <BarChart3 size={22} />
             </div>
             <div className="stat-content">
-              <span className="stat-value">{avgConfidence}</span>
+              <span className="stat-value">{stats.avgConfidence}</span>
               <span className="stat-label">Avg Confidence</span>
             </div>
           </div>
@@ -116,7 +142,7 @@ export function Dashboard() {
             </div>
           ) : (
             <div className="meeting-list">
-              {meetings.slice().reverse().map(meeting => (
+              {recentMeetings.map(meeting => (
                 <div key={meeting.id} className="meeting-card" onClick={() => viewMeeting(meeting)}>
                   <div className="meeting-info">
                     <span className="meeting-title">{meeting.title}</span>

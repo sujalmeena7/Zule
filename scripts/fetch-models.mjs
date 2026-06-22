@@ -37,25 +37,50 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const projectRoot = resolve(__dirname, '..');
 
-// The model id and the exact set of files Transformers.js loads for a
-// quantized feature-extraction pipeline. (The pipeline in vectorStore.ts is
-// created with the default `quantized: true`, so it fetches
-// `onnx/model_quantized.onnx` — not the full-precision `onnx/model.onnx`.)
-const MODEL_ID = 'Xenova/all-MiniLM-L6-v2';
-const HF_BASE = `https://huggingface.co/${MODEL_ID}/resolve/main`;
-const DEST_ROOT = join(projectRoot, 'public', 'vendor', 'models', MODEL_ID);
-
-const FILES = [
-  'config.json',
-  'tokenizer.json',
-  'tokenizer_config.json',
-  'onnx/model_quantized.onnx',
+// Each model lists the exact set of files Transformers.js loads. The renderer
+// runs WebGPU (fp32) with a single-threaded WASM fallback (q8 == the
+// `_quantized` onnx variant), so models that run on both devices vendor BOTH
+// the full-precision and the quantized ONNX files for full offline support.
+const MODELS = [
+  {
+    // Embeddings (Vector_Index). vectorStore.ts loads dtype:'q8' on both
+    // devices, so only the quantized ONNX is needed.
+    id: 'Xenova/all-MiniLM-L6-v2',
+    files: [
+      'config.json',
+      'tokenizer.json',
+      'tokenizer_config.json',
+      'onnx/model_quantized.onnx',
+    ],
+  },
+  {
+    // Local Whisper (system-audio transcription). Inference runs natively in
+    // the main process (onnxruntime-node) with dtype:'q8' → the `_quantized`
+    // ONNX files. We also vendor the fp32 pair so the in-renderer fallback path
+    // (if ever used) has its weights too. base.en is more accurate than tiny.en.
+    id: 'Xenova/whisper-base.en',
+    files: [
+      'config.json',
+      'generation_config.json',
+      'preprocessor_config.json',
+      'tokenizer.json',
+      'tokenizer_config.json',
+      // q8 / quantized (used by onnxruntime-node):
+      'onnx/encoder_model_quantized.onnx',
+      'onnx/decoder_model_merged_quantized.onnx',
+      // fp32 (renderer fallback):
+      'onnx/encoder_model.onnx',
+      'onnx/decoder_model_merged.onnx',
+    ],
+  },
 ];
 
 /** Download one file unless an up-to-date copy already exists. */
-async function fetchOne(relPath, { silent }) {
-  const url = `${HF_BASE}/${relPath}`;
-  const dest = join(DEST_ROOT, relPath);
+async function fetchOne(modelId, relPath, { silent }) {
+  const hfBase = `https://huggingface.co/${modelId}/resolve/main`;
+  const destRoot = join(projectRoot, 'public', 'vendor', 'models', modelId);
+  const url = `${hfBase}/${relPath}`;
+  const dest = join(destRoot, relPath);
 
   if (existsSync(dest) && statSync(dest).size > 0) {
     return false; // already present — idempotent skip
@@ -83,17 +108,20 @@ async function fetchOne(relPath, { silent }) {
 /** Public entry point — also callable from the Vite plugin. */
 export async function fetchModels({ silent = false } = {}) {
   let downloaded = 0;
-  for (const relPath of FILES) {
-    try {
-      if (await fetchOne(relPath, { silent })) downloaded += 1;
-    } catch (err) {
-      // Non-fatal: the renderer falls back to the remote HF fetch (the CSP
-      // entries are retained for exactly this case). We log and continue so
-      // a transient network failure during dev start doesn't block the app.
-      console.warn(
-        `[fetch-models] ${err instanceof Error ? err.message : String(err)} ` +
-          `(runtime will fall back to remote HuggingFace fetch)`,
-      );
+  for (const model of MODELS) {
+    for (const relPath of model.files) {
+      try {
+        if (await fetchOne(model.id, relPath, { silent })) downloaded += 1;
+      } catch (err) {
+        // Non-fatal: the renderer falls back to the remote HF fetch (the CSP
+        // entries are retained for exactly this case). We log and continue so
+        // a transient network failure during dev start doesn't block the app.
+        console.warn(
+          `[fetch-models] ${model.id}/${relPath}: ` +
+            `${err instanceof Error ? err.message : String(err)} ` +
+            `(runtime will fall back to remote HuggingFace fetch)`,
+        );
+      }
     }
   }
   if (!silent) {

@@ -72,52 +72,54 @@ export function useFocusTrap(options: FocusTrapOptions): void {
   onEscapeRef.current = onEscape;
 
   useEffect(() => {
-    if (!enabled) {
-      // When disabled, trap is released immediately — no listener attached
-      return;
-    }
+    if (!enabled) return;
 
-    const container = containerRef.current;
-    if (!container) return;
+    let rafId: number;
+    let cleanupFn: (() => void) | null = null;
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-      // Handle Escape key
-      if (event.key === 'Escape') {
-        onEscapeRef.current?.();
+    const tryAttach = () => {
+      const container = containerRef.current;
+      if (!container) {
+        rafId = requestAnimationFrame(tryAttach);
         return;
       }
 
-      // Only trap Tab/Shift+Tab
-      if (event.key !== 'Tab') return;
-
-      const focusableElements = getFocusableElements(container);
-      if (focusableElements.length === 0) return;
-
-      const firstElement = focusableElements[0];
-      const lastElement = focusableElements[focusableElements.length - 1];
-      const activeElement = document.activeElement as HTMLElement | null;
-
-      if (event.shiftKey) {
-        // Shift+Tab: wrap from first back to last
-        if (activeElement === firstElement || !container.contains(activeElement)) {
-          event.preventDefault();
-          lastElement.focus();
+      const handleKeyDown = (event: KeyboardEvent) => {
+        if (event.key === 'Escape') {
+          onEscapeRef.current?.();
+          return;
         }
-      } else {
-        // Tab: wrap from last back to first
-        if (activeElement === lastElement || !container.contains(activeElement)) {
-          event.preventDefault();
-          firstElement.focus();
+        if (event.key !== 'Tab') return;
+
+        const focusableElements = getFocusableElements(container);
+        if (focusableElements.length === 0) return;
+
+        const firstElement = focusableElements[0];
+        const lastElement = focusableElements[focusableElements.length - 1];
+        const activeElement = document.activeElement as HTMLElement | null;
+
+        if (event.shiftKey) {
+          if (activeElement === firstElement || !container.contains(activeElement)) {
+            event.preventDefault();
+            lastElement.focus();
+          }
+        } else {
+          if (activeElement === lastElement || !container.contains(activeElement)) {
+            event.preventDefault();
+            firstElement.focus();
+          }
         }
-      }
+      };
+
+      container.addEventListener('keydown', handleKeyDown);
+      cleanupFn = () => container.removeEventListener('keydown', handleKeyDown);
     };
 
-    // Attach keydown listener to the container to trap focus
-    container.addEventListener('keydown', handleKeyDown);
+    tryAttach();
 
     return () => {
-      // Cleanup: release trap immediately when disabled or unmounted
-      container.removeEventListener('keydown', handleKeyDown);
+      cancelAnimationFrame(rafId);
+      cleanupFn?.();
     };
   }, [enabled, containerRef]);
 }

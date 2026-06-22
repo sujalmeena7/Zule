@@ -10,7 +10,15 @@
 //   - OverlayManager class with create() / destroy() fully implemented
 //   - Stub methods for show/hide/toggle, drag/snap, resize, nudge, shortcuts (tasks 3.2–3.9)
 
-import { BrowserWindow, screen, app, globalShortcut } from 'electron';
+// `electron`'s API must be obtained via CommonJS `require` from this
+// ESM-bundled main process — ESM interop exposes neither named nor default
+// exports for Electron. See electron/main.ts for the full explanation. Types
+// are imported by name (erased at compile time).
+import { createRequire } from 'node:module';
+import type { BrowserWindow as BrowserWindowType } from 'electron';
+const require = createRequire(import.meta.url);
+const { BrowserWindow, screen, app, globalShortcut } =
+  require('electron') as typeof import('electron');
 import path from 'node:path';
 import { PositionStore, PersistedBounds } from './positionStore';
 import {
@@ -53,8 +61,8 @@ export interface OverlayState {
 export class OverlayManager {
   private static linuxNoticeShown = false;
 
-  private window: BrowserWindow | null = null;
-  private mainWindow: BrowserWindow | null = null;
+  private window: BrowserWindowType | null = null;
+  private mainWindow: BrowserWindowType | null = null;
   private registeredShortcuts: string[] = [];
   private store: PositionStore;
   private config: OverlayManagerConfig;
@@ -63,6 +71,7 @@ export class OverlayManager {
   // Bound handlers for screen event cleanup
   private handleDisplayChange: () => void;
   private handleDisplayRemoved: (event: Electron.Event, oldDisplay: Electron.Display) => void;
+  private handleDisplayMetricsChanged: () => void;
 
   constructor(config: OverlayManagerConfig) {
     this.config = config;
@@ -77,6 +86,7 @@ export class OverlayManager {
     // Bind handlers so they can be removed in destroy()
     this.handleDisplayChange = () => this.onDisplayChange();
     this.handleDisplayRemoved = (_event, oldDisplay) => this.onDisplayRemoved(oldDisplay);
+    this.handleDisplayMetricsChanged = () => this.onDisplayMetricsChanged();
   }
 
   // ── Lifecycle: create ────────────────────────────────────────────────────────
@@ -172,10 +182,13 @@ export class OverlayManager {
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       console.warn(`[OverlayManager] setContentProtection failed: ${message}`);
-      this.mainWindow?.webContents.send('overlay-error', {
-        code: 'CONTENT_PROTECTION_FAILED',
-        message: `Could not enable screen-capture invisibility: ${message}`,
-      });
+      const mainWin = this.mainWindow;
+      if (mainWin && !mainWin.isDestroyed()) {
+        mainWin.webContents.send('overlay-error', {
+          code: 'CONTENT_PROTECTION_FAILED',
+          message: `Could not enable screen-capture invisibility: ${message}`,
+        });
+      }
     }
 
     // Click-through is DISABLED. The overlay window receives all mouse events
@@ -227,23 +240,38 @@ export class OverlayManager {
     // ── Renderer crash handling ───────────────────────────────────────────────
 
     this.window.webContents.on('render-process-gone', (_event, details) => {
-      // Leave window open for diagnostics — do NOT close it (Req 10.7)
-      // Emit error to main window so the user is informed
-      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-        this.mainWindow.webContents.send('overlay-error', {
+      console.warn(
+        `[OverlayManager] Renderer crashed: reason=${details.reason} ` +
+          `exitCode=${details.exitCode}`,
+      );
+
+      // Notify main window so dashboard can offer recovery options
+      const mainWin = this.mainWindow;
+      if (mainWin && !mainWin.isDestroyed()) {
+        mainWin.webContents.send('overlay-error', {
           code: 'RENDERER_CRASHED',
           message: `Overlay renderer process terminated: ${details.reason}`,
         });
       }
+
+      // Auto-recreate overlay after a short delay so the user isn't left
+      // staring at a blank window with a hidden dashboard.
+      console.log('[OverlayManager] Auto-restarting overlay after renderer crash...');
+      setTimeout(() => {
+        this.destroy();
+        this.create();
+        this.show();
+      }, 1000);
     });
 
     // ── Display change listeners ──────────────────────────────────────────────
-    // The overlay is fixed at the top-center, so on display changes we
-    // re-center it on the (new) primary display.
+    // Reposition overlay only when its actual display changes (added/removed).
+    // display-metrics-changed fires on taskbar toggles, DPI changes, etc. —
+    // we only re-apply always-on-top on those events, not reposition.
 
     screen.on('display-added', this.handleDisplayChange);
     screen.on('display-removed', this.handleDisplayRemoved);
-    screen.on('display-metrics-changed', this.handleDisplayChange);
+    screen.on('display-metrics-changed', this.handleDisplayMetricsChanged);
   }
 
   // ── Lifecycle: destroy ───────────────────────────────────────────────────────
@@ -255,7 +283,7 @@ export class OverlayManager {
     // Remove screen event listeners
     screen.removeListener('display-added', this.handleDisplayChange);
     screen.removeListener('display-removed', this.handleDisplayRemoved);
-    screen.removeListener('display-metrics-changed', this.handleDisplayChange);
+    screen.removeListener('display-metrics-changed', this.handleDisplayMetricsChanged);
 
     if (this.window) {
       this.window.close();
@@ -420,9 +448,9 @@ export class OverlayManager {
     this.persistBounds();
   }
 
-  /** Set content protection state and persist. */
-  setContentProtection(enabled: boolean): void {
-    if (!this.window) return;
+  /** Set content protection state and persist. Returns false on failure. */
+  setContentProtection(enabled: boolean): boolean {
+    if (!this.window) return false;
 
     this.state.contentProtection = enabled;
     try {
@@ -430,11 +458,14 @@ export class OverlayManager {
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       console.warn(`[OverlayManager] setContentProtection(${enabled}) failed: ${message}`);
-      this.mainWindow?.webContents.send('overlay-error', {
-        code: 'CONTENT_PROTECTION_FAILED',
-        message: `Could not toggle screen-capture invisibility: ${message}`,
-      });
-      return;
+      const mainWin = this.mainWindow;
+      if (mainWin && !mainWin.isDestroyed()) {
+        mainWin.webContents.send('overlay-error', {
+          code: 'CONTENT_PROTECTION_FAILED',
+          message: `Could not toggle screen-capture invisibility: ${message}`,
+        });
+      }
+      return false;
     }
 
     // Surface a one-time non-blocking notice on Linux where content protection is a no-op
@@ -447,12 +478,13 @@ export class OverlayManager {
     }
 
     this.persistBounds();
+    return true;
   }
 
   // ── Shortcuts (task 3.7) ──────────────────────────────────────────────────────
 
   /** Register all global shortcuts. */
-  registerShortcuts(mainWindow: BrowserWindow): void {
+  registerShortcuts(mainWindow: BrowserWindowType): void {
     this.mainWindow = mainWindow;
 
     const isMac = process.platform === 'darwin';
@@ -548,11 +580,13 @@ export class OverlayManager {
 
   /** Forward shortcut event to both windows via IPC. */
   private forwardShortcut(shortcutId: string): void {
-    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      this.mainWindow.webContents.send('global-shortcut', shortcutId);
+    const mainWin = this.mainWindow;
+    if (mainWin && !mainWin.isDestroyed()) {
+      mainWin.webContents.send('global-shortcut', shortcutId);
     }
-    if (this.window && !this.window.isDestroyed()) {
-      this.window.webContents.send('global-shortcut', shortcutId);
+    const overlayWin = this.window;
+    if (overlayWin && !overlayWin.isDestroyed()) {
+      overlayWin.webContents.send('global-shortcut', shortcutId);
     }
   }
 
@@ -564,7 +598,7 @@ export class OverlayManager {
   }
 
   /** Get the underlying BrowserWindow reference (for IPC wiring). */
-  getWindow(): BrowserWindow | null {
+  getWindow(): BrowserWindowType | null {
     return this.window;
   }
 
@@ -572,7 +606,7 @@ export class OverlayManager {
    * Set or update the main window reference for error forwarding.
    * Also listens for the main window's 'closed' event to clean up the overlay.
    */
-  setMainWindowRef(mainWindow: BrowserWindow | null): void {
+  setMainWindowRef(mainWindow: BrowserWindowType | null): void {
     this.mainWindow = mainWindow;
 
     // Clean up overlay reference when main window closes
@@ -606,39 +640,50 @@ export class OverlayManager {
     }
 
     // Re-apply content protection state
-    this.window.setContentProtection(this.state.contentProtection);
+    try {
+      this.window.setContentProtection(this.state.contentProtection);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[OverlayManager] reapplyPlatformState: setContentProtection failed: ${message}`);
+    }
   }
 
-  /** Handle display-added and display-metrics-changed events. Re-center on primary display. */
+  /** Handle display-added and display-removed events. Only recenter when the
+   *  overlay's actual display was affected. Otherwise just re-apply platform state. */
   private onDisplayChange(): void {
     if (!this.window) return;
-
-    // Re-apply always-on-top at screen-saver level (must happen within 100ms of event)
     this.window.setAlwaysOnTop(true, 'screen-saver');
-
-    // Re-center on the primary display's top-center (overlay is fixed)
-    const primaryDisplay = screen.getPrimaryDisplay();
-    const workArea = primaryDisplay.workArea;
-    const bounds = this.window.getBounds();
-    const x = workArea.x + Math.round((workArea.width - bounds.width) / 2);
-    const y = workArea.y + 20;
-    this.window.setBounds({ x, y, width: bounds.width, height: bounds.height });
   }
 
-  /** Handle display-removed event. Re-center on the (new) primary display. */
-  private onDisplayRemoved(_oldDisplay: Electron.Display): void {
+  /** Handle display-metrics-changed (taskbar toggle, DPI change, workspace switch).
+   *  Only re-apply always-on-top; do NOT reposition the overlay. */
+  private onDisplayMetricsChanged(): void {
+    if (!this.window) return;
+    this.window.setAlwaysOnTop(true, 'screen-saver');
+  }
+
+  /** Handle display-removed event. Recenter only when the overlay's display was
+   *  the one removed (the window is now orphaned on a nonexistent display).
+   *  Otherwise just re-apply always-on-top. */
+  private onDisplayRemoved(oldDisplay: Electron.Display): void {
     if (!this.window) return;
 
-    // Re-apply always-on-top at screen-saver level (must happen within 100ms of event)
     this.window.setAlwaysOnTop(true, 'screen-saver');
 
-    // Re-center on the primary display's top-center
-    const primaryDisplay = screen.getPrimaryDisplay();
-    const workArea = primaryDisplay.workArea;
     const bounds = this.window.getBounds();
-    const x = workArea.x + Math.round((workArea.width - bounds.width) / 2);
-    const y = workArea.y + 20;
-    this.window.setBounds({ x, y, width: bounds.width, height: bounds.height });
+    const currentDisplay = screen.getDisplayMatching(bounds);
+    const oldId = String(oldDisplay.id);
+    const currentId = String(currentDisplay.id);
+
+    // Only recenter if the overlay was on the display that was removed
+    if (oldId === currentId) {
+      const primaryDisplay = screen.getPrimaryDisplay();
+      const workArea = primaryDisplay.workArea;
+      const x = workArea.x + Math.round((workArea.width - bounds.width) / 2);
+      const y = Math.max(workArea.y, workArea.y + Math.round((workArea.height - bounds.height) / 2));
+      this.window.setBounds({ x, y, width: bounds.width, height: bounds.height });
+      this.persistBounds();
+    }
   }
 
   /** Persist current bounds to store. */
@@ -663,21 +708,26 @@ export class OverlayManager {
   }
 
   /**
-   * Restore bounds from store for current display, or return defaults.
-   * Returns a Rectangle for the BrowserWindow constructor.
-   *
-   * The overlay is FIXED at the top-center of the primary display.
-   * No drag or position persistence — it always opens centered.
+   * Restore bounds from store for current primary display, or return defaults
+   * if no persisted position exists. Reads from PositionStore so user-positioned
+   * overlay windows reopen at their last known location.
    */
   private restoreBounds(): Electron.Rectangle {
     const primaryDisplay = screen.getPrimaryDisplay();
-    const workArea = primaryDisplay.workArea;
+    const primaryId = String(primaryDisplay.id);
+    const saved = this.store.get(primaryId);
 
-    // Default size — compact mode dimensions
+    if (saved) {
+      const clamped = clampToWorkArea(
+        { x: saved.x, y: saved.y, width: saved.width, height: saved.height },
+        primaryDisplay.workArea,
+      );
+      return clamped;
+    }
+
+    const workArea = primaryDisplay.workArea;
     const width = MIN_WIDTH;
     const height = MIN_HEIGHT;
-
-    // Top-center of the primary display, with a small offset from the top
     const x = workArea.x + Math.round((workArea.width - width) / 2);
     const y = workArea.y + 20;
 

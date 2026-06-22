@@ -1,7 +1,7 @@
 {
   "name": "zule",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -20,8 +20,10 @@
   },
   "dependencies": {
     "@huggingface/transformers": "^3.8.1",
+    "electron-updater": "^6.8.9",
     "firebase": "^12.14.0",
     "framer-motion": "^12.40.0",
+    "hnswlib-node": "^3.0.0",
     "lucide-react": "^1.17.0",
     "mammoth": "^1.12.0",
     "pdfjs-dist": "^6.0.227",
@@ -30,6 +32,7 @@
     "react-hot-toast": "^2.6.0",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
+    "semver": "^7.8.5",
     "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
@@ -41,6 +44,7 @@
     "@types/node": "^24.12.3",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "@types/semver": "^7.7.1",
     "@vitejs/plugin-react": "^6.0.1",
     "@vitest/coverage-v8": "3.2.4",
     "electron": "^42.4.0",

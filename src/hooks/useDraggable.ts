@@ -28,6 +28,8 @@ export function useDraggable(initialPosition?: Position): DraggableHook {
   const handleRef = useRef<HTMLDivElement | null>(null);
   const offsetRef = useRef<Position>({ x: 0, y: 0 });
 
+  const isDraggingRef = useRef(false);
+
   const onMouseMove = useCallback((e: MouseEvent) => {
     const newX = e.clientX - offsetRef.current.x;
     const newY = e.clientY - offsetRef.current.y;
@@ -49,6 +51,7 @@ export function useDraggable(initialPosition?: Position): DraggableHook {
 
   const onMouseUp = useCallback(() => {
     setIsDragging(false);
+    isDraggingRef.current = false;
     document.removeEventListener('mousemove', onMouseMove);
     document.removeEventListener('mouseup', onMouseUp);
     document.body.style.userSelect = '';
@@ -61,6 +64,7 @@ export function useDraggable(initialPosition?: Position): DraggableHook {
 
     e.preventDefault();
     setIsDragging(true);
+    isDraggingRef.current = true;
     const el = dragRef.current;
     if (el) {
       const rect = el.getBoundingClientRect();
@@ -79,9 +83,19 @@ export function useDraggable(initialPosition?: Position): DraggableHook {
     const handle = handleRef.current;
     if (handle) {
       handle.addEventListener('mousedown', onMouseDown);
-      return () => handle.removeEventListener('mousedown', onMouseDown);
+      return () => {
+        handle.removeEventListener('mousedown', onMouseDown);
+        // Clean up any active document-level drag listeners if unmounting mid-drag
+        if (isDraggingRef.current) {
+          document.removeEventListener('mousemove', onMouseMove);
+          document.removeEventListener('mouseup', onMouseUp);
+          document.body.style.userSelect = '';
+          document.body.style.cursor = '';
+          isDraggingRef.current = false;
+        }
+      };
     }
-  }, [onMouseDown]);
+  }, [onMouseDown, onMouseMove, onMouseUp]);
 
   // Resize re-clamp: keep overlay fully on-screen when viewport changes (Req 12.3)
   useEffect(() => {

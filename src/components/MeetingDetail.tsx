@@ -33,11 +33,11 @@ export function MeetingDetail() {
       const updated = prev.map(item =>
         item.id === id ? { ...item, completed: !item.completed } : item
       );
-      // Persist updated action items to IndexedDB
-      storage.saveMeeting({ ...meeting, actionItems: updated });
+      // Persist updated action items to IndexedDB using currentMeeting (not stale meeting)
+      storage.saveMeeting({ ...currentMeeting, actionItems: updated });
       return updated;
     });
-  }, [meeting]);
+  }, [currentMeeting]);
 
   const handleRetrySummary = useCallback(async () => {
     if (isRetryingSummary) return;
@@ -48,12 +48,16 @@ export function MeetingDetail() {
       if (result.success) {
         setActionItems(result.meeting.actionItems);
       }
+      // Refresh ZuleContext.selectedMeeting so it reflects the retried result
+      storage.getMeeting(currentMeeting.id).then((refreshed) => {
+        if (refreshed) actions.viewMeeting(refreshed);
+      });
     } catch (error) {
       toast.error('Failed to regenerate summary. Please try again.');
     } finally {
       setIsRetryingSummary(false);
     }
-  }, [currentMeeting.id, state.apiKey, isRetryingSummary]);
+  }, [currentMeeting.id, state.apiKey, isRetryingSummary, actions]);
 
   const getEmailContent = () => {
     if (meeting.followUpEmail && meeting.followUpEmail !== 'Follow-up email could not be generated.') {

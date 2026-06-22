@@ -12,19 +12,25 @@
 //   - CSP headers relaxed at runtime for Electron preload injection
 //   - Overlay lifecycle fully delegated to OverlayManager
 
-import {
-  app,
-  BrowserWindow,
-  ipcMain,
-  session,
-  desktopCapturer,
-  shell,
-} from 'electron';
+// `electron` is a CommonJS module whose API object is created dynamically by
+// the Electron runtime. This main process is bundled as ESM (the project is
+// `"type": "module"`), and Node's ESM↔CJS interop cannot expose Electron's API
+// cleanly: named imports fail ("does not provide an export named 'app'") because
+// cjs-module-lexer can't statically detect the dynamic exports, and the default
+// import is `undefined`. The reliable, Electron-documented pattern is to grab
+// the API via a CommonJS `require`, which always returns the real module.
+// Types are still imported by name (erased at compile time).
+import { createRequire } from 'node:module';
+import type { BrowserWindow as BrowserWindowType } from 'electron';
+const require = createRequire(import.meta.url);
+const { app, BrowserWindow, ipcMain, session, desktopCapturer, shell } =
+  require('electron') as typeof import('electron');
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { OverlayManager } from './overlayManager';
+import type { UpdateState } from './autoUpdateService';
 
 // ── Paths ────────────────────────────────────────────────────────────────────
 // ESM doesn't have __dirname, so we reconstruct it from import.meta.url
@@ -34,6 +40,26 @@ const DIST = path.join(__dirname, '../dist');
 const PRELOAD = path.join(__dirname, 'preload.mjs');
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173';
 const isDev = !app.isPackaged;
+
+// ── Hardware-acceleration disable (screen-capture stealth) ──────────────────
+//
+// Disable Chromium's GPU acceleration BEFORE any window or `app.whenReady()`
+// path runs. Per Electron docs, `app.disableHardwareAcceleration()` is only
+// honoured when called at module init, before the GPU process spawns.
+//
+// Why: WebRTC capturers (Google Meet, Discord, Slack screen-share) on Windows
+// 10 / 11 with certain DWM compositor paths use a hardware "flip-model"
+// presentation that can leak overlay content even with
+// `setWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` set on the window —
+// because the OS-level capture-exclusion rule is bypassed when the surface is
+// composited directly on the GPU. Forcing software composition makes the
+// exclusion rule fire reliably across browsers and OS builds.
+//
+// Trade-off: marginally higher CPU on the renderer side (the overlay is small,
+// so impact is negligible). The dashboard pays the same cost; this is
+// acceptable in a stealth-first product where capture invisibility is a
+// load-bearing feature.
+app.disableHardwareAcceleration();
 
 // ── Chromium feature toggles ─────────────────────────────────────────────────
 //
@@ -72,10 +98,90 @@ app.commandLine.appendSwitch(
 app.commandLine.appendSwitch('disable-component-update');
 app.commandLine.appendSwitch('disable-domain-reliability');
 
+// NOTE: the on-device ML stack (local Whisper) now runs in the MAIN PROCESS via
+// onnxruntime-node (see electron/whisperService.ts), so no renderer GPU/WASM
+// flags are needed here. The earlier enable-unsafe-webgpu / SharedArrayBuffer
+// switches were attempts to stabilise the renderer onnxruntime-web backend,
+// which crashed natively (0xC0000005) regardless; they are removed.
+
 // ── Window / Manager references ──────────────────────────────────────────────
 
-let mainWindow: BrowserWindow | null = null;
+let mainWindow: BrowserWindowType | null = null;
 let overlayManager: OverlayManager | null = null;
+
+// ── IPC Fan-Out: Auto-Update State ───────────────────────────────────────────
+//
+// Broadcasts UpdateState to both Dashboard and Overlay windows.
+// Skips destroyed or unavailable windows silently — never throws.
+// Requirement 10.6, 10.8 — Property 12: Event delivery fan-out correctness.
+
+function broadcastUpdateState(state: UpdateState): void {
+  const windows: (BrowserWindowType | null | undefined)[] = [
+    mainWindow,
+    overlayManager?.getWindow(),
+  ];
+  for (const win of windows) {
+    if (win && !win.isDestroyed()) {
+      try {
+        win.webContents.send('update:state', state);
+      } catch {
+        // Skip silently — window may have been destroyed between check and send
+      }
+    }
+  }
+}
+
+// ── IPC Fan-Out: Sync Messages (Telemetry) ───────────────────────────────────
+//
+// Broadcasts a message to both Dashboard and Overlay windows via the
+// existing `ipc-sync-message` channel. Used for forwarding telemetry
+// MetricEvents from the main process to the renderer's telemetry sink.
+// Follows the same fan-out pattern as vectorIndex.query telemetry.
+// Requirements: 9.1, 9.2, 9.3, 9.4, 9.5
+
+function broadcastSyncMessage(message: unknown): void {
+  const windows: (BrowserWindowType | null | undefined)[] = [
+    mainWindow,
+    overlayManager?.getWindow(),
+  ];
+  for (const win of windows) {
+    if (win && !win.isDestroyed()) {
+      try {
+        win.webContents.send('ipc-sync-message', message);
+      } catch {
+        // Skip silently — window may have been destroyed between check and send
+      }
+    }
+  }
+}
+
+/**
+ * Cached reference to the lazily-loaded Auto_Update service module.
+ *
+ * The service is dynamically imported after `did-finish-load` (task 2.1)
+ * to keep it off the cold-start path. We cache the resolved module here
+ * so the synchronous `before-quit` handler can reach `abortDownload()`
+ * and `handleBeforeQuit()` without needing a dynamic import on shutdown.
+ *
+ * `null` until the auto-updater is first loaded; in that case the
+ * before-quit handler short-circuits (nothing to abort or install).
+ */
+let autoUpdateServiceModule: typeof import('./autoUpdateService') | null = null;
+
+/**
+ * Cached reference to the lazily-loaded Vector_Index service module.
+ *
+ * The service is dynamically imported on first use by the `vectorIndex:*`
+ * IPC handlers (task 5.3) so the native `hnswlib-node` addon stays out of
+ * the cold-start path for users who never query the Knowledge_Base. We
+ * cache the resolved module here so the synchronous `before-quit` handler
+ * below can reach `flushIndexSync` without needing to dynamic-import on
+ * shutdown — Electron does not await async listeners on `before-quit`.
+ *
+ * `null` until the first `vectorIndex:*` IPC populates it; in that case
+ * there's no in-memory state to flush so the handler short-circuits.
+ */
+let vectorIndexService: typeof import('./vectorIndexService') | null = null;
 
 // ── CSP Relaxation ───────────────────────────────────────────────────────────
 // The index.html has a strict CSP that blocks Electron's preload script.
@@ -145,6 +251,32 @@ function registerDisplayMediaHandler(): void {
   );
 }
 
+// ── Microphone / media permission handler ────────────────────────────────────
+// Web Speech API (`webkitSpeechRecognition`) and any `getUserMedia({ audio })`
+// call require the renderer to be granted the `media`/`audioCapture`
+// permission. Electron DENIES these by default, so without this handler the
+// in-bar mic button and the main transcription pipeline both fail silently:
+// the recognizer constructs fine but emits `onerror`/`onend` immediately, so
+// the button looks dead. We auto-grant audio (and the related media checks) —
+// the user has already opted in by clicking the mic. The OS still enforces its
+// own microphone privacy prompt on first use.
+function registerMediaPermissionHandlers(): void {
+  const ALLOWED = new Set(['media', 'audioCapture', 'mediaKeySystem']);
+
+  // Async permission *requests* (e.g. getUserMedia, SpeechRecognition).
+  session.defaultSession.setPermissionRequestHandler(
+    (_wc, permission, callback) => {
+      callback(ALLOWED.has(permission));
+    },
+  );
+
+  // Synchronous permission *checks* — some Chromium paths gate on this before
+  // even issuing the async request, so it must agree with the handler above.
+  session.defaultSession.setPermissionCheckHandler(
+    (_wc, permission) => ALLOWED.has(permission),
+  );
+}
+
 // ── Create Main Window ───────────────────────────────────────────────────────
 
 function createMainWindow(): void {
@@ -159,6 +291,20 @@ function createMainWindow(): void {
     // Render the page even before show so the first paint after
     // setContentProtection() is fully composited.
     paintWhenInitiallyHidden: true,
+    // Stealth from Alt+Tab and the Windows taskbar. On Windows, Electron
+    // applies the `WS_EX_TOOLWINDOW` extended window style when
+    // `skipTaskbar: true`, which is exactly the style proctoring suites
+    // (Honorlock, SEB) check for when scanning the Z-order for "always-on-top"
+    // overlays. Combined with `setContentProtection(true)` below, the
+    // dashboard is stripped from both the screen-capture buffer and the
+    // standard window-enumeration walks.
+    //
+    // Trade-off: the user brings the dashboard back via the
+    // `Cmd/Ctrl+Shift+Z` ("bring-to-front") global shortcut registered in
+    // OverlayManager.registerShortcuts. Closing the only visible Mode 2
+    // overlay does not orphan the user — the shortcut surfaces the window
+    // again on demand.
+    skipTaskbar: true,
     webPreferences: {
       preload: PRELOAD,
       contextIsolation: true,
@@ -214,10 +360,11 @@ function createMainWindow(): void {
               cleanup();
               
               // Bring the Electron app back to the foreground
-              if (mainWindow) {
-                if (mainWindow.isMinimized()) mainWindow.restore();
-                mainWindow.show();
-                mainWindow.focus();
+              const win = mainWindow;
+              if (win && !win.isDestroyed()) {
+                if (win.isMinimized()) win.restore();
+                win.show();
+                win.focus();
                 app.focus({ steal: true });
               }
               
@@ -341,7 +488,7 @@ function createMainWindow(): void {
 // `hide()` first ensures no intermediate paint reveals the old Mode 1 chrome;
 // `setAlwaysOnTop(true, 'screen-saver')` is bundled in the same handler
 // invocation so AOT is in effect before the next paint completes.
-function applyMode2Transition(win: BrowserWindow): void {
+function applyMode2Transition(win: BrowserWindowType): void {
   win.hide();
   win.setMenuBarVisibility(false);
   win.setBackgroundColor('#00000000');
@@ -371,8 +518,9 @@ function registerIpcHandlers(): void {
     if (!overlayManager) return false;
     overlayManager.create();
     overlayManager.show();
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.hide();
+    const win = mainWindow;
+    if (win && !win.isDestroyed()) {
+      win.hide();
     }
     return true;
   });
@@ -382,17 +530,17 @@ function registerIpcHandlers(): void {
   ipcMain.handle('stop-overlay', () => {
     if (!overlayManager) return false;
     overlayManager.destroy();
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.show();
-      mainWindow.focus();
+    const win = mainWindow;
+    if (win && !win.isDestroyed()) {
+      win.show();
+      win.focus();
     }
     return true;
   });
 
   // Content protection toggle (overlay window only — preserved for backwards compat)
   ipcMain.handle('set-content-protection', (_event, enabled: boolean) => {
-    overlayManager?.setContentProtection(enabled);
-    return true;
+    return overlayManager ? overlayManager.setContentProtection(enabled) : true;
   });
 
   // Unified toggle: flip screen-capture invisibility on BOTH the dashboard
@@ -402,9 +550,10 @@ function registerIpcHandlers(): void {
   // case so the renderer can surface the failure without crashing.
   ipcMain.handle('toggle-visibility-protection', (_event, enabled: boolean) => {
     let ok = true;
-    if (mainWindow && !mainWindow.isDestroyed()) {
+    const win = mainWindow;
+    if (win && !win.isDestroyed()) {
       try {
-        mainWindow.setContentProtection(enabled);
+        win.setContentProtection(enabled);
       } catch (err: unknown) {
         ok = false;
         console.warn(
@@ -416,9 +565,9 @@ function registerIpcHandlers(): void {
     }
     // OverlayManager.setContentProtection has its own try/catch and
     // emits an 'overlay-error' IPC event on failure — we don't override
-    // its behavior here.
-    overlayManager?.setContentProtection(enabled);
-    return ok;
+    // its behavior here, but we do reflect its outcome in the return value.
+    const overlayOk = overlayManager ? overlayManager.setContentProtection(enabled) : true;
+    return ok && overlayOk;
   });
 
   // Always-on-top toggle
@@ -478,6 +627,225 @@ function registerIpcHandlers(): void {
       thumbnail: source.thumbnail.toDataURL(),
     }));
   });
+
+  // ── Local Whisper transcription (runs natively in the main process) ────────
+  // The renderer captures system-audio PCM and ships chunks here; onnxruntime
+  // -node transcribes them. See electron/whisperService.ts for why inference is
+  // not done in the renderer (native 0xC0000005 crash in the WASM engine).
+  ipcMain.handle('whisper:preload', async (_event, opts?: { modelId?: string }) => {
+    const { preloadWhisper } = await import('./whisperService');
+    await preloadWhisper(opts?.modelId);
+    return true;
+  });
+
+  ipcMain.handle(
+    'whisper:transcribe',
+    async (
+      _event,
+      pcm: Float32Array,
+      opts?: { language?: string; modelId?: string },
+    ) => {
+      const { transcribePcm } = await import('./whisperService');
+      // Electron structured-clones the Float32Array across IPC; normalise to a
+      // real Float32Array view in case it arrives as a plain ArrayBuffer.
+      const samples =
+        pcm instanceof Float32Array ? pcm : new Float32Array(pcm as ArrayBufferLike);
+      const text = await transcribePcm(samples, opts ?? {});
+      return { text };
+    },
+  );
+
+  ipcMain.handle('whisper:release', async () => {
+    const { releaseWhisper } = await import('./whisperService');
+    releaseWhisper();
+    return true;
+  });
+
+  // ── Local text embeddings (also native, main-process) ──────────────────────
+  // Same rationale as Whisper: onnxruntime-web crashes the renderer (0xC0000005),
+  // so the embedding model runs natively here and the renderer's vectorStore
+  // delegates inference over IPC.
+  ipcMain.handle('embed:preload', async (_event, opts?: { modelId?: string }) => {
+    const { preloadEmbedding } = await import('./embeddingService');
+    await preloadEmbedding(opts?.modelId);
+    return true;
+  });
+
+  ipcMain.handle(
+    'embed:generate',
+    async (_event, text: string, opts?: { modelId?: string }) => {
+      const { generateEmbedding } = await import('./embeddingService');
+      const vector = await generateEmbedding(text, opts ?? {});
+      return { vector };
+    },
+  );
+
+  ipcMain.handle(
+    'embed:generateBatch',
+    async (_event, texts: string[], opts?: { modelId?: string }) => {
+      const { generateEmbeddingBatch } = await import('./embeddingService');
+      const vectors = await generateEmbeddingBatch(texts, opts ?? {});
+      return { vectors };
+    },
+  );
+
+  // ── Vector_Index (HNSW, native, main-process) ──────────────────────────────
+  // The HNSW graph lives here beside the embedding service so upload-time
+  // inserts skip an extra IPC trip. Each handler lazy-loads the service module
+  // on first use and caches it to the module-level `vectorIndexService`
+  // reference; the `before-quit` handler reaches into the same reference to
+  // run a synchronous `flushIndexSync` before shutdown (Electron does not
+  // await async `before-quit` listeners).
+  //
+  // The mutating handlers (`rebuild`, `addBatch`, `remove`, `flush`) wrap the
+  // service's `void` return in `true` so the renderer's `Promise<boolean>`
+  // contract in `electron/preload.ts` is honoured.
+  //
+  // Telemetry: `vectorIndex:query` times the call and emits exactly one
+  // `{ kind: 'vectorIndex.query', k, resultCount, durationMs }` MetricEvent
+  // through the existing `ipc-sync-message` channel (Property 20 /
+  // Requirement 10.2). The renderer's `telemetry.emit` consumer picks it up
+  // and persists it through the same path as every other MetricEvent.
+  //
+  // TODO: the typed `vector-index.query-invalid` and
+  // `vector-index.snapshot-corrupt` diagnostics emitted from inside
+  // `vectorIndexService.ts` still go through `console.warn` for now —
+  // tasks 5.4 / 5.6 / 5.8 will decide whether to capture them through a
+  // dedicated diagnostic sink or directly via `console.warn` spies.
+
+  async function loadVectorIndexService(): Promise<
+    typeof import('./vectorIndexService')
+  > {
+    if (!vectorIndexService) {
+      vectorIndexService = await import('./vectorIndexService');
+    }
+    return vectorIndexService;
+  }
+
+  ipcMain.handle(
+    'vectorIndex:rebuild',
+    async (
+      _event,
+      items: { id: string; vector: number[] }[],
+      numDimensions: number,
+    ) => {
+      const svc = await loadVectorIndexService();
+      await svc.rebuildVectorIndex(items, numDimensions);
+      return true;
+    },
+  );
+
+  ipcMain.handle(
+    'vectorIndex:addBatch',
+    async (_event, items: { id: string; vector: number[] }[]) => {
+      const svc = await loadVectorIndexService();
+      await svc.addBatchToIndex(items);
+      return true;
+    },
+  );
+
+  ipcMain.handle('vectorIndex:remove', async (_event, id: string) => {
+    const svc = await loadVectorIndexService();
+    await svc.removeFromIndex(id);
+    return true;
+  });
+
+  ipcMain.handle(
+    'vectorIndex:query',
+    async (_event, vector: number[], k: number) => {
+      const svc = await loadVectorIndexService();
+      const startedAt = Date.now();
+      const hits = await svc.queryIndex(vector, k);
+      const durationMs = Date.now() - startedAt;
+
+      // Emit one `vectorIndex.query` MetricEvent through the existing
+      // cross-window sync channel. Both windows receive the message so the
+      // renderer-side `telemetry.emit` pipeline (which lives in the
+      // dashboard) records it once; the overlay copy mirrors the existing
+      // `ipc-sync-message` fan-out and is harmless for non-MetricEvent
+      // listeners.
+      const event = {
+        kind: 'vectorIndex.query' as const,
+        k,
+        resultCount: hits.length,
+        durationMs,
+      };
+      mainWindow?.webContents.send('ipc-sync-message', event);
+      overlayManager?.getWindow()?.webContents.send('ipc-sync-message', event);
+
+      return hits;
+    },
+  );
+
+  ipcMain.handle('vectorIndex:flush', async () => {
+    const svc = await loadVectorIndexService();
+    await svc.flushIndex();
+    return true;
+  });
+
+  // Renderer-driven cold-start hydration (Requirements 3.1, 3.2).
+  //
+  // The renderer calls this from its `embedPreload` boot path, before the
+  // Knowledge_Base UI signals ready. We attempt to load the persisted
+  // snapshot from `<userData>/vector-index.bin` + `vector-index.json`;
+  // `preloadVectorIndex` reports a typed `vector-index.snapshot-corrupt`
+  // diagnostic on any failure mode and resets to an empty in-memory state.
+  // The returned `count` is the live (non-deleted) item count after
+  // preload — a `0` here paired with a non-empty IndexedDB tells the
+  // renderer the snapshot was missing or corrupt, so it follows up with
+  // `vectorIndex:rebuild` from the IndexedDB chunks.
+  ipcMain.handle('vectorIndex:hydrate', async () => {
+    const svc = await loadVectorIndexService();
+    await svc.preloadVectorIndex();
+    return svc.getIndexStatus();
+  });
+
+  // ── Auto-Update IPC Handlers ─────────────────────────────────────────────
+  // Registered eagerly so they're available even before the service loads.
+  // They reject with a typed error if the service hasn't initialized yet
+  // (graceful degradation, Requirement 11.5).
+  //
+  // Requirements: 2.1, 2.2, 8.4, 10.2, 10.3, 10.4, 10.5, 10.6
+
+  ipcMain.handle('update:check', async () => {
+    if (!autoUpdateServiceModule) {
+      throw { stage: 'check', category: 'unavailable' };
+    }
+    const service = autoUpdateServiceModule.getAutoUpdateService();
+    return service.checkForUpdate('manual');
+  });
+
+  ipcMain.handle('update:download', async () => {
+    if (!autoUpdateServiceModule) {
+      throw { stage: 'download', category: 'unavailable' };
+    }
+    const service = autoUpdateServiceModule.getAutoUpdateService();
+    return service.downloadUpdate();
+  });
+
+  ipcMain.handle('update:cancel', async () => {
+    if (!autoUpdateServiceModule) {
+      throw { stage: 'download', category: 'unavailable' };
+    }
+    const service = autoUpdateServiceModule.getAutoUpdateService();
+    return service.cancelDownload();
+  });
+
+  ipcMain.handle('update:install', async () => {
+    if (!autoUpdateServiceModule) {
+      throw { stage: 'install', category: 'unavailable' };
+    }
+    const service = autoUpdateServiceModule.getAutoUpdateService();
+    return service.installUpdate();
+  });
+
+  ipcMain.handle('update:defer', async () => {
+    if (!autoUpdateServiceModule) {
+      throw { stage: 'install', category: 'unavailable' };
+    }
+    const service = autoUpdateServiceModule.getAutoUpdateService();
+    service.deferInstall();
+  });
 }
 
 // ── App Lifecycle ────────────────────────────────────────────────────────────
@@ -485,6 +853,7 @@ function registerIpcHandlers(): void {
 app.whenReady().then(() => {
   relaxCSPForElectron();
   registerDisplayMediaHandler();
+  registerMediaPermissionHandlers();
   registerIpcHandlers();
   createMainWindow();
 
@@ -497,6 +866,42 @@ app.whenReady().then(() => {
 
   overlayManager.setMainWindowRef(mainWindow!);
   overlayManager.registerShortcuts(mainWindow!);
+
+  // ── Auto-Update Service (lazy-loaded after dashboard finishes loading) ────
+  // Kept off the synchronous startup path (Requirement 8.4). Once loaded,
+  // state-change events are broadcast to both windows via IPC fan-out
+  // (Requirements 10.6, 10.8).
+  mainWindow!.webContents.once('did-finish-load', () => {
+    setTimeout(async () => {
+      try {
+        const mod = await import('./autoUpdateService');
+        autoUpdateServiceModule = mod;
+        const service = mod.getAutoUpdateService();
+        service.onStateChange((state) => broadcastUpdateState(state));
+
+        // Wire telemetry emitter — forward update lifecycle events to the
+        // renderer's telemetry sink via the existing `ipc-sync-message`
+        // channel (same pattern as vectorIndex.query telemetry).
+        // Requirements: 9.1, 9.2, 9.3, 9.4, 9.5
+        service.setTelemetryEmitter((event) => {
+          broadcastSyncMessage(event);
+        });
+
+        // Trigger background startup check (Requirement 2.1)
+        service.checkForUpdate('startup').catch(() => {
+          // Silently ignore — offline-first (Requirement 8.1)
+        });
+      } catch (err) {
+        console.warn(
+          `[main] autoUpdateService init failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        // Graceful degradation — IPC handlers (task 5.1) will reject with
+        // typed errors; the renderer remains in idle state (Req 11.5).
+      }
+    }, 3000); // 3s delay keeps it within the 5s budget (Req 2.1)
+  });
 });
 
 // Quit when all windows are closed (Windows behavior)
@@ -507,6 +912,45 @@ app.on('window-all-closed', () => {
 // Clean up before quitting
 app.on('before-quit', () => {
   overlayManager?.unregisterShortcuts();
+
+  // ── Auto-updater graceful shutdown (Requirements 8.5, 6.4) ───────────
+  // Abort any in-progress download within the 2-second budget, discard
+  // partial bytes, and launch the staged installer if the user chose
+  // "Install on next quit". Wrapped in try/catch so updater issues never
+  // block app exit.
+  if (autoUpdateServiceModule) {
+    try {
+      const updateService = autoUpdateServiceModule.getAutoUpdateService();
+      updateService.abortDownload();      // cancel in-flight download within 2s
+      updateService.handleBeforeQuit();   // deferred install if flag is set
+    } catch (err) {
+      console.warn(
+        `[main] autoUpdateService shutdown failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  // Best-effort synchronous flush of the Vector_Index snapshot so an
+  // add/remove/rebuild that happened after the last debounced flush still
+  // lands on disk. Electron does not await async `before-quit` handlers,
+  // so we use the sync writer (`writeIndexSync` + `fs.writeFileSync`).
+  //
+  // No-op when the service module was never loaded — the user never
+  // touched the Knowledge_Base in this session, so there's nothing to
+  // persist. Wrapped in try/catch so a flush error never blocks shutdown.
+  if (vectorIndexService) {
+    try {
+      vectorIndexService.flushIndexSync();
+    } catch (err) {
+      console.warn(
+        `[main] vectorIndex flush on quit failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
 });
 
 // Prevent multiple instances
@@ -516,10 +960,11 @@ if (!gotLock) {
 } else {
   app.on('second-instance', () => {
     // Someone tried to run a second instance — focus existing window
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.show();
-      mainWindow.focus();
+    const win = mainWindow;
+    if (win && !win.isDestroyed()) {
+      if (win.isMinimized()) win.restore();
+      win.show();
+      win.focus();
     }
   });
 }

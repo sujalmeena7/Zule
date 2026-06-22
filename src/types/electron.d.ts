@@ -7,6 +7,30 @@
 // This enables typed access from React hooks without
 // importing Electron types directly into the renderer.
 
+import type { IndexedItem, QueryHit } from './vectorIndex';
+
+// ---- Auto-Updater Types ----
+
+export interface DownloadProgress {
+  percent: number;       // [0, 100]
+  bytesReceived: number;
+  totalBytes: number;
+}
+
+export interface UpdateError {
+  stage: 'check' | 'download' | 'integrity' | 'install';
+  category: 'unreachable' | 'timeout' | 'server-error' | 'network' | 'storage' | 'integrity';
+}
+
+export interface UpdateState {
+  status: 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'installing';
+  availableVersion: string | null;
+  currentVersion: string;
+  releaseNotes: string | null;
+  progress: DownloadProgress | null;
+  error: UpdateError | null;
+}
+
 export interface ElectronAPI {
   platform: 'win32' | 'darwin' | 'linux';
   isElectron: true;
@@ -51,6 +75,41 @@ export interface ElectronAPI {
       thumbnail: string;
     }>
   >;
+
+  // Local Whisper transcription (native, main-process)
+  whisperPreload?: (opts?: { modelId?: string }) => Promise<boolean>;
+  whisperTranscribe?: (
+    pcm: Float32Array,
+    opts?: { language?: string; modelId?: string },
+  ) => Promise<{ text: string }>;
+  whisperRelease?: () => Promise<boolean>;
+
+  // Local text embeddings (native, main-process)
+  embedPreload?: (opts?: { modelId?: string }) => Promise<boolean>;
+  embedGenerate?: (
+    text: string,
+    opts?: { modelId?: string },
+  ) => Promise<{ vector: number[] }>;
+  embedGenerateBatch?: (
+    texts: string[],
+    opts?: { modelId?: string },
+  ) => Promise<{ vectors: number[][] }>;
+
+  // Vector_Index (HNSW, native, main-process)
+  vectorIndexRebuild?: (items: IndexedItem[], dim: number) => Promise<boolean>;
+  vectorIndexAddBatch?: (items: IndexedItem[]) => Promise<boolean>;
+  vectorIndexRemove?: (id: string) => Promise<boolean>;
+  vectorIndexQuery?: (vector: number[], k: number) => Promise<QueryHit[]>;
+  vectorIndexFlush?: () => Promise<boolean>;
+  vectorIndexHydrate?: () => Promise<{ count: number; dim: number }>;
+
+  // Auto-Updater (IPC Bridge)
+  checkForUpdate?: () => Promise<UpdateState>;
+  downloadUpdate?: () => Promise<void>;
+  cancelDownload?: () => Promise<void>;
+  installUpdate?: () => Promise<void>;
+  deferInstall?: () => Promise<void>;
+  onUpdateState?: (cb: (state: UpdateState) => void) => () => void;
 }
 
 declare global {

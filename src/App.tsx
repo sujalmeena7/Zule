@@ -27,6 +27,7 @@ import { setRouterOffline } from './brain/aiProvider';
 import { isElectron } from './hooks/useElectronBridge';
 import { BlogPage } from './components/BlogPage';
 import { BlogPost } from './components/BlogPost';
+import { useIpcTelemetrySink } from './hooks/useIpcTelemetrySink';
 // Wrapper for the Electron Overlay that strips the opaque background
 function OverlayShell() {
   useEffect(() => {
@@ -55,10 +56,34 @@ function AppContent() {
   const { isOnline } = useOnlineStatus();
   const { user, loading, logout } = useAuth();
 
+  // Forward main-process telemetry events (auto-updater, vectorIndex) to
+  // the renderer's TelemetryModule for IndexedDB persistence.
+  // Requirements: 9.1, 9.2, 9.3, 9.4, 9.5
+  useIpcTelemetrySink();
+
   // Sync offline state to the AI provider router (Requirement 20.1)
   useEffect(() => {
     setRouterOffline(!isOnline);
   }, [isOnline]);
+
+  // Vector_Index cold-start hydration (Requirements 3.1, 3.2). Runs once
+  // per logged-in Electron session: pre-warms the embedding model, asks
+  // the main process to load the persisted snapshot, and rebuilds from
+  // IndexedDB only when the main process reports a corrupt-or-missing
+  // snapshot. Fires before the user navigates to the Knowledge_Base
+  // surface in Settings, so the ANN path in `database.search` is ready
+  // for the first query.
+  useEffect(() => {
+    if (!user || !isElectron()) return;
+    let cancelled = false;
+    void import('./data/vectorIndexHydration').then(({ hydrateVectorIndexOnBoot }) => {
+      if (cancelled) return;
+      void hydrateVectorIndexOnBoot();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
 
   // Show loading spinner while checking auth state
   if (loading) {
