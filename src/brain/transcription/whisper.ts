@@ -52,11 +52,18 @@ import { database } from '../../data/database';
 export const DEFAULT_WHISPER_MODEL = 'Xenova/whisper-base.en' as const;
 
 /**
- * Processing interval in milliseconds. Audio is buffered and sent to the
- * model in chunks of this duration. Lower values decrease latency at the
- * cost of higher CPU usage.
+ * Maximum buffer duration in milliseconds. The AudioWorklet accumulates
+ * audio and flushes when speech ends (VAD-driven) or when this hard cap
+ * is reached (sustained speech without pauses). Replaces the old fixed-
+ * interval timer approach for much lower perceived latency.
  */
-const PROCESS_INTERVAL_MS = 2000;
+const DEFAULT_MAX_BUFFER_MS = 3000;
+
+/**
+ * URL of the AudioWorkletProcessor script. Served from public/ by Vite
+ * in both dev and production (Vite copies public/ → dist/).
+ */
+const WORKLET_URL = '/pcm-capture-processor.js';
 
 /**
  * Sample rate expected by Whisper models (16 kHz mono).
@@ -133,10 +140,11 @@ export interface WhisperProviderOptions {
   /** Initial speaker role. */
   speakerRole?: 'user' | 'other';
   /**
-   * Override the processing interval (ms) for testing.
-   * Production default is 2000 ms.
+   * Maximum buffer duration (ms) before the AudioWorklet forces a flush.
+   * Default is 3000 ms. Lower values decrease max latency for sustained
+   * speech at the cost of more, smaller chunks.
    */
-  processIntervalMs?: number;
+  maxBufferMs?: number;
   /**
    * Try the WebGPU backend before WASM. Defaults to FALSE: the onnxruntime-web
    * WebGPU/JSEP backend natively crashes the Electron renderer on session
@@ -190,7 +198,7 @@ export class WhisperProvider {
   private language: string;
   private speakerId: string;
   private speakerRole: 'user' | 'other';
-  private processIntervalMs: number;
+  private maxBufferMs: number;
   private preferWebGPU: boolean;
   private transcribeFn?: (pcm: Float32Array, opts: { language: string }) => Promise<string>;
 
@@ -205,9 +213,9 @@ export class WhisperProvider {
   private _ownsStream = false;
   private audioContext: AudioContext | null = null;
   private sourceNode: MediaStreamAudioSourceNode | null = null;
-  private processorNode: ScriptProcessorNode | null = null;
-  private audioBuffer: Float32Array[] = [];
-  private processTimer: ReturnType<typeof setInterval> | null = null;
+  private workletNode: AudioWorkletNode | null = null;
+  /** Resolves when the worklet sends 'flush-done' during teardown. */
+  private flushResolve: (() => void) | null = null;
 
   // Event system
   private listeners: Map<TranscriptionEvent, Set<TranscriptionEventCallback>> = new Map();
@@ -237,7 +245,7 @@ export class WhisperProvider {
     this.language = opts.language ?? 'en';
     this.speakerId = opts.speakerId ?? 'speaker-1';
     this.speakerRole = opts.speakerRole ?? 'user';
-    this.processIntervalMs = opts.processIntervalMs ?? PROCESS_INTERVAL_MS;
+    this.maxBufferMs = opts.maxBufferMs ?? DEFAULT_MAX_BUFFER_MS;
     this.preferWebGPU = opts.preferWebGPU ?? false;
     this.transcribeFn = opts.transcribeFn;
   }
@@ -573,32 +581,41 @@ export class WhisperProvider {
       }
     }
 
-    // Set up audio processing pipeline
+    // Set up audio processing pipeline with AudioWorklet (off-main-thread).
+    // AudioWorklet is supported in Electron 14+ (Chromium 91). Electron 42
+    // is our minimum — assert it exists and throw early.
     this.audioContext = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
+
+    if (!this.audioContext.audioWorklet) {
+      throw new Error(
+        'AudioWorklet is not supported in this environment. ' +
+        'Zule requires Electron 14+ (Chromium 91+).',
+      );
+    }
+
     this.sourceNode = this.audioContext.createMediaStreamSource(this.mediaStream);
 
-    // Use ScriptProcessorNode to capture raw PCM audio data.
-    // (AudioWorklet would be preferred in production for lower latency
-    // but ScriptProcessorNode works universally and is simpler to wire.)
-    const bufferSize = 4096;
-    this.processorNode = this.audioContext.createScriptProcessor(bufferSize, 1, 1);
+    // Load the PCM capture worklet processor.
+    await this.audioContext.audioWorklet.addModule(WORKLET_URL);
+    this.workletNode = new AudioWorkletNode(this.audioContext, 'pcm-capture-processor');
 
-    this.processorNode.onaudioprocess = (event: AudioProcessingEvent) => {
-      if (!this._isListening) return;
-      const inputData = event.inputBuffer.getChannelData(0);
-      // Copy the buffer since the underlying ArrayBuffer is reused
-      this.audioBuffer.push(new Float32Array(inputData));
+    // Configure the worklet with current settings.
+    this.workletNode.port.postMessage({
+      type: 'config',
+      maxBufferMs: this.maxBufferMs,
+    });
+
+    // Handle messages from the worklet (chunks, VAD state, flush-done).
+    this.workletNode.port.onmessage = (e: MessageEvent) => {
+      this.handleWorkletMessage(e.data);
     };
 
-    this.sourceNode.connect(this.processorNode);
-    this.processorNode.connect(this.audioContext.destination);
+    // Connect: source → worklet. No destination connection needed —
+    // the worklet outputs silence (process() returns true but writes
+    // no output).
+    this.sourceNode.connect(this.workletNode);
 
     this._isListening = true;
-
-    // Start periodic processing of accumulated audio
-    this.processTimer = setInterval(() => {
-      void this.processAccumulatedAudio();
-    }, this.processIntervalMs);
   }
 
   /**
@@ -610,12 +627,6 @@ export class WhisperProvider {
   stop(): TranscriptionLine | null {
     this._isListening = false;
 
-    // Stop the periodic processing timer
-    if (this.processTimer !== null) {
-      clearInterval(this.processTimer);
-      this.processTimer = null;
-    }
-
     // VAD: release the live-sensitivity subscription on teardown
     // (Requirements 7.4 partner — symmetric to the `start()` subscribe).
     if (this.vadUnsubscribe !== null) {
@@ -623,27 +634,31 @@ export class WhisperProvider {
       this.vadUnsubscribe = null;
     }
 
-    // Process any remaining buffered audio synchronously — we'll emit
-    // the result after teardown. Since processing is async, we capture
-    // any remaining buffer and process it later.
-    const remainingBuffer = this.collectAudioBuffer();
-
-    // Tear down audio nodes
-    this.teardownAudio();
-
-    // If there's remaining audio, queue a final processing pass.
-    // We can't await here (matching WebSpeechProvider.stop() sync signature),
-    // so we fire-and-forget the final segment.
-    if (remainingBuffer && remainingBuffer.length > 0) {
-      // Gate the trailing flush too: "Run `scoreChunk` before each
-      // `whisper:transcribe` IPC" (Requirement 6.1).
-      if (this.vadGate(remainingBuffer)) {
-        void this.processAudioSegment(remainingBuffer).then((line) => {
-          if (line) {
-            this.emit('line', line);
-          }
-        });
+    // Ask the worklet to flush its remaining buffer. The worklet will
+    // post { type: 'flush-done' } when finished, which resolves the
+    // promise. Guard with a 500ms timeout in case the worklet's
+    // process() has stopped being called (stream ended, tab
+    // backgrounded, or port already closed).
+    if (this.workletNode) {
+      const flushPromise = new Promise<void>((resolve) => {
+        this.flushResolve = resolve;
+        // Safety net: always resolve after 500ms.
+        setTimeout(resolve, 500);
+      });
+      try {
+        this.workletNode.port.postMessage({ type: 'flush' });
+      } catch {
+        // Port may be closed — resolve immediately.
+        this.flushResolve?.();
+        this.flushResolve = null;
       }
+      // Fire-and-forget the teardown after flush completes.
+      void flushPromise.then(() => {
+        this.flushResolve = null;
+        this.teardownAudio();
+      });
+    } else {
+      this.teardownAudio();
     }
 
     return null;
@@ -651,24 +666,35 @@ export class WhisperProvider {
 
   /**
    * Pause transcription (stop collecting audio without tearing down).
+   * Tells the worklet to stop accumulating samples.
    */
   pause(): void {
     this._isListening = false;
-    if (this.processTimer !== null) {
-      clearInterval(this.processTimer);
-      this.processTimer = null;
+    if (this.workletNode) {
+      try {
+        this.workletNode.port.postMessage({ type: 'pause' });
+      } catch {
+        // Port may be closed — ignore.
+      }
     }
   }
 
   /**
    * Resume transcription after pause.
+   * Tells the worklet to start accumulating samples again.
    */
   resume(): void {
-    if (!this.audioContext || !this.transcriber) return;
+    if (!this.audioContext) return;
+    // transcribeFn mode doesn't need `this.transcriber`.
+    if (!this.transcribeFn && !this.transcriber) return;
     this._isListening = true;
-    this.processTimer = setInterval(() => {
-      void this.processAccumulatedAudio();
-    }, this.processIntervalMs);
+    if (this.workletNode) {
+      try {
+        this.workletNode.port.postMessage({ type: 'resume' });
+      } catch {
+        // Port may be closed — ignore.
+      }
+    }
   }
 
   /**
@@ -757,44 +783,55 @@ export class WhisperProvider {
   }
 
   /**
-   * Collect all buffered audio chunks into a single Float32Array and
-   * clear the buffer.
+   * Handle messages from the AudioWorklet processor. Dispatches chunk
+   * processing, VAD state transitions, and flush completion.
    */
-  private collectAudioBuffer(): Float32Array | null {
-    if (this.audioBuffer.length === 0) return null;
+  private handleWorkletMessage(data: {
+    type: string;
+    pcm?: Float32Array;
+    isSpeech?: boolean;
+    energy?: number;
+  }): void {
+    switch (data.type) {
+      case 'chunk': {
+        if (!this._isListening || !data.pcm) return;
+        const audio = data.pcm;
 
-    const totalLength = this.audioBuffer.reduce((sum, chunk) => sum + chunk.length, 0);
-    const combined = new Float32Array(totalLength);
-    let offset = 0;
-    for (const chunk of this.audioBuffer) {
-      combined.set(chunk, offset);
-      offset += chunk.length;
-    }
-    this.audioBuffer = [];
-    return combined;
-  }
+        // Secondary VAD gate (Requirement 6.1): the worklet already ran
+        // a per-frame energy check, but we run the full median-of-frames
+        // gate here too for consistency with the documented VAD contract.
+        // Sub-threshold chunks are dropped silently.
+        if (!this.vadGate(audio)) return;
 
-  /**
-   * Process accumulated audio buffer through the Whisper model.
-   * Called periodically by the process timer.
-   */
-  private async processAccumulatedAudio(): Promise<void> {
-    const audio = this.collectAudioBuffer();
-    if (!audio || audio.length === 0) return;
+        // Emit interim indicator while processing.
+        this.emit('interim', '...');
 
-    // VAD gate (Requirement 6.1): score the chunk before any IPC and
-    // before emitting any UI signal. Sub-threshold chunks are dropped
-    // silently — no `interim`, no `line`, no `whisper:transcribe` —
-    // which keeps the dictation session state untouched (Requirement
-    // 6.3 / Property 16).
-    if (!this.vadGate(audio)) return;
+        void this.processAudioSegment(audio).then((line) => {
+          if (line) {
+            this.emit('line', line);
+          }
+        });
+        break;
+      }
 
-    // Emit interim indicator while processing
-    this.emit('interim', '...');
+      case 'vad': {
+        // Surface VAD state transitions to the component tree so
+        // FloatingCopilot can show a real-time "speaking" pulse.
+        this.emit('vad-state' as TranscriptionEvent, {
+          isSpeech: data.isSpeech ?? false,
+          energy: data.energy ?? 0,
+        });
+        break;
+      }
 
-    const line = await this.processAudioSegment(audio);
-    if (line) {
-      this.emit('line', line);
+      case 'flush-done': {
+        // Resolve the teardown promise (see stop()).
+        if (this.flushResolve) {
+          this.flushResolve();
+          this.flushResolve = null;
+        }
+        break;
+      }
     }
   }
 
@@ -875,10 +912,14 @@ export class WhisperProvider {
    * Tear down audio context, source node, processor node, and media stream.
    */
   private teardownAudio(): void {
-    if (this.processorNode) {
-      this.processorNode.disconnect();
-      this.processorNode.onaudioprocess = null;
-      this.processorNode = null;
+    if (this.workletNode) {
+      try {
+        this.workletNode.port.close();
+      } catch {
+        // Port may already be closed.
+      }
+      this.workletNode.disconnect();
+      this.workletNode = null;
     }
     if (this.sourceNode) {
       this.sourceNode.disconnect();

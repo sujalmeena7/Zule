@@ -21,10 +21,11 @@
 // the API via a CommonJS `require`, which always returns the real module.
 // Types are still imported by name (erased at compile time).
 import { createRequire } from 'node:module';
-import type { BrowserWindow as BrowserWindowType } from 'electron';
+import * as electronRaw from 'electron';
 const require = createRequire(import.meta.url);
+const electronApi: any = (electronRaw && (electronRaw as any).app) ? electronRaw : require('electron');
 const { app, BrowserWindow, ipcMain, session, desktopCapturer, shell } =
-  require('electron') as typeof import('electron');
+  electronApi as typeof import('electron');
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
@@ -311,7 +312,7 @@ function createMainWindow(): void {
       nodeIntegration: false,
       sandbox: false,
       backgroundThrottling: false,
-      webSecurity: false,
+      webSecurity: true,
     },
   });
 

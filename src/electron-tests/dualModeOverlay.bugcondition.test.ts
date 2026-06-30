@@ -262,7 +262,7 @@ describe('Property 1: Bug Condition — Mode 1 → Mode 2 transition and Mode 2 
         loadURL() {},
         loadFile() {},
         setIgnoreMouseEvents() {},
-        webContents: { send() {}, openDevTools() {} },
+        webContents: { send() {}, openDevTools() {}, setWindowOpenHandler: vi.fn(), on: vi.fn(), once: vi.fn() },
       };
       liveWindows.push(w);
       return w;
@@ -320,6 +320,7 @@ describe('Property 1: Bug Condition — Mode 1 → Mode 2 transition and Mode 2 
           }),
           on: vi.fn(),
           quit: vi.fn(),
+          disableHardwareAcceleration: vi.fn(),
           requestSingleInstanceLock: () => true,
           getPath: (_name: string) => path.resolve(PROJECT_ROOT, '.test-userdata'),
           commandLine: {
@@ -332,6 +333,9 @@ describe('Property 1: Bug Condition — Mode 1 → Mode 2 transition and Mode 2 
         const session = {
           defaultSession: {
             webRequest: { onHeadersReceived: vi.fn() },
+            setDisplayMediaRequestHandler: vi.fn(),
+            setPermissionRequestHandler: vi.fn(),
+            setPermissionCheckHandler: vi.fn(),
           },
         };
         const desktopCapturer = { getSources: () => Promise.resolve([]) };
@@ -347,7 +351,14 @@ describe('Property 1: Bug Condition — Mode 1 → Mode 2 transition and Mode 2 
           unregister: vi.fn(),
           unregisterAll: vi.fn(),
         };
-        return { app, BrowserWindow, ipcMain, session, desktopCapturer, screen, globalShortcut };
+        const shell = {
+          openExternal: vi.fn(),
+        };
+        const mockApi = { app, BrowserWindow, ipcMain, session, desktopCapturer, screen, globalShortcut, shell };
+        return {
+          default: mockApi,
+          ...mockApi,
+        };
       });
 
       // Replace OverlayManager with a no-op so its constructor does not fight
@@ -385,7 +396,7 @@ describe('Property 1: Bug Condition — Mode 1 → Mode 2 transition and Mode 2 
       expect(registeredHandlers.has('switch-to-overlay')).toBe(true);
     });
 
-    it('atomic Mode 2 transition: same instanceId, 380×80, frame=false, alpha=0, AOT="screen-saver"', async () => {
+    it('atomic Mode 2 transition: same instanceId, 480×80, frame=false, alpha=0, AOT="screen-saver"', async () => {
       const handler = registeredHandlers.get('switch-to-overlay');
       expect(typeof handler).toBe('function');
 
@@ -408,7 +419,7 @@ describe('Property 1: Bug Condition — Mode 1 → Mode 2 transition and Mode 2 
           const postState = snapshot(dashWin);
 
           expect(postState.singleBrowserWindowCount).toBe(1);
-          expect(postState.window.contentSize).toEqual({ width: 380, height: 80 });
+          expect(postState.window.contentSize).toEqual({ width: 480, height: 80 });
           expect(postState.window.frame).toBe(false);
           expect(postState.window.backgroundAlphaInMargin).toBe(0);
           expect(postState.window.alwaysOnTopLevel).toBe('screen-saver');

@@ -126,14 +126,15 @@ export function applyConfidenceFilter(
 
 // ---- Event types ----
 
-export type TranscriptionEvent = 'line' | 'interim' | 'error' | 'permission';
+export type TranscriptionEvent = 'line' | 'interim' | 'error' | 'permission' | 'vad-state';
 export type Off = () => void;
 
 export type TranscriptionEventCallback =
   | ((line: TranscriptionLine) => void)
   | ((interim: string) => void)
   | ((error: ZuleError) => void)
-  | ((status: 'granted' | 'denied' | 'prompt') => void);
+  | ((status: 'granted' | 'denied' | 'prompt') => void)
+  | ((state: { isSpeech: boolean; energy: number }) => void);
 
 export interface WebSpeechProviderOptions {
   /** Confidence threshold for final results. Default 0.30. */

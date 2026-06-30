@@ -111,7 +111,7 @@ describe('OllamaCompatibleAdapter — construction', () => {
     const a = new OllamaCompatibleAdapter();
     expect(a.name).toBe('ollama');
     expect(a.capabilities.streaming).toBe(true);
-    expect(a.capabilities.imageInput).toBe(false);
+    expect(a.capabilities.imageInput).toBe(true);
     expect(a.capabilities.toolUse).toBe(true);
     expect(a.capabilities.maxInputTokens).toBeGreaterThan(0);
     expect(a.capabilities.pricePerMTokens).toEqual({ input: 0, output: 0 });

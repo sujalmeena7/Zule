@@ -223,7 +223,7 @@ describe('Property 48: Retention rules eliminate overdue records', () => {
   it('keeps every in-bounds meeting, drops every overdue meeting, and bounds every transcript', () => {
     fc.assert(
       fc.property(
-        fc.array(meetingArb, { maxLength: 30 }),
+        fc.uniqueArray(meetingArb, { maxLength: 30, selector: (m) => m.id }),
         fc.integer({ min: 0, max: 10_000 }),
         fc.integer({ min: 0, max: 50 }),
         fc.integer({ min: 1_500_000_000_000, max: 2_600_000_000_000 }),

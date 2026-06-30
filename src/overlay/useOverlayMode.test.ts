@@ -42,7 +42,12 @@ vi.mock('../hooks/useElectronBridge', () => ({
 
 describe('useOverlayMode', () => {
   beforeEach(() => {
+    vi.useFakeTimers();
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('starts in compact mode by default', () => {
@@ -88,6 +93,10 @@ describe('useOverlayMode', () => {
 
     act(() => {
       result.current.setMode('compact');
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(300);
     });
 
     expect(mockResizeOverlay).toHaveBeenCalledWith(COMPACT_WIDTH, COMPACT_HEIGHT);

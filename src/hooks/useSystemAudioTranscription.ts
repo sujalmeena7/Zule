@@ -77,6 +77,8 @@ export function useSystemAudioTranscription(
   const providerRef = useRef<WhisperProvider | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const unsubscribesRef = useRef<Off[]>([]);
+  /** Guard against concurrent enable() calls racing through async preload. */
+  const isEnablingRef = useRef(false);
   /**
    * Effective `speechThreshold` used by the VAD gate for the next chunk.
    * Held in a ref (not state) so the wrapped `transcribeFn` reads the
@@ -129,14 +131,17 @@ export function useSystemAudioTranscription(
   }, [teardown]);
 
   const enable = useCallback(async () => {
-    if (providerRef.current) return; // already active
+    if (providerRef.current || isEnablingRef.current) return; // already active or in-flight
+    isEnablingRef.current = true;
     if (!isSupported) {
+      isEnablingRef.current = false;
       notifyError({ kind: 'transcription.unsupported' });
       return;
     }
 
     const bridge = window.electronAPI;
     if (!bridge?.whisperTranscribe) {
+      isEnablingRef.current = false;
       notifyError({ kind: 'transcription.unsupported' });
       setIsActive(false);
       return;
@@ -149,6 +154,7 @@ export function useSystemAudioTranscription(
     } catch (err) {
       const zuleError: ZuleError =
         err instanceof LoopbackError ? err.zuleError : { kind: 'transcription.audio-capture' };
+      isEnablingRef.current = false;
       notifyError(zuleError);
       setIsActive(false);
       return;
@@ -169,6 +175,7 @@ export function useSystemAudioTranscription(
       toast.error(
         'Could not load the local speech model. Mic transcription is unaffected.',
       );
+      isEnablingRef.current = false;
       teardown();
       setIsActive(false);
       return;
@@ -305,6 +312,8 @@ export function useSystemAudioTranscription(
       toast.error('Could not start system-audio transcription. Mic transcription is unaffected.');
       teardown();
       setIsActive(false);
+    } finally {
+      isEnablingRef.current = false;
     }
   }, [isSupported, language, disable, teardown, notifyError]);
 

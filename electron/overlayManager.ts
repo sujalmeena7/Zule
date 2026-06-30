@@ -163,7 +163,7 @@ export class OverlayManager {
         nodeIntegration: false,
         sandbox: false,
         backgroundThrottling: false,
-        webSecurity: false,
+        webSecurity: true,
       },
     });
 

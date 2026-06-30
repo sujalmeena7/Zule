@@ -80,29 +80,30 @@ async function ensureGeminiRegistered(apiKey: string | undefined): Promise<void>
 /**
  * Dynamically synchronizes provider registrations and priority list with the router
  * based on saved user database settings.
+ * Caches a hash of the config to skip redundant IndexedDB reads.
  */
+let lastSyncedConfigHash: string | null = null;
+
 async function ensureProvidersSynced(): Promise<void> {
   try {
     const savedProviders = await database.getSetting<any[]>('providers', []);
-    console.log('[aiProvider] ====== PROVIDER SYNC START ======');
-    console.log('[aiProvider] savedProviders from DB:', JSON.stringify(savedProviders, null, 2));
     if (!savedProviders || savedProviders.length === 0) {
-      console.log('[aiProvider] No saved providers in DB, using defaults only');
       return;
     }
 
+    // Skip re-registration if config hasn't changed since last sync
+    const configHash = JSON.stringify(savedProviders);
+    if (configHash === lastSyncedConfigHash) return;
+    lastSyncedConfigHash = configHash;
+
     // Sort providers by priority
     const sortedConfigs = [...savedProviders].sort((a, b) => a.priority - b.priority);
-    console.log('[aiProvider] Sorted configs:', sortedConfigs.map(c => `${c.id}(enabled=${c.enabled}, priority=${c.priority}, baseUrl=${c.baseUrl}, hasKey=${!!c.apiKeyCipher})`).join(', '));
 
     // Register active/enabled adapters
     for (const config of sortedConfigs) {
       if (!config.enabled) {
-        console.log(`[aiProvider] SKIP ${config.id} (disabled)`);
         continue;
       }
-
-      console.log(`[aiProvider] REGISTERING ${config.id}...`);
 
       if (config.id === 'gemini') {
         const { GeminiAdapter } = await import('./providers/gemini');
@@ -110,38 +111,24 @@ async function ensureProvidersSynced(): Promise<void> {
         if (geminiKey && geminiKey.trim()) {
           routerInstance.registerAdapter(new GeminiAdapter({ apiKey: geminiKey.trim() }));
           registeredGeminiKey = geminiKey;
-          console.log('[aiProvider] ✅ Gemini adapter registered (has key)');
-        } else {
-          console.log('[aiProvider] ⚠️ Gemini enabled but NO API key — skipping registration');
         }
       } else if (config.id === 'openai') {
         const { OpenAIAdapter } = await import('./providers/openai');
         if (config.apiKeyCipher && config.apiKeyCipher.trim()) {
           routerInstance.registerAdapter(new OpenAIAdapter({ apiKey: config.apiKeyCipher.trim() }));
-          console.log('[aiProvider] ✅ OpenAI adapter registered');
-        } else {
-          console.log('[aiProvider] ⚠️ OpenAI enabled but NO API key — skipping registration');
         }
       } else if (config.id === 'anthropic') {
         const { AnthropicAdapter } = await import('./providers/anthropic');
         if (config.apiKeyCipher && config.apiKeyCipher.trim()) {
           routerInstance.registerAdapter(new AnthropicAdapter({ apiKey: config.apiKeyCipher.trim() }));
-          console.log('[aiProvider] ✅ Anthropic adapter registered');
-        } else {
-          console.log('[aiProvider] ⚠️ Anthropic enabled but NO API key — skipping registration');
         }
       } else if (config.id === 'ollama') {
         const { OllamaCompatibleAdapter } = await import('./providers/ollama');
-        let rawUrl = config.baseUrl || 'http://localhost:11434';
-        let normalizedUrl = rawUrl;
-        if (normalizedUrl) {
-          normalizedUrl = normalizedUrl.replace(/\/+$/, '');
-          if (!normalizedUrl.endsWith('/v1')) {
-            normalizedUrl += '/v1';
-          }
+        let normalizedUrl = (config.baseUrl || 'http://localhost:11434').replace(/\/+$/, '');
+        if (!normalizedUrl.endsWith('/v1')) {
+          normalizedUrl += '/v1';
         }
         const modelId = config.apiKeyCipher?.trim() || 'llama3.1';
-        console.log(`[aiProvider] ✅ Ollama adapter registering — baseUrl=${normalizedUrl}, modelId=${modelId}`);
         routerInstance.registerAdapter(
           new OllamaCompatibleAdapter({
             baseUrl: normalizedUrl,
@@ -151,17 +138,14 @@ async function ensureProvidersSynced(): Promise<void> {
       } else if (config.id === 'simulation') {
         const { SimulationAdapter } = await import('./providers/simulation');
         routerInstance.registerAdapter(new SimulationAdapter());
-        console.log('[aiProvider] ✅ Simulation adapter registered');
       }
     }
 
     // Set router priority based on all enabled providers
     const priorityList = sortedConfigs.filter((p) => p.enabled).map((p) => p.id);
-    console.log('[aiProvider] Final priority list:', priorityList);
     if (priorityList.length > 0) {
       routerInstance.setPriority(priorityList);
     }
-    console.log('[aiProvider] ====== PROVIDER SYNC END ======');
   } catch (error) {
     console.error('[aiProvider] Failed to sync providers config:', error);
   }
@@ -270,9 +254,7 @@ export async function streamAIResponse(
   };
 
   try {
-    console.log('[aiProvider] Calling routerInstance.stream()...');
     await routerInstance.stream(prompt, routerCallbacks, { signal });
-    console.log('[aiProvider] routerInstance.stream() completed successfully');
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       throw error; // Let abort errors propagate
@@ -282,8 +264,7 @@ export async function streamAIResponse(
       throw error;
     }
     // Fallback: stream via simulation (preserves old behaviour)
-    console.warn('[aiProvider] ❌ AI streaming FAILED, falling back to simulation:', error);
-    console.warn('[aiProvider] Error details:', error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : error);
+    console.warn('[aiProvider] AI streaming failed, falling back to simulation:', error);
     const { SimulationAdapter } = await import('./providers/simulation');
     const simAdapter = new SimulationAdapter();
     await simAdapter.streamGenerate(prompt, routerCallbacks, { signal });

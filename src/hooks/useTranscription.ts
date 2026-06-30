@@ -58,7 +58,7 @@ export function useTranscription(opts: UseTranscriptionOptions = {}): UseTranscr
     provider: _providerType = 'web-speech',
     confidenceThreshold = 0.30,
     speakerId = 'speaker-1',
-    speakerRole = 'other',
+    speakerRole = 'user',
   } = opts;
 
   const [transcript, setTranscript] = useState<TranscriptionLine[]>([]);

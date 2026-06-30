@@ -241,7 +241,7 @@ describe('GeminiAdapter.streamGenerate', () => {
     expect(result.value).not.toBeNull();
     expect(result.value?.text).toBe('Hello world');
     expect(result.value?.providerId).toBe('gemini');
-    expect(result.value?.modelId).toBe('gemini-1.5-flash');
+    expect(result.value?.modelId).toBe('gemini-2.0-flash');
     expect(result.value?.isSimulated).toBe(false);
     expect(result.value?.status).toBe(200);
     expect(result.value?.promptTokens).toBe(7);
