@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, lazy, Suspense } from 'react';
-import { motion } from 'framer-motion';
+import { motion, MotionConfig } from 'framer-motion';
 import { useZule } from '../context/ZuleContext';
 import { Shield, Zap, Download, Play, Mic, Video, Smile, CirclePlay, Square, Globe, Mail, MessageCircle, Check } from 'lucide-react';
 import { FAQSection } from './FAQSection';
@@ -284,22 +284,28 @@ function LandingPageContent() {
         <section className="tools-ticker-section">
           <p className="tools-ticker-label">COMPATIBLE WITH EVERY TOOL</p>
           <div className="tools-ticker-wrapper">
-            <div className="tools-ticker-track">
-              {[...Array(4)].map((_, setIdx) => (
-                <div key={setIdx} className="tools-ticker-set">
-                  <div className="ticker-item">Zoom</div>
-                  <div className="ticker-dot" />
-                  <div className="ticker-item">Slack</div>
-                  <div className="ticker-dot" />
-                  <div className="ticker-item">Microsoft Teams</div>
-                  <div className="ticker-dot" />
-                  <div className="ticker-item">Google Meet</div>
-                  <div className="ticker-dot" />
-                  <div className="ticker-item">Webex</div>
-                  <div className="ticker-dot" />
-                </div>
-              ))}
-            </div>
+            <MotionConfig reducedMotion="never">
+              <motion.div 
+                className="tools-ticker-track"
+                animate={{ x: ["0%", "-25%"] }}
+                transition={{ duration: 15, ease: "linear", repeat: Infinity }}
+              >
+                {[...Array(4)].map((_, setIdx) => (
+                  <div key={setIdx} className="tools-ticker-set">
+                    <div className="ticker-item">Zoom</div>
+                    <div className="ticker-dot" />
+                    <div className="ticker-item">Slack</div>
+                    <div className="ticker-dot" />
+                    <div className="ticker-item">Microsoft Teams</div>
+                    <div className="ticker-dot" />
+                    <div className="ticker-item">Google Meet</div>
+                    <div className="ticker-dot" />
+                    <div className="ticker-item">Webex</div>
+                    <div className="ticker-dot" />
+                  </div>
+                ))}
+              </motion.div>
+            </MotionConfig>
           </div>
         </section>
 

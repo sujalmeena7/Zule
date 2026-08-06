@@ -86,8 +86,11 @@ const DEFAULT_OBSERVED_SECTION_IDS: readonly string[] = [
   'faq',
 ];
 
-/** Framer-motion transition spec — 300ms sits inside Req 4.3's [200, 400]ms band. */
-const INDICATOR_TRANSITION = { duration: 0.3 } as const;
+/** Framer-motion transition spec — spring-like cubic-bezier for a premium organic feel. */
+const INDICATOR_TRANSITION = {
+  duration: 0.35,
+  ease: [0.16, 1, 0.3, 1],
+} as const;
 
 /**
  * Multiple IntersectionObserver thresholds so the indicator updates on
@@ -210,7 +213,21 @@ export function ActiveIndicator({
       setTarget(null);
       return;
     }
-    setTarget({ left: el.offsetLeft, width: el.offsetWidth });
+    // Use getBoundingClientRect relative to the parent shell for accurate
+    // positioning. The old offsetLeft/offsetWidth approach was unreliable
+    // because it depended on the offset parent chain, causing the indicator
+    // to misalign and visually highlight adjacent nav items.
+    const parent = el.parentElement?.parentElement; // .floating-navbar-links-shell
+    if (!parent) {
+      setTarget({ left: el.offsetLeft, width: el.offsetWidth });
+      return;
+    }
+    const parentRect = parent.getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+    setTarget({
+      left: elRect.left - parentRect.left,
+      width: elRect.width,
+    });
   }, [activeId, itemRefs, sections, viewportCenterY]);
 
   if (target === null) return null;

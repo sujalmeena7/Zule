@@ -18,9 +18,34 @@
   --accent-teal: #14b8a6;
   --accent-indigo: #6366f1;
   --accent-pink: #f472b6;
-  --nav-bg: rgba(20, 20, 32, 0.55);
-  --nav-border: rgba(255, 255, 255, 0.10);
-  --nav-blur: 14px;
+  --nav-bg: rgba(16, 16, 28, 0.65);
+  --nav-border: rgba(255, 255, 255, 0.12);
+  --nav-blur: 24px;
+
+  /* Premium navbar surface tokens */
+  --nav-surface-base: rgba(10, 10, 22, 0.72);
+  --nav-surface-layer: rgba(255, 255, 255, 0.03);
+  --nav-edge: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.14) 0%,
+    rgba(255, 255, 255, 0.06) 50%,
+    rgba(255, 255, 255, 0.10) 100%
+  );
+  --nav-inset: inset 0 1px 0 rgba(255, 255, 255, 0.09);
+  --nav-shadow-ambient: 0 8px 32px rgba(0, 0, 0, 0.5);
+  --nav-shadow-directional: 0 2px 6px rgba(0, 0, 0, 0.35);
+
+  /* Navbar indicator tokens */
+  --nav-indicator-fill: rgba(255, 255, 255, 0.08);
+  --nav-indicator-edge: 1px solid rgba(255, 255, 255, 0.11);
+  --nav-indicator-inset: inset 0 1px 0 rgba(255, 255, 255, 0.10);
+  --nav-indicator-glow: 0 0 10px rgba(99, 102, 241, 0.15);
+
+  /* Navbar accent-glow tokens (drawn from existing teal, indigo, pink) */
+  --nav-glow-teal: rgba(20, 184, 166, 0.08);
+  --nav-glow-indigo: rgba(99, 102, 241, 0.10);
+  --nav-glow-pink: rgba(244, 114, 182, 0.06);
+  --nav-accent-glow: 0 0 40px var(--nav-glow-indigo), 0 0 80px var(--nav-glow-teal);
   --perspective-card: 1200px;
   --perspective-cta: 900px;
   --shadow-float: 0 12px 40px -16px rgba(0, 0, 0, 0.6), 0 0 60px -20px rgba(99, 102, 241, 0.25);
@@ -1315,7 +1340,6 @@
 .tools-ticker-track {
   display: flex;
   width: max-content;
-  animation: ticker-scroll 25s linear infinite;
 }
 
 .tools-ticker-set {
@@ -1339,11 +1363,6 @@
   border-radius: 50%;
   background: #334155;
   flex-shrink: 0;
-}
-
-@keyframes ticker-scroll {
-  0% { transform: translateX(0); }
-  100% { transform: translateX(-25%); }
 }
 
 

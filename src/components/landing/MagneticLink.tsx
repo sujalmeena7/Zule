@@ -26,10 +26,10 @@ import { motion, useMotionValue, animate } from 'framer-motion';
 import { useLandingMotion } from './LandingMotionContext';
 
 /** Activation radius in CSS pixels (Req 4.1). */
-const ACTIVATION_RADIUS = 60;
+const ACTIVATION_RADIUS = 40;
 
 /** Maximum magnetic displacement in CSS pixels (Req 4.1). */
-const MAX_DISPLACEMENT = 12;
+const MAX_DISPLACEMENT = 4;
 
 /** Leave-transition duration in seconds — within the 150–350 ms band (Req 4.2). */
 const LEAVE_DURATION_S = 0.25;
