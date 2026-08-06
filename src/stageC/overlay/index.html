@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="dark" />
+  <title>Zule Overlay</title>
+  <!--
+    Stage C Overlay HTML Shell
+    Loaded by the WebView2 sidecar from the packaged virtual host.
+    No Electron preload, no Node integration — pure browser environment.
+    Requirements: 7.11–7.12, 14.1–14.2
+  -->
+  <style>
+    /* Transparent background for composition */
+    html, body, #root {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: transparent;
+      overflow: hidden;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="./main.tsx"></script>
+</body>
+</html>

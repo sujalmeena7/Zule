@@ -1,0 +1,262 @@
+name: Stage C Release Gates
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_version:
+        description: App Core version under test
+        required: true
+        type: string
+      sidecar_version:
+        description: Sidecar version under test
+        required: true
+        type: string
+  push:
+    branches: ['release/*']
+    paths:
+      - 'electron/stageC/**'
+      - 'native/stage-c/**'
+      - 'scripts/stage-c/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/stage-c-release-gates.yml'
+
+concurrency:
+  group: stage-c-gates-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  STAGE_C_IMAGE_MANIFEST: 'C:\ProgramData\Zule\stage-c-image.json'
+  STAGE_C_COLLECTOR_MANIFEST: 'C:\ProgramData\Zule\stage-c-collectors.json'
+
+jobs:
+  build:
+    name: Build, sign, then hash finalized artifacts
+    environment: stage-c-release
+    runs-on: [self-hosted, Windows, X64, stage-c-win11-24h2-v1]
+    outputs:
+      build_hash: ${{ steps.hash.outputs.build_hash }}
+      app_version: ${{ steps.versions.outputs.app_version }}
+      sidecar_version: ${{ steps.versions.outputs.sidecar_version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require reviewed npm lockfile
+        shell: pwsh
+        run: |
+          if (-not (Test-Path -LiteralPath package-lock.json -PathType Leaf)) {
+            throw 'package-lock.json is required. Follow docs/stage-c-release-runner-setup.md; do not resolve dependencies in CI.'
+          }
+
+      - name: Install exact JavaScript dependencies
+        run: npm ci --ignore-scripts
+        shell: pwsh
+
+      - name: Resolve release versions
+        id: versions
+        shell: pwsh
+        run: |
+          $packageVersion = node -p "require('./package.json').version"
+          $appVersion = '${{ github.event.inputs.app_version }}'
+          $sidecarVersion = '${{ github.event.inputs.sidecar_version }}'
+          if ([string]::IsNullOrWhiteSpace($appVersion)) { $appVersion = $packageVersion }
+          if ([string]::IsNullOrWhiteSpace($sidecarVersion)) { $sidecarVersion = $packageVersion }
+          "app_version=$appVersion" >> $env:GITHUB_OUTPUT
+          "sidecar_version=$sidecarVersion" >> $env:GITHUB_OUTPUT
+
+      - name: Verify reviewed lock, image, and exact toolchain
+        run: npm run stage-c:verify-toolchain
+        shell: pwsh
+        env:
+          STAGE_C_EXPECTED_IMAGE_LABEL: stage-c-win11-24h2-v1
+
+      - name: Build explicit Stage C vcxproj
+        run: npm run stage-c:build
+        shell: pwsh
+        env:
+          STAGE_C_EXPECTED_IMAGE_LABEL: stage-c-win11-24h2-v1
+
+      - name: Require Azure Artifact Signing OIDC configuration
+        shell: pwsh
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TRUSTED_SIGNING_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID }}
+          SIGNING_ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          SIGNING_ACCOUNT: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          SIGNING_PROFILE: ${{ vars.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          SIGNING_SUBJECT: ${{ vars.AZURE_TRUSTED_SIGNING_EXPECTED_SUBJECT }}
+          TIMESTAMP_URL: ${{ vars.AZURE_TRUSTED_SIGNING_TIMESTAMP_URL }}
+        run: |
+          $required = 'AZURE_CLIENT_ID','AZURE_TENANT_ID','AZURE_SUBSCRIPTION_ID','SIGNING_ENDPOINT','SIGNING_ACCOUNT','SIGNING_PROFILE','SIGNING_SUBJECT','TIMESTAMP_URL'
+          $missing = $required | Where-Object { [string]::IsNullOrWhiteSpace((Get-Item "Env:$_").Value) }
+          if ($missing) { throw "Azure Artifact Signing configuration is absent: $($missing -join ', ')" }
+
+      - name: Azure login with GitHub OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TRUSTED_SIGNING_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID }}
+
+      - name: Sign Stage C executable with preinstalled Azure signing module
+        shell: pwsh
+        env:
+          SIGNING_ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          SIGNING_ACCOUNT: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          SIGNING_PROFILE: ${{ vars.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          TIMESTAMP_URL: ${{ vars.AZURE_TRUSTED_SIGNING_TIMESTAMP_URL }}
+        run: |
+          Import-Module ArtifactSigning -RequiredVersion 0.1.8 -ErrorAction Stop
+          Invoke-ArtifactSigning -Endpoint $env:SIGNING_ENDPOINT `
+            -CodeSigningAccountName $env:SIGNING_ACCOUNT `
+            -CertificateProfileName $env:SIGNING_PROFILE `
+            -FilesFolder (Resolve-Path 'dist/stage-c').Path `
+            -FilesFolderFilter 'exe' -FileDigest SHA256 `
+            -TimestampRfc3161 $env:TIMESTAMP_URL -TimestampDigest SHA256
+
+      - name: Verify finalized Authenticode signature
+        shell: pwsh
+        env:
+          SIGNING_SUBJECT: ${{ vars.AZURE_TRUSTED_SIGNING_EXPECTED_SUBJECT }}
+        run: |
+          $signature = Get-AuthenticodeSignature -LiteralPath 'dist/stage-c/ZuleUI.exe'
+          if ($signature.Status -ne 'Valid') { throw "Signature is not explicitly valid: $($signature.Status)" }
+          if ($signature.SignerCertificate.Subject -ne $env:SIGNING_SUBJECT) { throw 'Signer subject does not match the reviewed publisher.' }
+
+      - name: Compute hashes from finalized signed artifacts
+        id: hash
+        shell: pwsh
+        run: |
+          npm run stage-c:hash-artifacts -- --artifacts-dir dist/stage-c --output dist/stage-c-manifest/artifact-manifest.json
+          $manifest = Get-Content dist/stage-c-manifest/artifact-manifest.json -Raw | ConvertFrom-Json
+          "build_hash=$($manifest.buildHash)" >> $env:GITHUB_OUTPUT
+
+      - name: Upload finalized signed artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage-c-artifacts
+          path: dist/stage-c/
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload artifact manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage-c-artifact-manifest
+          path: dist/stage-c-manifest/artifact-manifest.json
+          retention-days: 365
+          if-no-files-found: error
+
+  gates:
+    name: Gates (${{ matrix.os_build }}, WV2 ${{ matrix.webview2_version }})
+    needs: build
+    runs-on: [self-hosted, Windows, X64, "${{ matrix.runner_label }}"]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os_build: win10_22h2, webview2_version: '119.0.2151.0', runner_label: stage-c-win10-22h2-v1 }
+          - { os_build: win10_22h2, webview2_version: '120.0.2210.0', runner_label: stage-c-win10-22h2-v1 }
+          - { os_build: win10_22h2, webview2_version: '124.0.2478.0', runner_label: stage-c-win10-22h2-v1 }
+          - { os_build: win11_23h2, webview2_version: '119.0.2151.0', runner_label: stage-c-win11-23h2-v1 }
+          - { os_build: win11_23h2, webview2_version: '120.0.2210.0', runner_label: stage-c-win11-23h2-v1 }
+          - { os_build: win11_23h2, webview2_version: '124.0.2478.0', runner_label: stage-c-win11-23h2-v1 }
+          - { os_build: win11_24h2, webview2_version: '119.0.2151.0', runner_label: stage-c-win11-24h2-v1 }
+          - { os_build: win11_24h2, webview2_version: '120.0.2210.0', runner_label: stage-c-win11-24h2-v1 }
+          - { os_build: win11_24h2, webview2_version: '124.0.2478.0', runner_label: stage-c-win11-24h2-v1 }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require npm lockfile
+        shell: pwsh
+        run: if (-not (Test-Path package-lock.json)) { throw 'package-lock.json is required' }
+      - name: Install exact JavaScript dependencies
+        run: npm ci --ignore-scripts
+        shell: pwsh
+      - uses: actions/download-artifact@v4
+        with:
+          name: stage-c-artifacts
+          path: dist/stage-c
+      - uses: actions/download-artifact@v4
+        with:
+          name: stage-c-artifact-manifest
+          path: dist/stage-c-manifest
+      - name: Verify reviewed image, toolchain, and preinstalled runtime
+        run: npm run stage-c:verify-toolchain
+        shell: pwsh
+        env:
+          STAGE_C_EXPECTED_IMAGE_LABEL: ${{ matrix.runner_label }}
+          STAGE_C_REQUIRED_WEBVIEW2_RUNTIME: ${{ matrix.webview2_version }}
+      - name: Execute real collectors for this row
+        run: |
+          npm run stage-c:run-gates -- `
+            --artifact-manifest dist/stage-c-manifest/artifact-manifest.json `
+            --artifacts-dir dist/stage-c `
+            --os-build "${{ matrix.os_build }}" --architecture x64 `
+            --webview2-version "${{ matrix.webview2_version }}" `
+            --app-version "${{ needs.build.outputs.app_version }}" `
+            --sidecar-version "${{ needs.build.outputs.sidecar_version }}" `
+            --output-dir "evidence/${{ matrix.os_build }}-x64-${{ matrix.webview2_version }}"
+        shell: pwsh
+        env:
+          STAGE_C_EXPECTED_IMAGE_LABEL: ${{ matrix.runner_label }}
+          STAGE_C_REQUIRED_WEBVIEW2_RUNTIME: ${{ matrix.webview2_version }}
+      - name: Upload gate evidence or collector failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-${{ matrix.os_build }}-x64-${{ matrix.webview2_version }}
+          path: evidence/
+          retention-days: 90
+          if-no-files-found: error
+
+  assemble:
+    name: Assemble immutable evidence and decide
+    needs: [build, gates]
+    runs-on: [self-hosted, Windows, X64, stage-c-win11-24h2-v1]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require npm lockfile
+        shell: pwsh
+        run: if (-not (Test-Path package-lock.json)) { throw 'package-lock.json is required' }
+      - name: Install exact JavaScript dependencies
+        run: npm ci --ignore-scripts
+        shell: pwsh
+      - name: Verify reviewed assembly image
+        run: npm run stage-c:verify-toolchain
+        shell: pwsh
+        env:
+          STAGE_C_EXPECTED_IMAGE_LABEL: stage-c-win11-24h2-v1
+      - uses: actions/download-artifact@v4
+        with:
+          name: stage-c-artifacts
+          path: dist/stage-c
+      - uses: actions/download-artifact@v4
+        with:
+          name: stage-c-artifact-manifest
+          path: dist/stage-c-manifest
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: evidence-*
+          path: collected-evidence
+          merge-multiple: false
+      - name: Assemble complete real evidence
+        run: |
+          npm run stage-c:assemble-evidence -- `
+            --artifact-manifest dist/stage-c-manifest/artifact-manifest.json `
+            --artifacts-dir dist/stage-c `
+            --evidence-dir collected-evidence `
+            --output final-evidence.json
+        shell: pwsh
+      - name: Upload final evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-evidence-${{ needs.build.outputs.build_hash }}
+          path: final-evidence.json
+          retention-days: 365
+          if-no-files-found: error

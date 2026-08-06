@@ -49,6 +49,18 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id: string) {
+          // 3D hero stack — Hero_3D_Canvas (landing-page-3d-enhancement Req 2.6, 11.3)
+          // Routed into its own async chunk so `three` and the R3F wrappers
+          // only download when LandingPage lazily imports Hero3DCanvas.
+          // Trailing `/` on `three` keeps unrelated packages like
+          // `three-mesh-bvh` or `three-stdlib` out of this chunk.
+          if (
+            id.includes('node_modules/three/') ||
+            id.includes('node_modules/@react-three/fiber') ||
+            id.includes('node_modules/@react-three/drei')
+          ) {
+            return 'vendor-three';
+          }
           // Heavy ML runtime — Vector_Index + Whisper (Requirement 21.1)
           if (id.includes('@xenova/transformers') || id.includes('@huggingface/transformers') || id.includes('onnxruntime')) {
             return 'vendor-transformers';

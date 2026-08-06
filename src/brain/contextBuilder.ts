@@ -20,6 +20,7 @@
 import type { CopilotMode, ModeConfig } from './modePrompts';
 import type { TranscriptionLine } from '../types/transcription';
 import type { RedactionRule } from '../types/redaction';
+import type { RedactionAttestation } from '../types/ai';
 import { getSystemPrompt } from './modePrompts';
 import { apply as redact } from './redaction';
 
@@ -44,7 +45,7 @@ export interface PromptAssemblyTrace {
   totalTokens: number;
   budgetTokens: number;
   droppedSections: string[];
-  modalitiesUsed: ('audio' | 'screen' | 'knowledge' | 'memory')[];
+  modalitiesUsed: ('audio' | 'screen' | 'knowledge' | 'memory' | 'keyframe' | 'screenText')[];
 }
 
 export interface ContextWindow {
@@ -62,6 +63,16 @@ export interface ContextWindow {
   trace: PromptAssemblyTrace;
   /** Optional image attachments for adapters with `capabilities.imageInput` (Requirement 23.3). */
   images?: Array<{ mimeType: string; base64: string }>;
+  /**
+   * What redaction this build performed, for adapters that refuse to
+   * transmit unattested prompts (Requirements 2.9, 2.10 of the
+   * custom-openai-compatible-provider spec).
+   *
+   * `applied` is `true` only when every `ContextSection` this build emitted
+   * passed through the Redaction_Engine. An empty rule set still attests
+   * successfully (`ruleCount: 0`); `settings.skipRedaction` never does.
+   */
+  redaction: RedactionAttestation;
 }
 
 export interface KnowledgeChunk {
@@ -183,9 +194,20 @@ export function build(input: BuildInput): ContextWindow {
   const transcriptSection = buildTranscriptSection(finalTranscriptLines);
   const screenSection = buildScreenSection(screenText);
 
-  // 5) Apply redaction to all sections before cloud egress
+  // 5) Apply redaction to all sections before cloud egress.
+  //    Every section is counted as it is offered to the Redaction_Engine, and
+  //    counted a second time once it has passed through, so the attestation
+  //    stamped in step 10 is a measurement rather than an assumption.
+  let segmentsTotal = 0;
+  let segmentsRedacted = 0;
   const redactText = (text: string): string => {
-    if (skipRedaction || redactionRules.length === 0) return text;
+    segmentsTotal += 1;
+    // The local-only escape hatch: the section is emitted unredacted, so it
+    // is deliberately *not* counted as redacted and the attestation fails.
+    if (skipRedaction) return text;
+    segmentsRedacted += 1;
+    // An empty rule set is a completed application over the segment.
+    if (redactionRules.length === 0) return text;
     return redact(text, redactionRules);
   };
 
@@ -318,6 +340,16 @@ export function build(input: BuildInput): ContextWindow {
     modalitiesUsed,
   };
 
+  // 10) Stamp the redaction attestation (Requirements 2.9, 2.10).
+  //     Trimming only removes sections, so every section still present in the
+  //     prompt is covered by the counts taken in step 5.
+  const redaction: RedactionAttestation = {
+    applied: !skipRedaction && segmentsRedacted === segmentsTotal,
+    ruleCount: redactionRules.length,
+    segmentsTotal,
+    segmentsRedacted,
+  };
+
   return {
     systemPrompt,
     knowledge: finalKnowledge,
@@ -330,6 +362,7 @@ export function build(input: BuildInput): ContextWindow {
     trace,
     // Pass through images when adapter supports image input (Requirement 23.3)
     images: settings.images,
+    redaction,
   };
 }
 

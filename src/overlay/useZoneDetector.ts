@@ -27,6 +27,15 @@ export interface UseZoneDetectorOptions {
   isDragging: boolean;
   /** Whether a modal element (dropdown, menu) is open over the overlay. */
   isModalOpen: boolean;
+  /**
+   * When true, the zone detector becomes a no-op. Used when Stage B (layered)
+   * is active — there is no OS window to make click-through, so
+   * setIgnoreMouseEvents is meaningless. Hit-test responsibility moves to
+   * the InputForwarder's hitTestCache in that mode.
+   *
+   * Defaults to false (zone detector active).
+   */
+  isLayeredStrategy?: boolean;
 }
 
 /**
@@ -40,8 +49,15 @@ export interface UseZoneDetectorOptions {
  * When disabled, no listeners are attached and no bridge methods are called.
  */
 export function useZoneDetector(options: UseZoneDetectorOptions): void {
-  const { enabled, isDragging, isModalOpen } = options;
+  const { enabled, isLayeredStrategy } = options;
   const { api } = useElectronBridge();
+
+  // ── Stage B no-op (Req 8.7) ─────────────────────────────────────────────
+  // When strategy === 'layered', there is no OS window to make click-through.
+  // setIgnoreMouseEvents is meaningless; hit-test responsibility moves to
+  // the InputForwarder's hitTestCache. Keep existing -webkit-app-region CSS
+  // rules in place for Layer 0 / Stage A compatibility.
+  const effectiveEnabled = enabled && !isLayeredStrategy;
 
   // Track the current zone classification across evaluations.
   const currentZoneRef = useRef<ZoneClassification>('pass-through');
@@ -88,8 +104,8 @@ export function useZoneDetector(options: UseZoneDetectorOptions): void {
   }, [api]);
 
   useEffect(() => {
-    if (!enabled) {
-      // When disabled, do not attach listeners or call bridge methods.
+    if (!effectiveEnabled) {
+      // When disabled (or Stage B no-op), do not attach listeners or call bridge methods.
       // Cancel any pending RAF.
       if (rafHandleRef.current !== null) {
         cancelAnimationFrame(rafHandleRef.current);
@@ -117,5 +133,5 @@ export function useZoneDetector(options: UseZoneDetectorOptions): void {
         rafHandleRef.current = null;
       }
     };
-  }, [enabled, evaluate]);
+  }, [effectiveEnabled, evaluate]);
 }

@@ -180,7 +180,12 @@ const REFERENCE_PRELOAD_CHANNELS_NON_SWITCH = new Set<string>([
   'embed:generate',
   'embed:generateBatch',
   'embed:preload',
+  'focus-window',
   'login-via-browser',
+  'open-external',
+  'secureStorage:decrypt',
+  'secureStorage:encrypt',
+  'secureStorage:isAvailable',
   'update:cancel',
   'update:check',
   'update:defer',
@@ -214,7 +219,12 @@ const REFERENCE_MAIN_CHANNELS_NON_SWITCH = new Set<string>([
   'embed:generate',
   'embed:generateBatch',
   'embed:preload',
+  'focus-window',
   'login-via-browser',
+  'open-external',
+  'secureStorage:decrypt',
+  'secureStorage:encrypt',
+  'secureStorage:isAvailable',
   'update:cancel',
   'update:check',
   'update:defer',
@@ -397,7 +407,9 @@ describe('Dual-Mode Overlay — Preservation Properties (Property 2)', () => {
       { numRuns: 50 },
     );
 
-    // Also assert there is no setAlwaysOnTop call inside createMainWindow().
+    // Also assert there is no setAlwaysOnTop call inside createMainWindow()
+    // EXCEPT within the 'focus-window' IPC handler (which uses setAlwaysOnTop
+    // to steal focus on Windows — unrelated to the overlay Mode 2 transition).
     const createBodyStart = MAIN_SRC.indexOf('function createMainWindow');
     if (createBodyStart !== -1) {
       const open = MAIN_SRC.indexOf('{', createBodyStart);
@@ -415,7 +427,10 @@ describe('Dual-Mode Overlay — Preservation Properties (Property 2)', () => {
         }
       }
       const body = MAIN_SRC.slice(open, end + 1);
-      expect(/setAlwaysOnTop\s*\(/.test(body)).toBe(false);
+      // Strip any setAlwaysOnTop calls that are inside the focus-window handler
+      // (these are legitimate non-overlay uses for Windows focus-stealing).
+      const stripped = body.replace(/ipcMain\.handle\(\s*['"]focus-window['"][\s\S]*?\n\s*\}\);/g, '');
+      expect(/setAlwaysOnTop\s*\(/.test(stripped)).toBe(false);
     }
   });
 

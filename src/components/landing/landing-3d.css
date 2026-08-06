@@ -1,0 +1,338 @@
+/**
+ * landing-3d.css
+ *
+ * Co-located stylesheet for the landing page 3D enhancement feature.
+ * Imported alongside `LandingPage.css` from `LandingPage.tsx`.
+ *
+ * Tokens consumed (declared in `LandingPage.css` under `.landing-container`):
+ *   --nav-bg, --nav-border, --nav-blur
+ *   --perspective-card, --perspective-cta
+ *   --shadow-float
+ *   --accent-indigo, --accent-pink, --accent-teal
+ *
+ * Requirements: 3.1, 3.2, 6.4, 10.2, 10.4
+ */
+
+/* --------------------------------------------------------------------------
+ * Hero 3D canvas positioning
+ *
+ * Canvas spans the full hero section as an atmospheric backdrop. The
+ * orb itself is shifted upward in world space inside `Hero3DCanvas.tsx`
+ * (via `<Float position={[0, 0.6, 0]}>`) so it sits visually behind the
+ * headline rather than dead-center of the canvas.
+ *
+ * The elliptical mask focuses the visible orb high in the hero (where
+ * the headline reads) and fades the canvas edges into the dark page
+ * background so the crystal feels integrated, not pasted on.
+ *
+ * Pointer events disabled so clicks pass through to the CTAs.
+ * Requirement: 1.5
+ * -------------------------------------------------------------------------- */
+.hero-3d-canvas {
+  /*
+   * Canvas occupies a band centered on the hero section, sized so its
+   * vertical midpoint aligns roughly with the headline. The orb is at
+   * world origin (Hero3DCanvas.tsx) so it projects to the canvas's
+   * geometric center, which the CSS below pins to the headline area.
+   *
+   * `top: 18%` + `height: 56%` puts the canvas band from ~18% to ~74%
+   * down the hero — the headline sits around 35% so it lands right
+   * inside the orb. Max-width caps the canvas so the orb stays a
+   * focused centerpiece rather than spanning the full viewport.
+   */
+  position: absolute;
+  top: 18%;
+  left: 50%;
+  width: min(640px, 88vw);
+  height: 56%;
+  transform: translateX(-50%);
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.85;
+  mask-image: radial-gradient(
+    ellipse at center,
+    rgba(0, 0, 0, 1) 30%,
+    rgba(0, 0, 0, 0.6) 60%,
+    rgba(0, 0, 0, 0) 90%
+  );
+  -webkit-mask-image: radial-gradient(
+    ellipse at center,
+    rgba(0, 0, 0, 1) 30%,
+    rgba(0, 0, 0, 0.6) 60%,
+    rgba(0, 0, 0, 0) 90%
+  );
+}
+
+/* --------------------------------------------------------------------------
+ * Hero section vertical rhythm overrides
+ *
+ * The base `.hero-section` padding (120px top, 80px bottom) plus the
+ * default margins on the headline, separator, subtitle, and CTAs adds
+ * up to ~700 px of vertical space — taller than common laptop
+ * viewports. Tightening the rhythm here so the entire hero (badge
+ * through disclaimer) fits in roughly 600 px while keeping every
+ * element visible. Only overriding existing values; no other base
+ * styles touched.
+ * -------------------------------------------------------------------------- */
+.hero-section {
+  padding-top: 88px;
+  padding-bottom: 48px;
+}
+
+.hero-section .hero-badge-glow {
+  margin-bottom: 8px;
+}
+
+.hero-section .hero-title {
+  margin-bottom: 18px;
+}
+
+.hero-section .hero-separator {
+  margin: 12px auto;
+}
+
+.hero-section .hero-subtitle {
+  margin-bottom: 28px;
+}
+
+.hero-section .hero-actions {
+  margin-bottom: 16px;
+}
+
+@media (max-width: 768px) {
+  .hero-section {
+    padding-top: 72px;
+    padding-bottom: 36px;
+  }
+}
+
+/* --------------------------------------------------------------------------
+ * Floating glassmorphic navbar
+ * Centered via translateX, pill radius, backdrop blur from the token.
+ * Inner layout is a horizontal flex row: logo | items | (active indicator
+ * positioned absolutely behind the items).
+ * Requirements: 3.1, 3.2, 10.2
+ * -------------------------------------------------------------------------- */
+.floating-navbar {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  background: var(--nav-bg);
+  border: 1px solid var(--nav-border);
+  backdrop-filter: blur(var(--nav-blur));
+  -webkit-backdrop-filter: blur(var(--nav-blur));
+  border-radius: 999px;
+  box-shadow: var(--shadow-float);
+  z-index: 200;
+  font-family: inherit;
+}
+
+/* Logo wrapper inside the navbar — fixed circular footprint so the
+   `<img src="./favicon.svg" />` can't render at its intrinsic size. */
+.floating-navbar-logo {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  box-shadow: 0 0 18px var(--landing-accent-glow);
+}
+
+.floating-navbar-logo img {
+  width: 24px;
+  height: 24px;
+  display: block;
+}
+
+/* Nav item list reset — kill default `<ul>` bullets/margin/padding. */
+.floating-navbar-items {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.floating-navbar-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  z-index: 1;
+}
+
+/* All anchor children of items — reset browser defaults, apply text color. */
+.floating-navbar-items .magnetic-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 14px;
+  border-radius: 999px;
+  color: var(--landing-text-muted);
+  text-decoration: none;
+  font-size: 0.92rem;
+  font-weight: 500;
+  white-space: nowrap;
+  letter-spacing: -0.005em;
+  transition: color 0.35s var(--premium-ease);
+}
+
+.floating-navbar-items .magnetic-link:hover,
+.floating-navbar-items .magnetic-link:focus-visible {
+  color: var(--landing-text);
+  outline: none;
+}
+
+/* The "Get Zule" CTA — solid pill that pops against the rest of the row. */
+.floating-navbar-items .floating-navbar-cta {
+  background: #ffffff;
+  color: #000000;
+  padding: 8px 18px;
+  margin-left: 4px;
+  box-shadow: 0 2px 12px rgba(255, 255, 255, 0.15);
+  transition:
+    transform 0.35s var(--premium-ease),
+    box-shadow 0.35s var(--premium-ease),
+    background 0.35s var(--premium-ease);
+}
+
+.floating-navbar-items .floating-navbar-cta:hover,
+.floating-navbar-items .floating-navbar-cta:focus-visible {
+  color: #000000;
+  background: #f4f4f5;
+  box-shadow: 0 6px 22px rgba(255, 255, 255, 0.28);
+}
+
+/* Active indicator — translucent pill that slides behind the active link.
+   `ActiveIndicator.tsx` positions this absolutely with `left` and `width`
+   matching the active list item's `offsetLeft` / `offsetWidth`. */
+.nav-active-indicator {
+  top: 50%;
+  height: calc(100% - 4px);
+  transform: translateY(-50%);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* --------------------------------------------------------------------------
+ * Mobile — collapse the link row on narrow viewports so the pill stays
+ * usable. Logo + CTA remain visible.
+ * -------------------------------------------------------------------------- */
+@media (max-width: 720px) {
+  .floating-navbar {
+    gap: 12px;
+  }
+
+  .floating-navbar-items .floating-navbar-item:not([data-nav-id='download']) {
+    display: none;
+  }
+
+  .nav-active-indicator {
+    display: none;
+  }
+}
+
+/* --------------------------------------------------------------------------
+ * Perspective containers for the polish sections
+ * Establishes the 3D viewing frustum that child tilt cards / CTA buttons
+ * rotate within. Token values sit in the 800–1600 px band.
+ * Requirement: 6.4
+ * -------------------------------------------------------------------------- */
+.bento-grid {
+  perspective: var(--perspective-card);
+}
+
+.bottom-cta-section {
+  perspective: var(--perspective-cta);
+}
+
+/* --------------------------------------------------------------------------
+ * TiltCard grid integration
+ * Wrapping each `.bento-card` in `<TiltCard>` makes the `.tilt-card` div
+ * the direct child of `.bento-grid` — so `.bento-card.large { grid-column:
+ * span 2 }` no longer matches. The `:has()` selectors below forward the
+ * grid-span and min-height rules from the inner card to the wrapper.
+ * -------------------------------------------------------------------------- */
+.bento-grid > .tilt-card {
+  display: flex;
+}
+
+.bento-grid > .tilt-card:has(> .bento-card.large) {
+  grid-column: span 2;
+}
+
+@media (max-width: 768px) {
+  .bento-grid > .tilt-card:has(> .bento-card.large) {
+    grid-column: span 1;
+  }
+}
+
+/* --------------------------------------------------------------------------
+ * Animated wrappers
+ * `transform-style: preserve-3d` keeps inner children in the 3D space of
+ * their parent perspective container; `will-change` hints the compositor.
+ * -------------------------------------------------------------------------- */
+.tilt-card {
+  transform-style: preserve-3d;
+  will-change: transform;
+}
+
+.logo-3d {
+  perspective: 600px;
+  transform-style: preserve-3d;
+  will-change: transform;
+}
+
+.magnetic-link {
+  transform-style: preserve-3d;
+  will-change: transform;
+}
+
+.parallax-layer {
+  will-change: transform;
+}
+
+/* --------------------------------------------------------------------------
+ * Hero canvas stacking
+ *
+ * The canvas is at `z-index: 1` so it paints above `.hero-bg-container`
+ * (`z-index: 0`) but it would also paint above the static flex children
+ * (the badge, headline, CTAs) which have no explicit z-index. Push the
+ * copy to `z-index: 5` with `position: relative` so the icosahedron
+ * always sits behind the reading layer (Req 1.5).
+ * -------------------------------------------------------------------------- */
+.hero-section > .hero-badge-glow,
+.hero-section > .hero-title,
+.hero-section > .hero-separator,
+.hero-section > .hero-subtitle,
+.hero-section > .hero-actions,
+.hero-section > .hero-disclaimer {
+  position: relative;
+  z-index: 5;
+}
+
+/* --------------------------------------------------------------------------
+ * Reduced motion fallback
+ * Belt and suspenders alongside the JS gating so a hover that lands during
+ * a media-query transition can't briefly tilt the card.
+ * Zeros transforms on the four animated classes.
+ * Requirements: 4.5, 5.3, 6.5
+ * -------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .tilt-card,
+  .logo-3d,
+  .magnetic-link,
+  .parallax-layer {
+    transform: none !important;
+    transition: none !important;
+  }
+}

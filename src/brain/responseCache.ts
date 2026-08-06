@@ -12,6 +12,7 @@
 // Design reference: design.md §8. Response_Cache v2
 
 import { cosineSimilarity } from './vectorMath';
+import { hammingDistance } from '../utils/phash';
 import { STORE_RESPONSE_CACHE } from '../data/database';
 
 // ---------------------------------------------------------------------------
@@ -39,6 +40,17 @@ export interface CacheEntry {
   embedding: number[];
   response: AIResponse;
   lastUsedAt: number;
+  /** Perceptual hash of the frame used for screen-context entries (null for non-screen entries). */
+  frameHash: Uint8Array | null;
+}
+
+/**
+ * Cache key for screen-context lookups that include both query text
+ * and the perceptual hash of the frame.
+ */
+export interface ScreenCacheKey {
+  query: string;
+  frameHash: Uint8Array | null;
 }
 
 export interface ResponseCacheOptions {
@@ -48,6 +60,12 @@ export interface ResponseCacheOptions {
   maxEntries?: number;
   /** Whether to persist entries to IndexedDB (default true). */
   persist?: boolean;
+  /**
+   * Hamming distance threshold for frame-hash cache hits (default 10).
+   * A lookup is a hit only when the Hamming distance between the stored
+   * frame hash and the query frame hash is ≤ this value (out of 64 bits).
+   */
+  hashDistanceThreshold?: number;
   /**
    * Injected embedding function. Defaults to a dynamic import of
    * vectorStore.generateEmbedding to avoid circular dependencies.
@@ -66,6 +84,7 @@ export interface ResponseCacheOptions {
 
 export class ResponseCache {
   private readonly similarityThreshold: number;
+  private readonly hashDistanceThreshold: number;
   private readonly maxEntries: number;
   private readonly persistEnabled: boolean;
   private readonly generateEmbedding: (text: string) => Promise<number[]>;
@@ -82,6 +101,7 @@ export class ResponseCache {
 
   constructor(opts: ResponseCacheOptions = {}) {
     this.similarityThreshold = opts.similarityThreshold ?? 0.85;
+    this.hashDistanceThreshold = opts.hashDistanceThreshold ?? 10;
     this.maxEntries = opts.maxEntries ?? 256;
     this.persistEnabled = opts.persist ?? true;
     this.generateEmbedding = opts.generateEmbedding ?? defaultGenerateEmbedding;
@@ -166,6 +186,126 @@ export class ResponseCache {
       embedding,
       response,
       lastUsedAt: now,
+      frameHash: null,
+    };
+
+    // Evict LRU entries if at capacity
+    while (this.entries.size >= this.maxEntries) {
+      const oldest = this.entries.keys().next().value;
+      if (oldest !== undefined) {
+        this.entries.delete(oldest);
+        if (this.persistEnabled) {
+          void this.deletePersistedEntry(oldest);
+        }
+      } else {
+        break;
+      }
+    }
+
+    this.entries.set(id, entry);
+
+    if (this.persistEnabled) {
+      void this.persistEntry(entry);
+    }
+  }
+
+  /**
+   * Look up a cached response using both query similarity AND frame hash
+   * Hamming distance. Returns a hit only when both thresholds are met.
+   *
+   * Returns a miss when:
+   * - No Frame_Hash is available in the lookup key (Req 6.4)
+   * - The best-matching entry was stored without a Frame_Hash (Req 6.5)
+   * - The query similarity is below the configured threshold
+   * - The Hamming distance exceeds the configured hash threshold (Req 6.3)
+   */
+  async getWithFrame(key: ScreenCacheKey): Promise<{
+    hit: AIResponse | null;
+    similarity: number;
+    hashDistance: number;
+  }> {
+    await this.ensureLoaded();
+
+    // Req 6.4: Miss when no Frame_Hash available for request
+    if (!key.frameHash) {
+      return { hit: null, similarity: 0, hashDistance: 64 };
+    }
+
+    if (this.entries.size === 0) {
+      return { hit: null, similarity: 0, hashDistance: 64 };
+    }
+
+    const queryEmbedding = await this.generateEmbedding(key.query);
+    const queryVec = new Float32Array(queryEmbedding);
+
+    let bestEntry: CacheEntry | null = null;
+    let bestSimilarity = 0;
+    let bestHashDistance = 64;
+
+    for (const entry of this.entries.values()) {
+      // Req 6.5: Skip entries stored without a Frame_Hash
+      if (!entry.frameHash) {
+        continue;
+      }
+
+      const entryVec = new Float32Array(entry.embedding);
+      const sim = cosineSimilarity(queryVec, entryVec);
+
+      if (sim > bestSimilarity) {
+        bestSimilarity = sim;
+        bestEntry = entry;
+        bestHashDistance = hammingDistance(key.frameHash, entry.frameHash);
+      }
+    }
+
+    // Both thresholds must be met for a hit (Req 6.1, 6.2)
+    if (
+      bestEntry &&
+      bestSimilarity >= this.similarityThreshold &&
+      bestHashDistance <= this.hashDistanceThreshold
+    ) {
+      // Promote to MRU
+      this.entries.delete(bestEntry.id);
+      bestEntry.lastUsedAt = Date.now();
+      this.entries.set(bestEntry.id, bestEntry);
+
+      if (this.persistEnabled) {
+        void this.persistEntry(bestEntry);
+      }
+
+      const served: AIResponse = { ...bestEntry.response, fromCache: true };
+      this.emitTelemetry({ kind: 'cache.hit', similarity: bestSimilarity });
+
+      return { hit: served, similarity: bestSimilarity, hashDistance: bestHashDistance };
+    }
+
+    return { hit: null, similarity: bestSimilarity, hashDistance: bestHashDistance };
+  }
+
+  /**
+   * Store a response keyed to both query embedding and frame hash.
+   * Applies the same validation rules as `set` (rejects simulated,
+   * empty text, non-2xx responses).
+   */
+  async setWithFrame(key: ScreenCacheKey, response: AIResponse): Promise<void> {
+    // Gate: refuse invalid entries (same rules as `set`)
+    if (response.isSimulated) return;
+    if (!response.text || response.text.trim() === '') return;
+    if (response.status < 200 || response.status >= 300) return;
+
+    await this.ensureLoaded();
+
+    const embedding = await this.generateEmbedding(key.query);
+    const id = generateCacheId();
+    const now = Date.now();
+
+    const entry: CacheEntry = {
+      id,
+      query: key.query,
+      embedding,
+      response,
+      lastUsedAt: now,
+      frameHash: key.frameHash,
     };
 
     // Evict LRU entries if at capacity

@@ -14,6 +14,8 @@
 import type { CopilotMode, ModeConfig } from './modePrompts';
 import { build } from './contextBuilder';
 import type { MemoryChunk } from './contextBuilder';
+import type { RedactionRule } from '../types/redaction';
+import type { RedactionAttestation } from '../types/ai';
 import { database as knowledgeBase } from '../data/database';
 import { MemoryStore } from './memoryStore';
 import type { SearchResult } from './memoryStore';
@@ -44,12 +46,22 @@ export interface ContextWindow {
   screenContext: string;
   userQuery: string;
   fullPrompt: string;
-  /** Modalities that contributed to the assembled prompt (Requirement 23.4). */
-  modalitiesUsed?: ('audio' | 'screen' | 'knowledge' | 'memory')[];
+  /** Modalities that contributed to the assembled prompt (Requirement 23.4, 8.4). */
+  modalitiesUsed?: ('audio' | 'screen' | 'knowledge' | 'memory' | 'keyframe' | 'screenText')[];
   /** Citation info for rendering citation chips (Requirements 5.5, 24.2). */
   citations?: CitationInfo[];
   /** Optional image attachments for adapters with `capabilities.imageInput` (Requirement 23.3). */
   images?: Array<{ mimeType: string; base64: string }>;
+  /**
+   * What redaction the underlying Context_Builder performed, passed straight
+   * through so downstream mappers (`aiProvider.toPromptInput`) can hand it to
+   * adapters that refuse to transmit unattested prompts.
+   *
+   * Optional so the many existing construction sites of this legacy shape keep
+   * compiling; `buildContextWindow` always populates it.
+   * Requirements 2.9, 2.10 (custom-openai-compatible-provider).
+   */
+  redaction?: RedactionAttestation;
 }
 
 // ---------------------------------------------------------------------
@@ -170,6 +182,20 @@ export async function buildContextWindow(
     // Memory store might not be available yet
   }
 
+  // Load the User's redaction rules so this path redacts before egress
+  // instead of opting out (Requirement 2.9). A missing or unreadable setting
+  // degrades to an empty rule set, which still produces a *passing*
+  // attestation — every segment went through the Redaction_Engine, there was
+  // simply nothing to match. Opting out via `skipRedaction` would instead
+  // stamp `applied: false` and block the custom provider entirely.
+  let redactionRules: RedactionRule[] = [];
+  try {
+    redactionRules = await knowledgeBase.getSetting<RedactionRule[]>('redactionRules', []);
+  } catch {
+    // Settings store might not be initialized yet
+  }
+  if (!Array.isArray(redactionRules)) redactionRules = [];
+
   const knowledgeChunks = kbChunks.map((text) => ({ text }));
 
   // Adapt legacy transcript lines to new shape
@@ -186,7 +212,10 @@ export async function buildContextWindow(
     countTokens: countTokensApprox,
     settings: {
       customModes,
-      skipRedaction: true, // Legacy path did not redact
+      redactionRules,
+      // Redact on this path too, so the prompts it produces carry a passing
+      // attestation and are eligible for cloud providers (Requirement 2.9).
+      skipRedaction: false,
       images: options?.images,
     },
   });
@@ -242,5 +271,9 @@ export async function buildContextWindow(
     modalitiesUsed: result.trace.modalitiesUsed,
     citations,
     images: result.images,
+    // Pass the Context_Builder's measurement straight through so
+    // `aiProvider.toPromptInput` can forward it to the adapters
+    // (Requirements 2.9, 2.10).
+    redaction: result.redaction,
   };
 }

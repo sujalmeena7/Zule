@@ -21,5 +21,5 @@
   // `rootDir: ".."` is required so the cross-folder file is permitted; the
   // electron build is produced by Vite/Rollup, not tsc, so the wider
   // rootDir has no effect on emit.
-  "include": ["*.ts", "../src/types/vectorIndex.ts"]
+  "include": ["*.ts", "win32/**/*.ts", "stageC/**/*.ts", "../src/types/vectorIndex.ts"]
 }

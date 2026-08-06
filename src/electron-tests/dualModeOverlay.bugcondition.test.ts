@@ -354,7 +354,21 @@ describe('Property 1: Bug Condition — Mode 1 → Mode 2 transition and Mode 2 
         const shell = {
           openExternal: vi.fn(),
         };
-        const mockApi = { app, BrowserWindow, ipcMain, session, desktopCapturer, screen, globalShortcut, shell };
+        const Tray = vi.fn(() => ({
+          setToolTip: vi.fn(),
+          setContextMenu: vi.fn(),
+          on: vi.fn(),
+          destroy: vi.fn(),
+        }));
+        const Menu = {
+          buildFromTemplate: vi.fn(() => ({})),
+        };
+        const safeStorage = {
+          isEncryptionAvailable: () => true,
+          encryptString: (s: string) => Buffer.from(s),
+          decryptString: (b: Buffer) => b.toString(),
+        };
+        const mockApi = { app, BrowserWindow, ipcMain, session, desktopCapturer, screen, globalShortcut, shell, Tray, Menu, safeStorage };
         return {
           default: mockApi,
           ...mockApi,

@@ -11,6 +11,11 @@ import { MODE_CONFIGS, type CopilotMode } from '../brain/modePrompts';
 import { formatDuration, formatRelativeTime } from '../utils/formatters';
 import { useAutoUpdate } from '../hooks/useAutoUpdate';
 import { UpdateBanner } from './UpdateBanner';
+import { useState } from 'react';
+import { useSubscription } from '../context/SubscriptionContext';
+import { UpgradeModal } from './UpgradeModal';
+import { Lock } from 'lucide-react';
+import type { GatedFeature } from '../types/subscription';
 
 import './Dashboard.css';
 
@@ -31,6 +36,37 @@ export function Dashboard() {
 
   const { state: updateState, dismissed, download, cancel, install, defer, dismiss } = useAutoUpdate();
 
+  const { isFeatureAvailable, isLimitReached, incrementUsage, limits } = useSubscription();
+  const [upgradeModal, setUpgradeModal] = useState<{
+    reason: 'meeting-limit' | 'feature-locked';
+    feature?: GatedFeature;
+  } | null>(null);
+
+  const handleStartSession = (mode?: string) => {
+    if (isLimitReached('meetingsPerDay')) {
+      setUpgradeModal({ reason: 'meeting-limit' });
+      return;
+    }
+
+    if (mode) {
+      if (TEMPLATE_CARDS.some(c => c.mode === mode)) {
+        const feature = `copilot.mode.${mode}` as GatedFeature;
+        if (!isFeatureAvailable(feature)) {
+          setUpgradeModal({ reason: 'feature-locked', feature });
+          return;
+        }
+      } else {
+        if (!isFeatureAvailable('copilot.custom-modes')) {
+          setUpgradeModal({ reason: 'feature-locked', feature: 'copilot.custom-modes' });
+          return;
+        }
+      }
+    }
+
+    incrementUsage('meetingCount');
+    startCopilot(mode);
+  };
+
   const stats = useMemo(() => {
     let totalTime = 0, totalSuggestions = 0, totalConfidence = 0;
     for (const m of meetings) {
@@ -46,7 +82,12 @@ export function Dashboard() {
     };
   }, [meetings]);
 
-  const recentMeetings = useMemo(() => [...meetings].reverse(), [meetings]);
+  const recentMeetings = useMemo(() => {
+    const cutoff = Date.now() - (limits.historyRetentionDays * 24 * 60 * 60 * 1000);
+    return [...meetings]
+      .filter(m => m.startedAt >= cutoff)
+      .reverse();
+  }, [meetings, limits.historyRetentionDays]);
 
   return (
     <div className="dashboard">
@@ -61,6 +102,14 @@ export function Dashboard() {
         onDismiss={dismiss}
       />
 
+      {upgradeModal && (
+        <UpgradeModal
+          reason={upgradeModal.reason}
+          feature={upgradeModal.feature}
+          onClose={() => setUpgradeModal(null)}
+        />
+      )}
+
       {/* Hero Section */}
       <section className="dash-hero">
         <div className="hero-content">
@@ -70,7 +119,7 @@ export function Dashboard() {
           <p className="hero-subtitle">
             Real-time suggestions, live transcription, and smart coaching — all completely invisible to your audience.
           </p>
-          <button className="primary-btn" onClick={() => startCopilot()}>
+          <button className="primary-btn" onClick={() => handleStartSession()}>
             <Play size={18} fill="currentColor" />
             Start Session
           </button>
@@ -84,7 +133,7 @@ export function Dashboard() {
 
       {/* Bento Grid Layout */}
       <div className="bento-grid">
-        
+
         {/* Stats Row */}
         <div className="bento-card bento-stats">
           <div className="stat-item">
@@ -133,7 +182,7 @@ export function Dashboard() {
               Recent Sessions
             </h2>
           </div>
-          
+
           {meetings.length === 0 ? (
             <div className="empty-state">
               <Sparkles size={48} />
@@ -157,14 +206,14 @@ export function Dashboard() {
                     </div>
                   </div>
                   <div className="meeting-actions">
-                    <button 
-                      className="btn-icon" 
+                    <button
+                      className="btn-icon"
                       title="View Details"
                     >
                       <ChevronRight size={16} />
                     </button>
-                    <button 
-                      className="btn-icon danger" 
+                    <button
+                      className="btn-icon danger"
                       onClick={(e) => {
                         e.stopPropagation();
                         deleteMeeting(meeting.id);
@@ -189,36 +238,50 @@ export function Dashboard() {
             </h2>
           </div>
           <div className="template-list">
-            {customModes.map((mode) => (
-              <div 
-                key={mode.id} 
-                className="template-card"
-                onClick={() => startCopilot(mode.id)}
-              >
-                <div className="template-icon" style={{ background: 'linear-gradient(135deg, #a855f7, #ec4899)' }}>
-                  <Wand2 size={22} color="white" />
+            {customModes.map((mode) => {
+              const isLocked = !isFeatureAvailable('copilot.custom-modes');
+              return (
+                <div
+                  key={mode.id}
+                  className={`template-card ${isLocked ? 'locked' : ''}`}
+                  onClick={() => handleStartSession(mode.id)}
+                  style={{ opacity: isLocked ? 0.6 : 1 }}
+                >
+                  <div className="template-icon" style={{ background: 'linear-gradient(135deg, #a855f7, #ec4899)' }}>
+                    <Wand2 size={22} color="white" />
+                  </div>
+                  <div className="template-info">
+                    <span className="template-name">
+                      {mode.label}
+                      {isLocked && <Lock size={12} style={{ marginLeft: 6 }} />}
+                    </span>
+                    <span className="template-desc">{mode.description}</span>
+                  </div>
+                  <ChevronRight size={16} color="var(--text-tertiary)" />
                 </div>
-                <div className="template-info">
-                  <span className="template-name">{mode.label}</span>
-                  <span className="template-desc">{mode.description}</span>
-                </div>
-                <ChevronRight size={16} color="var(--text-tertiary)" />
-              </div>
-            ))}
+              );
+            })}
 
             {TEMPLATE_CARDS.map(({ mode, icon, gradient }) => {
               const config = MODE_CONFIGS[mode];
+              const feature = `copilot.mode.${mode}` as GatedFeature;
+              const isLocked = !isFeatureAvailable(feature);
+
               return (
-                <div 
-                  key={mode} 
-                  className="template-card"
-                  onClick={() => startCopilot(mode)}
+                <div
+                  key={mode}
+                  className={`template-card ${isLocked ? 'locked' : ''}`}
+                  onClick={() => handleStartSession(mode)}
+                  style={{ opacity: isLocked ? 0.6 : 1 }}
                 >
                   <div className="template-icon" style={{ background: gradient }}>
                     {icon}
                   </div>
                   <div className="template-info">
-                    <span className="template-name">{config.label}</span>
+                    <span className="template-name">
+                      {config.label}
+                      {isLocked && <Lock size={12} style={{ marginLeft: 6 }} />}
+                    </span>
                     <span className="template-desc">{config.description}</span>
                   </div>
                   <ChevronRight size={16} color="var(--text-tertiary)" />

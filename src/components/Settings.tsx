@@ -3,6 +3,7 @@
 // ============================================
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import type { CSSProperties } from 'react';
 import {
   Key, Palette, Keyboard, Database, Trash2, Plus, FileText,
   Sun, Moon, Shield, Upload, Eye, EyeOff, CheckCircle2, Wand2,
@@ -10,12 +11,32 @@ import {
   Gauge, Lock, Globe, Mic, RefreshCw
 } from 'lucide-react';
 import { database as knowledgeBase, type KBDocument, type ProviderConfig } from '../data/database';
+import { encryptApiKey, decryptApiKey } from '../utils/secureKeyStorage';
+import {
+  CUSTOM_PROVIDER_ID,
+  CUSTOM_PROVIDER_LABEL,
+  MAX_API_KEY_LENGTH,
+  MAX_MODEL_ID_LENGTH,
+  buildCustomConfigForSave,
+  clampField,
+  mergeCustomEntry,
+} from '../brain/providers/customProviderConfig';
+import { MAX_BASE_URL_LENGTH } from '../brain/providers/endpointValidator';
+// Type-only: the probe implementation itself is loaded lazily inside the
+// handler (`await import`), matching how this panel loads other heavy modules.
+import type {
+  ConnectionTestFailure,
+  ConnectionTestResult,
+} from '../brain/providers/connectionTest';
 import { SHORTCUT_DEFINITIONS } from '../hooks/useKeyboardShortcuts';
 import { getModifierKey, getAltKey, getPlatformLimitations } from '../overlay/platformKeys';
 import toast from 'react-hot-toast';
 import './Settings.css';
 
 import { useZule } from '../context/ZuleContext';
+import { useSubscription } from '../context/SubscriptionContext';
+import { UpgradeModal } from './UpgradeModal';
+import type { GatedFeature } from '../types/subscription';
 import { useZuleError } from '../hooks/useZuleError';
 import { useAutoUpdate } from '../hooks/useAutoUpdate';
 import type { RedactionRule, RedactionEntity } from '../types/redaction';
@@ -79,6 +100,9 @@ const DEFAULT_PROVIDERS: ProviderConfig[] = [
   { id: 'anthropic', enabled: false, priority: 2 },
   { id: 'ollama', enabled: false, priority: 3, baseUrl: 'http://localhost:11434' },
   { id: 'simulation', enabled: true, priority: 4 },
+  // Custom (OpenAI-compatible) ships disabled with empty credentials and is
+  // never a Zule default (Requirements 1.1, 1.7).
+  { id: CUSTOM_PROVIDER_ID, enabled: false, priority: 6, baseUrl: '', modelId: '' },
 ];
 
 const PROVIDER_LABELS: Record<ProviderConfig['id'], string> = {
@@ -87,14 +111,167 @@ const PROVIDER_LABELS: Record<ProviderConfig['id'], string> = {
   anthropic: 'Anthropic Claude',
   ollama: 'Ollama (Local)',
   simulation: 'Simulation',
+  custom: CUSTOM_PROVIDER_LABEL,
 };
 
 const PROVIDER_DESCRIPTIONS: Record<ProviderConfig['id'], string> = {
   gemini: 'Google Gemini Pro / Flash models',
   openai: 'GPT-4o, o-series models',
-  anthropic: 'Claude Sonnet / Opus / Haiku',
+  anthropic: 'Claude Sonnet / Opus / Haiku — supports custom gateways',
   ollama: 'Local models via Ollama or LM Studio',
   simulation: 'Offline simulation for testing (no API key needed)',
+  custom: 'Any OpenAI-compatible endpoint (OpenRouter, Groq, vLLM, LM Studio…)',
+};
+
+/**
+ * Placeholder shown in the Custom_Provider API_Key input when a credential is
+ * already persisted. The stored cipher is never decrypted into the field, so
+ * this masked hint is the only signal that a key exists, and saving with the
+ * field blank retains it (Requirements 1.10, 3.1).
+ */
+const CUSTOM_KEY_SAVED_PLACEHOLDER = '•••••••••••• (saved — leave blank to keep)';
+
+/**
+ * Prefix `secureKeyStorage.encryptApiKey` returns when Electron's `safeStorage`
+ * is unavailable (e.g. the app is running outside Electron). The credential is
+ * then persisted unencrypted, which is a *warning* rather than the
+ * Requirement 3.10 failure — that one is a thrown error (design §10).
+ */
+const PLAINTEXT_CIPHER_PREFIX = 'plain:';
+
+/** User-facing message per `normalizeBaseUrl` rejection reason (Requirement 1.8). */
+const CUSTOM_BASE_URL_MESSAGES: Record<string, string> = {
+  empty: 'Enter a Base URL, for example https://openrouter.ai/api/v1',
+  'too-long': `Base URL must be ${MAX_BASE_URL_LENGTH} characters or fewer.`,
+  unparseable:
+    'Base URL must be an absolute URL including the scheme, for example https://openrouter.ai/api/v1',
+  'unsupported-scheme': 'Base URL must start with http:// or https://',
+};
+
+/** User-facing message per API_Key rejection reason (Requirements 3.10, 3.11). */
+const CUSTOM_API_KEY_MESSAGES: Record<string, string> = {
+  'too-long': `API key must be ${MAX_API_KEY_LENGTH} characters or fewer.`,
+  'cipher-missing': 'The credential could not be secured, so nothing was saved.',
+};
+
+// --- Connection_Test presentation (task 11.5, Requirements 3.3, 3.9) -----
+//
+// The probe returns a `category` plus a short, already-`scrubSecret`-ed
+// `detail` (`HTTP 401`, `Network request failed`, `Timed out after 6000 ms`) —
+// never a response body and never the URL. The panel renders the category as
+// human-readable guidance and appends `detail` verbatim as the classification
+// hint. Nothing else about the response is surfaced, so no credential and no
+// gateway-supplied text can reach the UI (Requirement 3.9).
+
+/** Human-readable guidance per `ConnectionTestFailure` category. */
+const CONNECTION_TEST_MESSAGES: Record<ConnectionTestFailure, string> = {
+  'invalid-url': 'Base URL is not valid',
+  'missing-model': 'Model ID is required',
+  unauthorized: 'Authentication failed — check the API key',
+  forbidden: 'The endpoint refused this key',
+  'not-found': 'Endpoint or model not found — check the Base URL and Model ID',
+  'rate-limited': 'The endpoint is rate limiting this key',
+  'server-error': 'The endpoint returned a server error',
+  network: 'Could not reach the endpoint',
+  timeout: 'The endpoint did not respond in time',
+  'bad-response': 'The endpoint returned an unexpected response',
+};
+
+/**
+ * Outcome of the most recent Connection_Test, or `null` before one has run.
+ *
+ * The `failed` variant carries only the scrubbed classification text produced
+ * by `testCustomProviderConnection` (or a locally authored message for the
+ * "saved key could not be read" case) — never a decrypted credential.
+ */
+type CustomConnectionTestStatus =
+  | { state: 'testing' }
+  | { state: 'ok'; message: string }
+  | { state: 'failed'; message: string };
+
+/**
+ * Turns a `ConnectionTestResult` into the pill/toast text.
+ *
+ * Deliberately a module-level pure function rather than inline logic in the
+ * component: it keeps the mapping testable and independent of the panel, and it
+ * is the only place the probe's `detail` is read. `detail` arrives already
+ * passed through `scrubSecret` and is a short classification string (`HTTP 401`,
+ * `Network request failed`, `Timed out after 6000 ms`) — never a response body
+ * and never the URL — so it is appended as a parenthetical hint behind the
+ * human-readable category guidance and nothing else about the response is
+ * surfaced (Requirement 3.9).
+ */
+function describeConnectionTestResult(
+  result: ConnectionTestResult,
+): { state: 'ok'; message: string } | { state: 'failed'; message: string } {
+  if (result.ok) {
+    return {
+      state: 'ok',
+      message:
+        result.modelEcho === undefined
+          ? `Connected in ${result.latencyMs} ms`
+          : `Connected in ${result.latencyMs} ms — responded as "${result.modelEcho}"`,
+    };
+  }
+  return {
+    state: 'failed',
+    message: `${CONNECTION_TEST_MESSAGES[result.category]} (${result.detail})`,
+  };
+}
+
+/** Explanation attached to the Test connection button while it is disabled. */
+const CUSTOM_TEST_DISABLED_HINT =
+  'Enter a Base URL, an API key, and a Model ID to test the connection.';
+
+/** Shared styling for the Custom_Provider field labels. */
+const CUSTOM_FIELD_LABEL_STYLE: CSSProperties = {
+  fontSize: '0.72rem',
+  fontWeight: 600,
+  color: 'var(--text-tertiary)',
+};
+
+// --- Data-egress disclosure (task 11.4, Requirement 1.4) -----------------
+//
+// The notice is persistent, not a dismissible banner: it stays visible for the
+// custom row whether or not the User has acknowledged it, because the endpoint
+// can change at any time. The acknowledgement gate lives entirely here in the
+// panel's enable path — the persisted `enabled` flag remains the single source
+// of truth Provider_Sync reads, so Requirements 1.4 and 1.6 are unaffected.
+
+/** DOM id of the persistent notice, referenced by `aria-describedby`. */
+const CUSTOM_EGRESS_NOTICE_ID = 'custom-provider-egress-notice';
+
+/** DOM id of the acknowledgement checkbox. */
+const CUSTOM_EGRESS_ACK_ID = 'custom-provider-egress-ack';
+
+/** Plain-language disclosure copy shown above the custom inputs. */
+const CUSTOM_EGRESS_NOTICE_TEXT =
+  'Prompts sent to this provider — including live transcript text and Knowledge Base excerpts — leave your device and are transmitted to the endpoint you configure below. A gateway may relay them onward to upstream model vendors. Zule has no data-processing agreement with the gateway or with those vendors.';
+
+/** Label for the acknowledgement checkbox that unlocks the enable toggle. */
+const CUSTOM_EGRESS_ACK_LABEL =
+  'I understand where my data is sent and want to enable this provider.';
+
+/**
+ * Explanation attached to the enable toggle while it is disabled, so the reason
+ * is available to assistive technology and on hover, not just visually.
+ */
+const CUSTOM_EGRESS_TOGGLE_HINT =
+  'Acknowledge the data-egress notice to enable Custom (OpenAI-compatible).';
+
+const CUSTOM_EGRESS_NOTICE_STYLE: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '8px',
+  padding: '10px 12px',
+  marginBottom: '10px',
+  borderRadius: '8px',
+  border: '1px solid var(--accent-yellow, rgba(234, 179, 8, 0.4))',
+  background: 'rgba(234, 179, 8, 0.08)',
+  fontSize: '0.74rem',
+  lineHeight: 1.45,
+  color: 'var(--text-secondary)',
+  maxWidth: '340px',
 };
 
 export function Settings() {
@@ -161,6 +338,24 @@ export function Settings() {
   const [providerKeys, setProviderKeys] = useState<Record<string, string>>({});
   const [showProviderKey, setShowProviderKey] = useState<Record<string, boolean>>({});
   const [providersSaving, setProvidersSaving] = useState(false);
+  // Custom (OpenAI-compatible) provider draft state (task 11.2).
+  // `customBaseUrlError` drives `aria-invalid` plus the inline message on the
+  // Base_URL control (Requirement 1.8); the save path (task 11.3) sets it.
+  const [customBaseUrlError, setCustomBaseUrlError] = useState<string | null>(null);
+  // `customApiKeyError` carries the API_Key validation message named by
+  // Requirements 3.10 and 3.11 (over-length draft, or a credential that could
+  // not be secured). Both cases abort the save with the stored cipher intact.
+  const [customApiKeyError, setCustomApiKeyError] = useState<string | null>(null);
+  // Providers whose credential exists in IndexedDB as ciphertext. For `custom`
+  // the cipher is never decrypted into the input — the flag only drives the
+  // masked placeholder, and a blank save keeps the stored cipher
+  // (Requirements 1.10, 3.1).
+  const [hasStoredKey, setHasStoredKey] = useState<Record<string, boolean>>({});
+  // Result of the most recent Connection_Test (task 11.5). Holds presentation
+  // text only — the probe's `detail` is already scrubbed and the decrypted key
+  // never enters state (Requirements 3.3, 3.9).
+  const [customTestStatus, setCustomTestStatus] =
+    useState<CustomConnectionTestStatus | null>(null);
 
   // Performance Profile & Ephemeral Mode State
   type Profile = 'speed' | 'balanced' | 'cost' | 'privacy';
@@ -173,6 +368,13 @@ export function Settings() {
   const [redactionTestInput, setRedactionTestInput] = useState('');
   const [redactionTestOutput, setRedactionTestOutput] = useState<string | null>(null);
   const [redactionSaving, setRedactionSaving] = useState(false);
+
+  // Subscription State
+  const { limits } = useSubscription();
+  const [upgradeModal, setUpgradeModal] = useState<{
+    reason: 'kb-doc-limit' | 'feature-locked';
+    feature?: GatedFeature;
+  } | null>(null);
 
   // Data Retention State
   const [meetingMaxAgeDays, setMeetingMaxAgeDays] = useState(DEFAULT_MEETING_MAX_AGE_DAYS);
@@ -230,23 +432,44 @@ export function Settings() {
   // Load provider configurations from IndexedDB
   useEffect(() => {
     knowledgeBase.getSetting<ProviderConfig[]>('providers', DEFAULT_PROVIDERS).then((saved) => {
-      // Merge saved providers with defaults to ensure new providers are always visible
-      const merged = DEFAULT_PROVIDERS.map((def) => {
-        const existing = saved.find((p) => p.id === def.id);
-        return existing ?? def;
-      });
+      // Start from the persisted array so ids outside DEFAULT_PROVIDERS survive
+      // the round trip, then append any default the record predates. The
+      // `custom` entry is owned by `mergeCustomEntry`, which guarantees exactly
+      // one occurrence and initialises a missing one with the numerically
+      // greatest priority (Requirements 1.1, 1.7).
+      const persisted = Array.isArray(saved) ? saved : DEFAULT_PROVIDERS;
+      const withDefaults: ProviderConfig[] = persisted.map((p) => ({ ...p }));
+      for (const def of DEFAULT_PROVIDERS) {
+        if (def.id === CUSTOM_PROVIDER_ID) continue;
+        if (!withDefaults.some((p) => p.id === def.id)) withDefaults.push({ ...def });
+      }
+      const merged = mergeCustomEntry(withDefaults);
       // Sort by priority
       merged.sort((a, b) => a.priority - b.priority);
       setProviders(merged);
 
-      // Populate providerKeys from loaded apiKeyCipher
-      const keys: Record<string, string> = {};
-      merged.forEach((p) => {
-        if (p.apiKeyCipher) {
-          keys[p.id] = p.apiKeyCipher;
+      // Populate providerKeys from loaded apiKeyCipher (decrypting OS-encrypted
+      // values). `ollama` repurposes this field for a plaintext model ID.
+      // `custom` is the exception: its stored cipher is NEVER decrypted into the
+      // input. The input stays empty and only a masked placeholder signals that
+      // a credential is saved, so no character of it is ever rendered
+      // (Requirement 1.10).
+      void (async () => {
+        const keys: Record<string, string> = {};
+        const stored: Record<string, boolean> = {};
+        for (const p of merged) {
+          if (p.id === CUSTOM_PROVIDER_ID) {
+            keys[p.id] = '';
+            if (p.apiKeyCipher) stored[p.id] = true;
+            continue;
+          }
+          if (p.apiKeyCipher) {
+            keys[p.id] = p.id === 'ollama' ? p.apiKeyCipher : await decryptApiKey(p.apiKeyCipher);
+          }
         }
-      });
-      setProviderKeys(keys);
+        setProviderKeys(keys);
+        setHasStoredKey(stored);
+      })();
     });
   }, []);
 
@@ -319,7 +542,45 @@ export function Settings() {
 
   const handleToggleProvider = useCallback((id: ProviderConfig['id']) => {
     setProviders((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, enabled: !p.enabled } : p))
+      prev.map((p) => {
+        if (p.id !== id) return p;
+        // The custom entry cannot be flipped on until the data-egress notice
+        // has been acknowledged. The button is already disabled in that state;
+        // this is the belt-and-braces guard so a programmatic call cannot
+        // produce an enabled-but-unacknowledged entry (Requirement 1.4).
+        if (
+          p.id === CUSTOM_PROVIDER_ID &&
+          !p.enabled &&
+          p.acknowledgedEgressAt == null
+        ) {
+          return p;
+        }
+        return { ...p, enabled: !p.enabled };
+      })
+    );
+  }, []);
+
+  /**
+   * Tick/untick the data-egress acknowledgement for the custom entry.
+   *
+   * Ticking stamps `acknowledgedEgressAt: Date.now()` on the entry, which is
+   * what persists the acknowledgement — re-opening Settings finds the stamp and
+   * the User is not re-gated. Unticking removes the stamp *and* forces
+   * `enabled: false`, so the gated state can never leave an enabled entry
+   * behind a disabled toggle. `enabled` stays the only flag Provider_Sync
+   * reads (Requirement 1.4).
+   */
+  const handleCustomEgressAckChange = useCallback((acknowledged: boolean) => {
+    setProviders((prev) =>
+      prev.map((p) => {
+        if (p.id !== CUSTOM_PROVIDER_ID) return p;
+        if (acknowledged) {
+          return { ...p, acknowledgedEgressAt: Date.now() };
+        }
+        const next: ProviderConfig = { ...p, enabled: false };
+        delete next.acknowledgedEgressAt;
+        return next;
+      })
     );
   }, []);
 
@@ -333,30 +594,306 @@ export function Settings() {
     );
   }, []);
 
+  const handleProviderModelChange = useCallback((id: string, value: string) => {
+    setProviders((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, modelId: value } : p))
+    );
+  }, []);
+
+  // --- Custom (OpenAI-compatible) field handlers (task 11.2) --------------
+  //
+  // Every handler routes the raw value through `clampField`, so a paste that
+  // exceeds the field maximum is truncated rather than accepted — `maxLength`
+  // alone is a UA courtesy, not a guarantee (Requirement 1.2).
+
+  const handleCustomBaseUrlChange = useCallback((value: string) => {
+    // Editing the field clears the stale validation message so the error state
+    // only ever reflects the most recent save attempt (Requirement 1.8).
+    setCustomBaseUrlError(null);
+    // A Connection_Test result describes one specific configuration; editing
+    // any field makes it stale, so it is discarded rather than left to mislead.
+    setCustomTestStatus(null);
+    const clamped = clampField('baseUrl', value);
+    setProviders((prev) =>
+      prev.map((p) => (p.id === CUSTOM_PROVIDER_ID ? { ...p, baseUrl: clamped } : p)),
+    );
+  }, []);
+
+  const handleCustomApiKeyChange = useCallback((value: string) => {
+    // As with the Base_URL, editing clears the stale message so the error only
+    // ever reflects the most recent save attempt (Requirements 3.10, 3.11).
+    setCustomApiKeyError(null);
+    setCustomTestStatus(null);
+    setProviderKeys((prev) => ({
+      ...prev,
+      [CUSTOM_PROVIDER_ID]: clampField('apiKey', value),
+    }));
+  }, []);
+
+  const handleCustomModelIdChange = useCallback((value: string) => {
+    setCustomTestStatus(null);
+    const clamped = clampField('modelId', value);
+    setProviders((prev) =>
+      prev.map((p) => (p.id === CUSTOM_PROVIDER_ID ? { ...p, modelId: clamped } : p)),
+    );
+  }, []);
+
   const handleToggleProviderKeyVisibility = useCallback((id: string) => {
     setShowProviderKey((prev) => ({ ...prev, [id]: !prev[id] }));
   }, []);
 
+  // --- Connection_Test (task 11.5, Requirements 3.3, 3.9) -----------------
+
+  /** The single `custom` entry, if the panel has loaded one. */
+  const customEntry = useMemo(
+    () => providers.find((p) => p.id === CUSTOM_PROVIDER_ID),
+    [providers],
+  );
+
+  /**
+   * The probe needs all three fields. The credential counts as present either
+   * as a live draft or as a persisted cipher — for `custom` the stored cipher
+   * is deliberately never decrypted into the input (Requirement 1.10), so an
+   * empty field with `hasStoredKey` set still means "a key is configured".
+   */
+  const canTestCustomConnection = useMemo(() => {
+    if (!customEntry) return false;
+    const hasBaseUrl = (customEntry.baseUrl ?? '').trim().length > 0;
+    const hasModelId = (customEntry.modelId ?? '').trim().length > 0;
+    const hasKey =
+      (providerKeys[CUSTOM_PROVIDER_ID] ?? '').trim().length > 0 ||
+      (hasStoredKey[CUSTOM_PROVIDER_ID] === true && Boolean(customEntry.apiKeyCipher));
+    return hasBaseUrl && hasModelId && hasKey;
+  }, [customEntry, providerKeys, hasStoredKey]);
+
+  /**
+   * Runs the single-request Connection_Test against the current drafts.
+   *
+   * The credential is resolved at test time: the draft when the User has typed
+   * one, otherwise the stored cipher decrypted into a local `const` only. It is
+   * never written to component state and never rendered (Requirement 1.10).
+   *
+   * `testCustomProviderConnection` never throws and its `detail` is already
+   * passed through `scrubSecret` — a short classification string such as
+   * `HTTP 401`, never a response body and never the URL — so it is safe to
+   * render as returned (Requirement 3.9).
+   */
+  const handleTestCustomConnection = useCallback(async () => {
+    const entry = providers.find((p) => p.id === CUSTOM_PROVIDER_ID);
+    if (!entry) return;
+
+    // Re-clamp: `maxLength` and the onChange clamps are UA courtesies, so the
+    // probe sees exactly the values a save would persist (Requirement 1.2).
+    const baseUrl = clampField('baseUrl', entry.baseUrl ?? '');
+    const modelId = clampField('modelId', entry.modelId ?? '');
+    const draftKey = clampField('apiKey', providerKeys[CUSTOM_PROVIDER_ID] ?? '');
+
+    setCustomTestStatus({ state: 'testing' });
+
+    let apiKey = '';
+    if (draftKey.trim().length > 0) {
+      apiKey = draftKey;
+    } else if (entry.apiKeyCipher) {
+      try {
+        apiKey = await decryptApiKey(entry.apiKeyCipher);
+      } catch (error) {
+        // The error object comes from the keystore, not from the credential,
+        // but nothing derived from it is surfaced either way.
+        console.error('[Settings] Stored custom provider credential could not be read:', error);
+        apiKey = '';
+      }
+      if (apiKey.trim().length === 0) {
+        const message = 'The saved API key could not be read — re-enter it and save again.';
+        setCustomTestStatus({ state: 'failed', message });
+        toast.error(message);
+        return;
+      }
+    } else {
+      // Unreachable while the button honours `canTestCustomConnection`; kept so
+      // a programmatic call cannot probe without a credential.
+      const message = CUSTOM_TEST_DISABLED_HINT;
+      setCustomTestStatus({ state: 'failed', message });
+      toast.error(message);
+      return;
+    }
+
+    try {
+      const { testCustomProviderConnection } = await import('../brain/providers/connectionTest');
+      const result = await testCustomProviderConnection({ baseUrl, apiKey, modelId });
+
+      // The probe never throws — every failure path is a `{ ok: false }` result.
+      const outcome = describeConnectionTestResult(result);
+      setCustomTestStatus(outcome);
+      if (outcome.state === 'ok') {
+        toast.success(outcome.message);
+      } else {
+        toast.error(outcome.message);
+      }
+    } catch (error) {
+      // Only reachable if the module itself fails to load — the probe's own
+      // failure paths are all returned as `{ ok: false }`.
+      console.error('[Settings] Connection test could not run:', error);
+      const message = 'The connection test could not run.';
+      setCustomTestStatus({ state: 'failed', message });
+      toast.error(message);
+    }
+  }, [providers, providerKeys]);
+
   const handleSaveProviders = useCallback(async () => {
     setProvidersSaving(true);
     try {
-      // Build the configs to persist. For each provider that has a key entered,
-      // store it. TODO: encrypt via CryptoVault when vault is unlocked —
-      // for now persist raw key as apiKeyCipher placeholder (Requirement 15.1).
-      const configsToSave: ProviderConfig[] = providers.map((p) => {
-        const key = providerKeys[p.id];
-        const config: ProviderConfig = { ...p };
+      // Build the configs to persist. Each entered key is encrypted via the
+      // OS credential store (Electron safeStorage) before it touches disk —
+      // see src/utils/secureKeyStorage.ts. The `ollama` provider repurposes
+      // this same field for a (non-secret) model ID, so it's stored as-is.
+      //
+      // `priority` is derived from list position as `index + 1`, making the
+      // persisted values 1-based integers in [1, 10] (Requirement 1.3);
+      // `buildCustomConfigForSave` clamps the custom entry into that range.
+      //
+      // Nothing is written until every entry has been validated: the loop
+      // below returns early on any rejection, so an invalid draft leaves the
+      // persisted `providers` row byte-identical (Requirements 1.8, 3.10, 3.11).
+      const configsToSave: ProviderConfig[] = [];
+      let keyStoredUnencrypted = false;
+
+      for (const [index, provider] of providers.entries()) {
+        const positioned: ProviderConfig = { ...provider, priority: index + 1 };
+
+        if (positioned.id === CUSTOM_PROVIDER_ID) {
+          // Re-clamp the drafts: `maxLength` and the onChange clamps are UA
+          // courtesies, not guarantees, and state may have been set
+          // programmatically (Requirement 1.2).
+          const baseUrlDraft = clampField('baseUrl', positioned.baseUrl ?? '');
+          const modelIdDraft = clampField('modelId', positioned.modelId ?? '');
+          const apiKeyDraft = providerKeys[CUSTOM_PROVIDER_ID] ?? '';
+
+          // Encrypt only a non-empty draft. A blank draft leaves
+          // `apiKeyCipher` undefined here so `buildCustomConfigForSave`
+          // retains the previously stored cipher (Requirements 1.10, 3.1).
+          // An over-length draft is rejected before the keystore is touched, so
+          // a programmatic submission neither encrypts nor persists it and the
+          // stored cipher is retained (Requirement 3.11). `buildCustomConfigForSave`
+          // repeats the check as the authoritative rule.
+          if (apiKeyDraft.length > MAX_API_KEY_LENGTH) {
+            const message = CUSTOM_API_KEY_MESSAGES['too-long'];
+            setCustomApiKeyError(message);
+            toast.error(message);
+            return;
+          }
+
+          let apiKeyCipher: string | undefined;
+          if (apiKeyDraft !== '') {
+            try {
+              // The draft is already within `MAX_API_KEY_LENGTH` here, so the
+              // cipher corresponds exactly to the value handed to
+              // `buildCustomConfigForSave` below.
+              apiKeyCipher = await encryptApiKey(apiKeyDraft);
+            } catch (error) {
+              // Requirement 3.10: abort before any write, keep the stored
+              // ciphertext, and never fall back to persisting plaintext.
+              console.error(
+                '[Settings] Custom provider credential could not be secured; save aborted:',
+                error,
+              );
+              setCustomApiKeyError(CUSTOM_API_KEY_MESSAGES['cipher-missing']);
+              toast.error(
+                'The API key could not be secured by the OS credential store — nothing was saved.',
+              );
+              return;
+            }
+            // Not a failure, but the credential is going to disk unencrypted
+            // because no OS keystore was available (design §10).
+            if (apiKeyCipher.startsWith(PLAINTEXT_CIPHER_PREFIX)) {
+              keyStoredUnencrypted = true;
+            }
+          }
+
+          const result = buildCustomConfigForSave({
+            previous: provider,
+            enabled: positioned.enabled,
+            priority: positioned.priority,
+            baseUrlDraft,
+            modelIdDraft,
+            apiKeyDraft,
+            apiKeyCipher,
+          });
+
+          if (!result.ok) {
+            if (result.field === 'baseUrl') {
+              const message =
+                CUSTOM_BASE_URL_MESSAGES[result.reason] ?? 'Base URL is not valid.';
+              setCustomBaseUrlError(message);
+              toast.error(message);
+            } else if (result.field === 'apiKey') {
+              const message =
+                CUSTOM_API_KEY_MESSAGES[result.reason] ?? 'API key is not valid.';
+              setCustomApiKeyError(message);
+              toast.error(message);
+            } else {
+              // `priority` is derived from list position, not a text control,
+              // so there is no field to bind — surface it as a generic error.
+              console.error(
+                `[Settings] Custom provider priority rejected (${result.reason}); save aborted.`,
+              );
+              toast.error('Failed to save provider configuration.');
+            }
+            return;
+          }
+
+          configsToSave.push(result.config);
+          continue;
+        }
+
+        const key = providerKeys[positioned.id];
+        const config: ProviderConfig = { ...positioned };
         if (key && key.trim()) {
-          // TODO: Replace with vault.encrypt(key) once CryptoVault integration
-          // is wired into the Settings flow (vault may not be unlocked here).
-          config.apiKeyCipher = key.trim();
+          config.apiKeyCipher =
+            positioned.id === 'ollama' ? key.trim() : await encryptApiKey(key.trim());
         } else {
           delete config.apiKeyCipher;
         }
-        return config;
-      });
+        configsToSave.push(config);
+      }
+
       await knowledgeBase.setSetting('providers', configsToSave);
-      toast.success('Provider configuration saved!');
+
+      // Reconcile the in-memory list with what was just written. Without this,
+      // `providers` keeps the pre-save drafts — most importantly a custom entry
+      // whose `apiKeyCipher` is still `undefined` — and the next save with a
+      // blank API_Key field would hand that stale entry to
+      // `buildCustomConfigForSave` as `previous`, resolving `retainedCipher` to
+      // `undefined` and silently dropping the stored credential
+      // (Requirement 1.10). Reconciling here also picks up the normalised
+      // `baseUrl`, the trimmed `modelId`, and the `index + 1` priorities, so
+      // what the panel renders is exactly what is on disk. `acknowledgedEgressAt`
+      // survives because `buildCustomConfigForSave` spreads `previous`.
+      //
+      // Placed after the write so an aborted save (any early `return` above)
+      // leaves both IndexedDB and state untouched.
+      setProviders(configsToSave.map((config) => ({ ...config })));
+
+      // The save succeeded, so the drafts are now valid and any stale
+      // validation state is gone.
+      setCustomBaseUrlError(null);
+      setCustomApiKeyError(null);
+      // Clear the custom API_Key input and record that a cipher now exists, so
+      // the masked placeholder takes over and the next save with a blank field
+      // retains what was just persisted (Requirements 1.10, 3.1).
+      const savedCustom = configsToSave.find((c) => c.id === CUSTOM_PROVIDER_ID);
+      if (savedCustom?.apiKeyCipher) {
+        setProviderKeys((prev) => ({ ...prev, [CUSTOM_PROVIDER_ID]: '' }));
+        setHasStoredKey((prev) => ({ ...prev, [CUSTOM_PROVIDER_ID]: true }));
+      }
+
+      if (keyStoredUnencrypted) {
+        toast(
+          'Provider configuration saved, but the OS credential store was unavailable — the API key is stored unencrypted.',
+          { icon: '⚠️' },
+        );
+      } else {
+        toast.success('Provider configuration saved!');
+      }
     } catch (error) {
       console.error('[Settings] Failed to save providers:', error);
       toast.error('Failed to save provider configuration.');
@@ -527,6 +1064,12 @@ export function Settings() {
 
   const handleAddDocument = async (text: string, title: string) => {
     if (!text.trim()) return;
+
+    if (documents.length >= limits.kbDocuments) {
+      setUpgradeModal({ reason: 'kb-doc-limit' });
+      return;
+    }
+
     setIsUploading(true);
     try {
       const { chunkText } = await import('../utils/documentParser');
@@ -698,6 +1241,11 @@ export function Settings() {
   const handleSaveCustomMode = async () => {
     if (!newModeLabel.trim() || !newModePrompt.trim()) return;
     
+    if (customModes.length >= limits.customModes) {
+      setUpgradeModal({ reason: 'feature-locked', feature: 'copilot.custom-modes' });
+      return;
+    }
+
     await saveCustomMode({
       id: `mode-${Date.now()}`,
       label: newModeLabel,
@@ -736,6 +1284,14 @@ export function Settings() {
   return (
     <div className="settings page-container">
       <h1 className="settings-title animate-slide-up">Settings</h1>
+
+      {upgradeModal && (
+        <UpgradeModal
+          reason={upgradeModal.reason}
+          feature={upgradeModal.feature}
+          onClose={() => setUpgradeModal(null)}
+        />
+      )}
 
       {/* AI Configuration */}
       <section className="settings-section glass-card animate-slide-up">
@@ -792,7 +1348,14 @@ export function Settings() {
         </p>
 
         <div className="providers-list">
-          {providers.map((provider, index) => (
+          {providers.map((provider, index) => {
+            // The custom entry's enable toggle stays disabled until the
+            // data-egress notice is acknowledged (Requirement 1.4). Every other
+            // provider is ungated.
+            const egressGated =
+              provider.id === CUSTOM_PROVIDER_ID && provider.acknowledgedEgressAt == null;
+
+            return (
             <div key={provider.id} className={`provider-card ${provider.enabled ? '' : 'provider-disabled'}`}>
               <div className="provider-priority">
                 <span className="priority-number">{index + 1}</span>
@@ -828,7 +1391,147 @@ export function Settings() {
                 {/* API Key input — not shown for simulation */}
                 {provider.id !== 'simulation' && (
                   <div className="provider-key-row">
-                    {provider.id === 'ollama' ? (
+                    {provider.id === CUSTOM_PROVIDER_ID ? (
+                      /* Custom (OpenAI-compatible): three separate controls
+                         (Requirement 1.2). Each label is associated with its
+                         input via htmlFor/id, and the Base_URL control binds
+                         aria-invalid plus aria-describedby to the inline
+                         validation message (Requirement 1.8). */
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '10px',
+                          width: '100%',
+                          maxWidth: '340px',
+                        }}
+                      >
+                        {/* Persistent data-egress disclosure plus the
+                            acknowledgement that unlocks the enable toggle
+                            (Requirement 1.4). It is never dismissible: the
+                            endpoint can change at any time. */}
+                        <div style={CUSTOM_EGRESS_NOTICE_STYLE}>
+                          <p id={CUSTOM_EGRESS_NOTICE_ID} style={{ margin: 0 }}>
+                            <ShieldCheck
+                              size={13}
+                              style={{ verticalAlign: '-2px', marginRight: '5px' }}
+                              aria-hidden="true"
+                            />
+                            {CUSTOM_EGRESS_NOTICE_TEXT}
+                          </p>
+                          <span
+                            style={{
+                              display: 'flex',
+                              alignItems: 'flex-start',
+                              gap: '7px',
+                            }}
+                          >
+                            <input
+                              id={CUSTOM_EGRESS_ACK_ID}
+                              type="checkbox"
+                              checked={provider.acknowledgedEgressAt != null}
+                              onChange={(e) => handleCustomEgressAckChange(e.target.checked)}
+                              aria-describedby={CUSTOM_EGRESS_NOTICE_ID}
+                              style={{ marginTop: '2px', flex: '0 0 auto' }}
+                            />
+                            <label
+                              htmlFor={CUSTOM_EGRESS_ACK_ID}
+                              style={{ fontSize: '0.74rem', fontWeight: 600, cursor: 'pointer' }}
+                            >
+                              {CUSTOM_EGRESS_ACK_LABEL}
+                            </label>
+                          </span>
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                          <label htmlFor="custom-provider-base-url" style={CUSTOM_FIELD_LABEL_STYLE}>
+                            Base URL
+                          </label>
+                          <div className="api-key-input provider-key-input">
+                            <input
+                              id="custom-provider-base-url"
+                              type="text"
+                              maxLength={MAX_BASE_URL_LENGTH}
+                              className="input-glass"
+                              placeholder="https://openrouter.ai/api/v1"
+                              value={provider.baseUrl || ''}
+                              onChange={(e) => handleCustomBaseUrlChange(e.target.value)}
+                              aria-invalid={customBaseUrlError !== null}
+                              aria-describedby={
+                                customBaseUrlError !== null ? 'custom-provider-base-url-error' : undefined
+                              }
+                            />
+                          </div>
+                          {customBaseUrlError !== null && (
+                            <span
+                              id="custom-provider-base-url-error"
+                              role="alert"
+                              style={{ fontSize: '0.72rem', color: 'var(--accent-red)' }}
+                            >
+                              {customBaseUrlError}
+                            </span>
+                          )}
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                          <label htmlFor="custom-provider-api-key" style={CUSTOM_FIELD_LABEL_STYLE}>
+                            API key
+                          </label>
+                          <div className="api-key-input provider-key-input">
+                            <input
+                              id="custom-provider-api-key"
+                              type={showProviderKey[provider.id] ? 'text' : 'password'}
+                              maxLength={MAX_API_KEY_LENGTH}
+                              className="input-glass"
+                              placeholder={
+                                hasStoredKey[CUSTOM_PROVIDER_ID]
+                                  ? CUSTOM_KEY_SAVED_PLACEHOLDER
+                                  : 'Enter API key...'
+                              }
+                              value={providerKeys[provider.id] || ''}
+                              onChange={(e) => handleCustomApiKeyChange(e.target.value)}
+                              aria-invalid={customApiKeyError !== null}
+                              aria-describedby={
+                                customApiKeyError !== null ? 'custom-provider-api-key-error' : undefined
+                              }
+                            />
+                            <button
+                              className="btn-icon key-toggle"
+                              onClick={() => handleToggleProviderKeyVisibility(provider.id)}
+                              aria-label={showProviderKey[provider.id] ? 'Hide key' : 'Show key'}
+                            >
+                              {showProviderKey[provider.id] ? <EyeOff size={14} /> : <Eye size={14} />}
+                            </button>
+                          </div>
+                          {customApiKeyError !== null && (
+                            <span
+                              id="custom-provider-api-key-error"
+                              role="alert"
+                              style={{ fontSize: '0.72rem', color: 'var(--accent-red)' }}
+                            >
+                              {customApiKeyError}
+                            </span>
+                          )}
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                          <label htmlFor="custom-provider-model-id" style={CUSTOM_FIELD_LABEL_STYLE}>
+                            Model ID
+                          </label>
+                          <div className="api-key-input provider-key-input">
+                            <input
+                              id="custom-provider-model-id"
+                              type="text"
+                              maxLength={MAX_MODEL_ID_LENGTH}
+                              className="input-glass"
+                              placeholder="meta-llama/llama-3.1-8b-instruct"
+                              value={provider.modelId || ''}
+                              onChange={(e) => handleCustomModelIdChange(e.target.value)}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ) : provider.id === 'ollama' ? (
                       <div style={{ display: 'flex', gap: '10px', width: '100%', flexWrap: 'wrap' }}>
                         <div className="api-key-input provider-key-input" style={{ flex: '1 1 200px' }}>
                           <input
@@ -847,6 +1550,65 @@ export function Settings() {
                             value={providerKeys[provider.id] || ''}
                             onChange={(e) => handleProviderKeyChange(provider.id, e.target.value)}
                           />
+                        </div>
+                      </div>
+                    ) : provider.id === 'anthropic' ? (
+                      /* Anthropic Claude: supports a configurable base URL and model
+                         so users can point at Anthropic-compatible gateways (e.g.
+                         api.lumosel.vip). Base URL and Model ID are optional — omitting
+                         them uses the defaults (api.anthropic.com, claude-3-5-sonnet). */
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%', maxWidth: '340px' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                          <label htmlFor="anthropic-base-url" style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                            Base URL <span style={{ fontWeight: 400, opacity: 0.7 }}>(optional — leave blank for api.anthropic.com)</span>
+                          </label>
+                          <div className="api-key-input provider-key-input">
+                            <input
+                              id="anthropic-base-url"
+                              type="text"
+                              className="input-glass"
+                              placeholder="https://api.anthropic.com/v1/messages"
+                              value={provider.baseUrl || ''}
+                              onChange={(e) => handleProviderUrlChange(provider.id, e.target.value)}
+                            />
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                          <label htmlFor="anthropic-api-key" style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                            API Key
+                          </label>
+                          <div className="api-key-input provider-key-input">
+                            <input
+                              id="anthropic-api-key"
+                              type={showProviderKey[provider.id] ? 'text' : 'password'}
+                              className="input-glass"
+                              placeholder="Enter Anthropic API key..."
+                              value={providerKeys[provider.id] || ''}
+                              onChange={(e) => handleProviderKeyChange(provider.id, e.target.value)}
+                            />
+                            <button
+                              className="btn-icon key-toggle"
+                              onClick={() => handleToggleProviderKeyVisibility(provider.id)}
+                              aria-label={showProviderKey[provider.id] ? 'Hide key' : 'Show key'}
+                            >
+                              {showProviderKey[provider.id] ? <EyeOff size={14} /> : <Eye size={14} />}
+                            </button>
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                          <label htmlFor="anthropic-model-id" style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                            Model ID <span style={{ fontWeight: 400, opacity: 0.7 }}>(optional — default: claude-3-5-sonnet)</span>
+                          </label>
+                          <div className="api-key-input provider-key-input">
+                            <input
+                              id="anthropic-model-id"
+                              type="text"
+                              className="input-glass"
+                              placeholder="claude-sonnet-4-20250514"
+                              value={provider.modelId || ''}
+                              onChange={(e) => handleProviderModelChange(provider.id, e.target.value)}
+                            />
+                          </div>
                         </div>
                       </div>
                     ) : (
@@ -874,15 +1636,26 @@ export function Settings() {
               <button
                 className={`btn-icon provider-toggle ${provider.enabled ? 'provider-toggle-on' : ''}`}
                 onClick={() => handleToggleProvider(provider.id)}
-                aria-label={`${provider.enabled ? 'Disable' : 'Enable'} ${PROVIDER_LABELS[provider.id]}`}
+                disabled={egressGated}
+                title={egressGated ? CUSTOM_EGRESS_TOGGLE_HINT : undefined}
+                aria-describedby={egressGated ? CUSTOM_EGRESS_NOTICE_ID : undefined}
+                aria-label={
+                  egressGated
+                    ? `Enable ${PROVIDER_LABELS[provider.id]} — ${CUSTOM_EGRESS_TOGGLE_HINT}`
+                    : `${provider.enabled ? 'Disable' : 'Enable'} ${PROVIDER_LABELS[provider.id]}`
+                }
               >
                 <Power size={16} />
               </button>
             </div>
-          ))}
+            );
+          })}
         </div>
 
-        <div className="provider-actions">
+        <div
+          className="provider-actions"
+          style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}
+        >
           <button
             className="btn-primary"
             onClick={handleSaveProviders}
@@ -891,6 +1664,56 @@ export function Settings() {
           >
             {providersSaving ? 'Saving...' : 'Save Provider Config'}
           </button>
+
+          {/* Connection_Test: a single probe against the current drafts,
+              enabled only once all three fields are present (task 11.5). */}
+          {customEntry && (
+            <>
+              <button
+                className="btn-secondary"
+                onClick={handleTestCustomConnection}
+                disabled={!canTestCustomConnection || customTestStatus?.state === 'testing'}
+                aria-busy={customTestStatus?.state === 'testing'}
+                aria-label={`Test connection to ${CUSTOM_PROVIDER_LABEL}`}
+                title={canTestCustomConnection ? undefined : CUSTOM_TEST_DISABLED_HINT}
+                style={{
+                  padding: '8px 16px',
+                  fontSize: '0.82rem',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}
+              >
+                <Play size={13} aria-hidden="true" />
+                {customTestStatus?.state === 'testing' ? 'Testing…' : 'Test connection'}
+              </button>
+
+              {/* Inline status pill. `role="status"` announces the outcome to
+                  assistive technology without stealing focus. The text is the
+                  category guidance plus the probe's already-scrubbed `detail`
+                  (Requirement 3.9). */}
+              <span
+                role="status"
+                aria-live="polite"
+                className={
+                  customTestStatus === null
+                    ? undefined
+                    : customTestStatus.state === 'ok'
+                      ? 'pill pill-green'
+                      : customTestStatus.state === 'failed'
+                        ? 'pill pill-red'
+                        : 'pill pill-yellow'
+                }
+                style={{ fontSize: '0.74rem' }}
+              >
+                {customTestStatus === null
+                  ? ''
+                  : customTestStatus.state === 'testing'
+                    ? 'Testing connection…'
+                    : customTestStatus.message}
+              </span>
+            </>
+          )}
         </div>
       </section>
 

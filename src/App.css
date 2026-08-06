@@ -192,3 +192,52 @@
   overflow: hidden;
   position: relative;
 }
+
+/* --- Subscription Badge --- */
+.sub-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: var(--radius-pill);
+  font-size: 0.75rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+  background: none;
+  font-family: inherit;
+  transition: all 0.2s;
+  width: 100%;
+  justify-content: center;
+}
+
+.sub-badge--free {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: var(--glass-border);
+  color: var(--text-secondary);
+}
+
+.sub-badge--free:hover {
+  background: rgba(59, 130, 246, 0.08);
+  border-color: rgba(59, 130, 246, 0.2);
+  color: var(--accent-blue);
+}
+
+.sub-badge--pro {
+  background: rgba(59, 130, 246, 0.1);
+  border-color: rgba(59, 130, 246, 0.2);
+  color: var(--accent-blue);
+}
+
+.sub-badge--ultra {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.12), rgba(236, 72, 153, 0.12));
+  border-color: rgba(139, 92, 246, 0.25);
+  color: var(--accent-purple);
+}
+
+.sub-badge-upgrade {
+  margin-left: auto;
+  font-size: 0.68rem;
+  opacity: 0.7;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}

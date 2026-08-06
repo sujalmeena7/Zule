@@ -20,6 +20,8 @@ import { useEffect, useRef, useState } from 'react';
 import { FloatingCopilot } from './FloatingCopilot';
 import { ErrorBoundary } from './ErrorBoundary';
 import { ZuleProvider } from '../context/ZuleContext';
+import { AuthProvider } from '../firebase/AuthContext';
+import { SubscriptionProvider } from '../context/SubscriptionContext';
 import { MotionConfig } from 'framer-motion';
 import { Toaster } from 'react-hot-toast';
 import { useZoneDetector } from '../overlay/useZoneDetector';
@@ -90,42 +92,46 @@ export function OverlayShell() {
   };
 
   return (
-    <ZuleProvider>
-      <MotionConfig reducedMotion="user">
-        <div
-          ref={containerRef}
-          className="overlay-shell"
-          role="region"
-          aria-label="Zule AI copilot"
-          data-interactive-zone
-          style={{
-            position: 'fixed',
-            inset: 0,
-            width: '100vw',
-            height: '100vh',
-            background: 'transparent',
-            overflow: 'hidden',
-          }}
-          onMouseDown={handleInteractionStart}
-          onFocus={handleInteractionStart}
-          onBlur={handleBlur}
-        >
-          <ErrorBoundary>
-            <FloatingCopilot />
-          </ErrorBoundary>
-        </div>
-        <Toaster
-          position="bottom-right"
-          toastOptions={{
-            style: {
-              background: '#1e293b',
-              color: '#f8fafc',
-              border: '1px solid rgba(255, 255, 255, 0.1)',
-              backdropFilter: 'blur(10px)',
-            },
-          }}
-        />
-      </MotionConfig>
-    </ZuleProvider>
+    <AuthProvider>
+      <SubscriptionProvider>
+        <ZuleProvider>
+          <MotionConfig reducedMotion="user">
+            <div
+              ref={containerRef}
+              className="overlay-shell"
+              role="region"
+              aria-label="Zule AI copilot"
+              data-interactive-zone
+              style={{
+                position: 'fixed',
+                inset: 0,
+                width: '100vw',
+                height: '100vh',
+                background: 'transparent',
+                overflow: 'hidden',
+              }}
+              onMouseDown={handleInteractionStart}
+              onFocus={handleInteractionStart}
+              onBlur={handleBlur}
+            >
+              <ErrorBoundary>
+                <FloatingCopilot />
+              </ErrorBoundary>
+            </div>
+            <Toaster
+              position="bottom-right"
+              toastOptions={{
+                style: {
+                  background: '#1e293b',
+                  color: '#f8fafc',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  backdropFilter: 'blur(10px)',
+                },
+              }}
+            />
+          </MotionConfig>
+        </ZuleProvider>
+      </SubscriptionProvider>
+    </AuthProvider>
   );
 }

@@ -121,6 +121,10 @@ export default defineConfig({
                 // runtime; bundling would inline the .node binary path
                 // resolution and break the addon load.
                 'hnswlib-node',
+                // `koffi` is the FFI library used by
+                // electron/nativeStealth.ts to call Win32 APIs directly.
+                // Ships prebuilt native binaries — must load at runtime.
+                'koffi',
               ],
             },
           },
@@ -136,12 +140,26 @@ export default defineConfig({
         vite: {
           build: {
             outDir: 'dist-electron',
-            rollupOptions: {
+            // vite-plugin-electron builds every entry in *library mode*
+            // (`build.lib`), and it's `lib.formats` — not
+            // rolldownOptions.output.format — that actually decides the
+            // emitted format; the plugin's own default sets
+            // `formats: ['es']` here because root package.json has
+            // "type": "module", and that wins the merge over anything set
+            // under rolldownOptions/rollupOptions.output.format.
+            //
+            // CJS, not ES: with sandbox: true (electron/main.ts,
+            // electron/overlayManager.ts) Electron loads the preload
+            // through its own restricted script wrapper, which never goes
+            // through Node's ESM loader — an `import` statement throws
+            // "Cannot use import statement outside a module" at runtime.
+            lib: {
+              entry: 'electron/preload.ts',
+              formats: ['cjs'],
+              fileName: () => 'preload.cjs',
+            },
+            rolldownOptions: {
               external: ['electron'],
-              output: {
-                format: 'es',
-                entryFileNames: '[name].mjs',
-              },
             },
           },
         },
@@ -162,6 +180,18 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id: string) {
+          // 3D hero stack — Hero_3D_Canvas (landing-page-3d-enhancement Req 2.6, 11.3)
+          // Routed into its own async chunk so `three` and the R3F wrappers
+          // only download when LandingPage lazily imports Hero3DCanvas.
+          // Trailing `/` on `three` keeps unrelated packages like
+          // `three-mesh-bvh` or `three-stdlib` out of this chunk.
+          if (
+            id.includes('node_modules/three/') ||
+            id.includes('node_modules/@react-three/fiber') ||
+            id.includes('node_modules/@react-three/drei')
+          ) {
+            return 'vendor-three';
+          }
           // Heavy ML runtime — Vector_Index + Whisper (Requirement 21.1)
           if (id.includes('@huggingface/transformers') || id.includes('onnxruntime')) {
             return 'vendor-transformers';

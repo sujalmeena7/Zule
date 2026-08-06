@@ -102,6 +102,30 @@ const electronAPI = {
     return () => ipcRenderer.removeListener('overlay-error', handler);
   },
 
+  // ── External URLs & Window Focus ──────────────────────────────────────────
+
+  /** Open a URL in the system browser (used for payment checkout). */
+  openExternal: (url: string): Promise<void> =>
+    ipcRenderer.invoke('open-external', url),
+
+  /** Bring the Electron main window back to the foreground. */
+  focusWindow: (): Promise<void> =>
+    ipcRenderer.invoke('focus-window'),
+
+  // ── Secure Storage (OS-backed encryption for provider API keys) ──────────
+
+  /** Whether OS-level key encryption (safeStorage) is available on this machine. */
+  secureStorageIsAvailable: (): Promise<boolean> =>
+    ipcRenderer.invoke('secureStorage:isAvailable'),
+
+  /** Encrypt a string via the OS credential store; returns a base64 blob. */
+  secureStorageEncrypt: (plaintext: string): Promise<string> =>
+    ipcRenderer.invoke('secureStorage:encrypt', plaintext),
+
+  /** Decrypt a base64 blob previously produced by secureStorageEncrypt. */
+  secureStorageDecrypt: (ciphertext: string): Promise<string> =>
+    ipcRenderer.invoke('secureStorage:decrypt', ciphertext),
+
   // ── Authentication ────────────────────────────────────────────────────────
 
   /** Opens the default system browser to securely log in via Google OAuth. Returns the Google idToken. */
