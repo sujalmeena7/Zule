@@ -107,10 +107,13 @@
 }
 
 /* --------------------------------------------------------------------------
- * Floating glassmorphic navbar
- * Centered via translateX, pill radius, backdrop blur from the token.
- * Inner layout is a horizontal flex row: logo | items | (active indicator
- * positioned absolutely behind the items).
+ * Floating glassmorphic navbar — Premium refactor
+ *
+ * Multi-layer glass surface: base dark tint + noise overlay + border
+ * gradient edge. Uses a double-border technique: outer `border` for the
+ * structural edge, inner `box-shadow: inset ...` for the luminous top
+ * highlight that gives the glass depth.
+ *
  * Requirements: 3.1, 3.2, 10.2
  * -------------------------------------------------------------------------- */
 .floating-navbar {
@@ -120,13 +123,28 @@
   transform: translateX(-50%);
   display: flex;
   align-items: center;
-  gap: 18px;
-  background: var(--nav-bg);
-  border: 1px solid var(--nav-border);
-  backdrop-filter: blur(var(--nav-blur));
-  -webkit-backdrop-filter: blur(var(--nav-blur));
+  gap: 8px;
+
+  /* Layered glass surface */
+  background:
+    linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.04) 0%,
+      rgba(255, 255, 255, 0.01) 100%
+    ),
+    var(--nav-surface-base, rgba(12, 12, 24, 0.62));
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(24px) saturate(1.4);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
   border-radius: 999px;
-  box-shadow: var(--shadow-float);
+
+  /* Layered shadow — ambient depth + directional + subtle accent glow */
+  box-shadow:
+    var(--nav-inset, inset 0 1px 0 rgba(255, 255, 255, 0.07)),
+    0 8px 32px rgba(0, 0, 0, 0.4),
+    0 2px 8px rgba(0, 0, 0, 0.3),
+    0 0 0 0.5px rgba(255, 255, 255, 0.06);
+
   z-index: 200;
   font-family: inherit;
 }
@@ -150,12 +168,22 @@
   display: block;
 }
 
+/* Links shell — shared positioned container for the link list and the
+   active indicator. position: relative creates the coordinate space that
+   toIndicatorGeometry measures against (target.left - shell.left).
+   Requirements: 2.1, 2.3, 2.4 */
+.floating-navbar-links-shell {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
 /* Nav item list reset — kill default `<ul>` bullets/margin/padding. */
 .floating-navbar-items {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 2px;
   list-style: none;
   margin: 0;
   padding: 0;
@@ -172,55 +200,74 @@
 .floating-navbar-items .magnetic-link {
   display: inline-flex;
   align-items: center;
-  padding: 8px 14px;
+  padding: 7px 14px;
   border-radius: 999px;
-  color: var(--landing-text-muted);
+  color: rgba(255, 255, 255, 0.55);
   text-decoration: none;
-  font-size: 0.92rem;
+  font-size: 0.875rem;
   font-weight: 500;
   white-space: nowrap;
-  letter-spacing: -0.005em;
-  transition: color 0.35s var(--premium-ease);
+  letter-spacing: 0.01em;
+  transition:
+    color 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  cursor: pointer;
+  user-select: none;
 }
 
 .floating-navbar-items .magnetic-link:hover,
 .floating-navbar-items .magnetic-link:focus-visible {
-  color: var(--landing-text);
+  color: rgba(255, 255, 255, 0.95);
   outline: none;
 }
 
-/* The "Get Zule" CTA — solid pill that pops against the rest of the row. */
+/* Mark the currently active item's link as bright */
+.floating-navbar-item[data-active="true"] .magnetic-link {
+  color: rgba(255, 255, 255, 0.95);
+}
+
+/* The "Get Zule" CTA — refined solid pill with a subtle gradient. */
 .floating-navbar-items .floating-navbar-cta {
-  background: #ffffff;
-  color: #000000;
-  padding: 8px 18px;
-  margin-left: 4px;
-  box-shadow: 0 2px 12px rgba(255, 255, 255, 0.15);
+  background: linear-gradient(135deg, #ffffff 0%, #e8e8ee 100%);
+  color: #0a0a12;
+  font-weight: 600;
+  padding: 7px 20px;
+  margin-left: 6px;
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.2),
+    0 4px 14px rgba(255, 255, 255, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
   transition:
-    transform 0.35s var(--premium-ease),
-    box-shadow 0.35s var(--premium-ease),
-    background 0.35s var(--premium-ease);
+    transform 0.3s cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 0.3s cubic-bezier(0.16, 1, 0.3, 1),
+    background 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .floating-navbar-items .floating-navbar-cta:hover,
 .floating-navbar-items .floating-navbar-cta:focus-visible {
-  color: #000000;
-  background: #f4f4f5;
-  box-shadow: 0 6px 22px rgba(255, 255, 255, 0.28);
+  color: #0a0a12;
+  background: linear-gradient(135deg, #f8f8fa 0%, #e0e0e8 100%);
+  transform: translateY(-1px);
+  box-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.25),
+    0 8px 24px rgba(255, 255, 255, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
 }
 
-/* Active indicator — translucent pill that slides behind the active link.
+/* Active indicator — refined translucent pill with layered fill + glow.
    `ActiveIndicator.tsx` positions this absolutely with `left` and `width`
    matching the active list item's `offsetLeft` / `offsetWidth`. */
 .nav-active-indicator {
   top: 50%;
-  height: calc(100% - 4px);
+  height: calc(100% - 6px);
   transform: translateY(-50%);
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--nav-indicator-fill, rgba(255, 255, 255, 0.08));
+  border: var(--nav-indicator-edge, 1px solid rgba(255, 255, 255, 0.1));
   border-radius: 999px;
   pointer-events: none;
   z-index: 0;
+  box-shadow:
+    var(--nav-indicator-inset, inset 0 1px 0 rgba(255, 255, 255, 0.08)),
+    var(--nav-indicator-glow, 0 0 8px rgba(99, 102, 241, 0.12));
 }
 
 /* --------------------------------------------------------------------------
@@ -229,7 +276,7 @@
  * -------------------------------------------------------------------------- */
 @media (max-width: 720px) {
   .floating-navbar {
-    gap: 12px;
+    gap: 8px;
   }
 
   .floating-navbar-items .floating-navbar-item:not([data-nav-id='download']) {

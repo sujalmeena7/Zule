@@ -1191,7 +1191,6 @@ export function FloatingCopilot() {
               onClick={() => triggerAI()}
               disabled={isLoading || isStreaming}
               aria-label="Get an AI answer now from the recent conversation"
-              title="Assist now — answer based on what was just said"
             >
               <Sparkles size={13} />
               <span>Assist now</span>
@@ -1203,7 +1202,6 @@ export function FloatingCopilot() {
                 onClick={toggleMaximize}
                 aria-label={isMaximized ? 'Restore overlay size' : 'Maximize overlay'}
                 aria-pressed={isMaximized}
-                title={isMaximized ? 'Restore' : 'Maximize'}
               >
                 {isMaximized ? <RestoreIcon /> : <MaximizeIcon />}
               </button>

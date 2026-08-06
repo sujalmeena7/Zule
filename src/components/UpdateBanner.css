@@ -1,290 +1,369 @@
 /* ============================================
-   Zule AI — Update Banner Styles
+   Zule AI — Update Popup Styles
    ============================================
-   Renders in normal document flow (not position: fixed) so it pushes
-   dashboard content down rather than overlapping it (Requirement 4.10).
-   Uses the existing glass-card container class for visual consistency.
+   Premium, Apple/Cursor-inspired centered modal popup.
+   Uses layered glassmorphism, subtle gradients, and
+   refined micro-animations for a polished feel.
 */
 
-.update-banner {
-  margin-bottom: 16px;
-  padding: 20px 24px;
-  animation: update-banner-enter 0.25s ease-out;
-}
+/* ─── Overlay backdrop ──────────────────────────────────────────────────── */
 
-.update-banner-header {
+.update-popup-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 12px;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  animation: update-overlay-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-.update-banner-title {
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--text-primary);
+.update-popup-overlay.is-closing {
+  animation: update-overlay-out 0.25s cubic-bezier(0.4, 0, 1, 1) both;
 }
 
-.update-banner-current {
-  font-size: 0.875rem;
-  color: var(--text-secondary);
+@keyframes update-overlay-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
-/* Release notes section */
-.update-banner-notes {
-  margin-top: 8px;
+@keyframes update-overlay-out {
+  from { opacity: 1; }
+  to   { opacity: 0; }
 }
 
-.update-banner-notes-content {
-  font-size: 0.875rem;
-  color: var(--text-secondary);
-  line-height: 1.6;
-  max-height: 300px;
-  overflow-y: auto;
-  padding-right: 4px;
+/* ─── Popup card ────────────────────────────────────────────────────────── */
+
+.update-popup {
+  position: relative;
+  width: 400px;
+  max-width: calc(100vw - 48px);
+  padding: 36px 32px 28px;
+  border-radius: 20px;
+  text-align: center;
+
+  /* Layered glass surface */
+  background:
+    linear-gradient(
+      160deg,
+      rgba(255, 255, 255, 0.06) 0%,
+      rgba(255, 255, 255, 0.02) 40%,
+      rgba(255, 255, 255, 0.04) 100%
+    ),
+    rgba(18, 18, 30, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(32px) saturate(1.5);
+  -webkit-backdrop-filter: blur(32px) saturate(1.5);
+
+  /* Multi-layer shadow for depth */
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 24px 80px rgba(0, 0, 0, 0.5),
+    0 8px 24px rgba(0, 0, 0, 0.3),
+    0 0 0 0.5px rgba(255, 255, 255, 0.06);
+
+  animation: update-popup-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-/* Markdown content styling within release notes */
-.update-banner-notes-content h1,
-.update-banner-notes-content h2,
-.update-banner-notes-content h3 {
-  color: var(--text-primary);
-  margin-top: 12px;
-  margin-bottom: 8px;
+.update-popup.is-closing {
+  animation: update-popup-out 0.2s cubic-bezier(0.4, 0, 1, 1) both;
 }
 
-.update-banner-notes-content h1 { font-size: 1.1rem; }
-.update-banner-notes-content h2 { font-size: 1rem; }
-.update-banner-notes-content h3 { font-size: 0.9rem; }
-
-.update-banner-notes-content p {
-  margin: 6px 0;
-}
-
-.update-banner-notes-content ul,
-.update-banner-notes-content ol {
-  padding-left: 20px;
-  margin: 6px 0;
-}
-
-.update-banner-notes-content li {
-  margin: 4px 0;
-}
-
-.update-banner-notes-content code {
-  background: rgba(255, 255, 255, 0.06);
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-size: 0.8rem;
-}
-
-.update-banner-notes-content pre {
-  background: rgba(0, 0, 0, 0.2);
-  padding: 12px;
-  border-radius: 8px;
-  overflow-x: auto;
-  margin: 8px 0;
-}
-
-.update-banner-notes-content pre code {
-  background: none;
-  padding: 0;
-}
-
-.update-banner-notes-content a {
-  color: #60a5fa;
-  text-decoration: underline;
-}
-
-.update-banner-notes-content blockquote {
-  border-left: 3px solid var(--glass-border);
-  padding-left: 12px;
-  margin: 8px 0;
-  color: var(--text-secondary);
-  opacity: 0.85;
-}
-
-.update-banner-notes-content table {
-  border-collapse: collapse;
-  width: 100%;
-  margin: 8px 0;
-}
-
-.update-banner-notes-content th,
-.update-banner-notes-content td {
-  border: 1px solid var(--glass-border);
-  padding: 6px 10px;
-  text-align: left;
-  font-size: 0.8rem;
-}
-
-.update-banner-notes-content th {
-  background: rgba(255, 255, 255, 0.04);
-  font-weight: 600;
-}
-
-/* Expand/collapse button for truncated notes */
-.update-banner-expand-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-top: 8px;
-  padding: 4px 12px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-pill);
-  color: var(--text-secondary);
-  font-size: 0.8rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-
-.update-banner-expand-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: var(--text-primary);
-}
-
-.update-banner-expand-btn:focus-visible {
-  outline: 2px solid #60a5fa;
-  outline-offset: 2px;
-}
-
-/* Placeholder text when release notes unavailable */
-.update-banner-placeholder {
-  color: var(--text-secondary);
-  font-size: 0.875rem;
-  font-style: italic;
-  opacity: 0.7;
-  margin: 4px 0;
-}
-
-/* Entry animation */
-@keyframes update-banner-enter {
+@keyframes update-popup-in {
   from {
     opacity: 0;
-    transform: translateY(-8px);
+    transform: scale(0.92) translateY(12px);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: scale(1) translateY(0);
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .update-banner {
-    animation: none;
+@keyframes update-popup-out {
+  from {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.96) translateY(6px);
   }
 }
 
-/* ─── Action Buttons ─────────────────────────────────────────────────────── */
+/* ─── Close button ──────────────────────────────────────────────────────── */
 
-.update-banner-actions {
+.update-popup-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-top: 16px;
-  padding-top: 12px;
-  border-top: 1px solid var(--glass-border);
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.45);
+  cursor: pointer;
+  transition: all 0.2s ease;
 }
 
-.update-banner-btn {
-  display: inline-flex;
+.update-popup-close:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+/* ─── Icon ──────────────────────────────────────────────────────────────── */
+
+.update-popup-icon-wrap {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 18px;
+}
+
+.update-popup-icon {
+  width: 52px;
+  height: 52px;
+  display: flex;
   align-items: center;
   justify-content: center;
-  padding: 8px 18px;
-  border-radius: var(--radius-pill);
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(99, 102, 241, 0.15));
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+  box-shadow:
+    0 0 24px rgba(59, 130, 246, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.accent-green .update-popup-icon {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.15), rgba(16, 185, 129, 0.15));
+  border-color: rgba(34, 197, 94, 0.2);
+  color: #4ade80;
+  box-shadow:
+    0 0 24px rgba(34, 197, 94, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+/* ─── Typography ────────────────────────────────────────────────────────── */
+
+.update-popup-title {
+  margin: 0 0 6px;
+  font-size: 1.15rem;
+  font-weight: 650;
+  color: #ffffff;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+}
+
+.update-popup-subtitle {
+  margin: 0 0 16px;
   font-size: 0.875rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s, opacity 0.15s, box-shadow 0.15s;
-  border: none;
+  color: rgba(255, 255, 255, 0.5);
   line-height: 1.4;
 }
 
-.update-banner-btn:focus-visible {
+/* ─── Version badges ────────────────────────────────────────────────────── */
+
+.update-popup-versions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.update-popup-version-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 14px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.update-popup-version-badge.current {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.update-popup-version-badge.next {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(99, 102, 241, 0.12));
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  color: #93c5fd;
+}
+
+.accent-green .update-popup-version-badge.next {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.15), rgba(16, 185, 129, 0.12));
+  border-color: rgba(34, 197, 94, 0.25);
+  color: #86efac;
+}
+
+.update-popup-version-arrow {
+  color: rgba(255, 255, 255, 0.25);
+  flex-shrink: 0;
+}
+
+/* ─── Download progress ─────────────────────────────────────────────────── */
+
+.update-popup-progress {
+  margin-bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 8px;
+}
+
+.update-popup-progress-track {
+  width: 100%;
+  height: 5px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.update-popup-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #3b82f6, #818cf8);
+  transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.3);
+}
+
+.update-popup-progress-text {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.4);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── Error message ─────────────────────────────────────────────────────── */
+
+.update-popup-error {
+  margin: 0 0 16px;
+  padding: 8px 14px;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: 10px;
+  color: #fca5a5;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+/* ─── Action buttons ────────────────────────────────────────────────────── */
+
+.update-popup-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.update-popup-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 11px 20px;
+  border: none;
+  border-radius: 12px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  line-height: 1.3;
+}
+
+.update-popup-btn:focus-visible {
   outline: 2px solid #60a5fa;
   outline-offset: 2px;
 }
 
-.update-banner-btn:disabled,
-.update-banner-btn[aria-disabled="true"] {
+.update-popup-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
   pointer-events: none;
 }
 
-/* Primary action button */
-.update-banner-btn-primary {
-  background: #3b82f6;
+/* Primary button — vibrant gradient */
+.update-popup-btn.primary {
+  background: linear-gradient(135deg, #3b82f6 0%, #6366f1 100%);
   color: #fff;
+  box-shadow:
+    0 2px 8px rgba(59, 130, 246, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.15);
 }
 
-.update-banner-btn-primary:hover:not(:disabled) {
-  background: #2563eb;
-  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+.update-popup-btn.primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow:
+    0 4px 16px rgba(59, 130, 246, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  filter: brightness(1.08);
 }
 
-.update-banner-btn-primary:active:not(:disabled) {
-  background: #1d4ed8;
+.update-popup-btn.primary:active:not(:disabled) {
+  transform: translateY(0);
+  filter: brightness(0.95);
 }
 
-/* Secondary action button */
-.update-banner-btn-secondary {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text-secondary);
-  border: 1px solid var(--glass-border);
+.accent-green .update-popup-btn.primary {
+  background: linear-gradient(135deg, #22c55e 0%, #10b981 100%);
+  box-shadow:
+    0 2px 8px rgba(34, 197, 94, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.15);
 }
 
-.update-banner-btn-secondary:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.12);
-  color: var(--text-primary);
+.accent-green .update-popup-btn.primary:hover:not(:disabled) {
+  box-shadow:
+    0 4px 16px rgba(34, 197, 94, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
 }
 
-.update-banner-btn-secondary:active:not(:disabled) {
+/* Secondary button — ghost style */
+.update-popup-btn.secondary {
+  background: transparent;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.update-popup-btn.secondary:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.8);
 }
 
-/* ─── Download Progress ──────────────────────────────────────────────────── */
+/* ─── Spin animation ────────────────────────────────────────────────────── */
 
-.update-banner-progress {
-  margin-top: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+.spin {
+  animation: spin-icon 1.2s linear infinite;
 }
 
-.update-banner-progress-bar {
-  width: 100%;
-  height: 6px;
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 3px;
-  overflow: hidden;
+@keyframes spin-icon {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
 }
 
-.update-banner-progress-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #3b82f6, #60a5fa);
-  border-radius: 3px;
-  transition: width 0.3s ease;
-}
+/* ─── Reduced motion ────────────────────────────────────────────────────── */
 
-.update-banner-progress-text {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
-}
+@media (prefers-reduced-motion: reduce) {
+  .update-popup-overlay,
+  .update-popup,
+  .update-popup-overlay.is-closing,
+  .update-popup.is-closing {
+    animation: none;
+  }
 
-/* ─── Inline Error Message ───────────────────────────────────────────────── */
+  .spin {
+    animation: none;
+  }
 
-.update-banner-error {
-  margin-top: 12px;
-  padding: 8px 12px;
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  border-radius: 6px;
-  color: #f87171;
-  font-size: 0.8rem;
-  font-weight: 500;
+  .update-popup-progress-fill {
+    transition: none;
+  }
 }

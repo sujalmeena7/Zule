@@ -115,7 +115,6 @@ export function ControlCapsule({
           onClick={() => onToggleStealth(!stealthEnabled)}
           aria-label={stealthLabel}
           aria-pressed={stealthEnabled}
-          title={stealthLabel}
         >
           {/* Both icons rendered; CSS picks which one is currently in
               the visible slot. Each icon transitions opacity + translateY
@@ -140,11 +139,6 @@ export function ControlCapsule({
               : 'Hear the other party — transcribe system audio (works with headphones)'
           }
           aria-pressed={isSystemAudioActive}
-          title={
-            isSystemAudioActive
-              ? "Listening to system audio — Zule is hearing the other party's voice. Click to stop."
-              : "Hear the other party\nTranscribes your computer's audio (the other person's voice), so Zule can answer their questions — even with headphones on. Click to start."
-          }
         >
           <Headphones size={14} strokeWidth={2} />
           {isSystemAudioActive && (

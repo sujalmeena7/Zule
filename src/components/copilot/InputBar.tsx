@@ -247,7 +247,6 @@ export function InputBar({
               onClick={onUseScreen}
               aria-label="Use screen as context"
               aria-pressed={isScreenActive}
-              title="Use Screen — capture the current desktop and ask the AI about it"
             >
               <ImageIcon size={12} />
               <span>Use Screen</span>
@@ -263,7 +262,6 @@ export function InputBar({
           <button 
             className={`toolbar-more-btn ${isVoiceTyping ? 'recording' : ''}`}
             onClick={() => { void toggleVoiceTyping(); }}
-            title="Voice Type Command"
             aria-label={isVoiceTyping ? 'Stop voice typing' : 'Start voice typing'}
           >
             {isVoiceTyping ? <MicOff size={14} color="#ef4444" /> : <Mic size={14} />}
@@ -274,7 +272,6 @@ export function InputBar({
             className="input-send-btn input-stop-btn"
             onClick={onStopGeneration}
             aria-label="Stop generating the response"
-            title="Stop generating — keeps what's written so far"
           >
             <Square size={12} fill="currentColor" />
           </button>

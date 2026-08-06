@@ -1,29 +1,18 @@
 // ============================================
-// Zule AI — Update Banner Component
+// Zule AI — Update Popup Component
 // ============================================
 //
-// Renders the in-app update notification banner when an update is
-// available, downloading, or ready to install. Uses the existing
-// glass-card and pill design language.
+// Premium, Apple/Cursor-inspired update notification popup.
+// Shows as a centered modal overlay when an update is available,
+// downloading, or ready to install.
 //
-// This component displays version information, release notes,
-// action buttons, download progress, and inline error indication.
-//
-// Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.10,
-//               5.1, 5.2, 5.4, 5.5, 5.6, 5.7, 5.8,
-//               6.1, 6.2, 6.3, 6.5, 6.7, 8.2
+// Requirements: 4.1–4.6, 4.10, 5.1–5.8, 6.1–6.7, 8.2
 
 import { useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import type { UpdateState } from '../types/electron';
 import { computeProgressDisplay } from '../hooks/progressDisplay';
+import { Sparkles, Download, RefreshCw, X, ArrowRight } from 'lucide-react';
 import './UpdateBanner.css';
-
-// ─── Constants ───────────────────────────────────────────────────────────────
-
-/** Maximum characters of release notes to render before truncation. */
-const RELEASE_NOTES_MAX_CHARS = 20_000;
 
 // ─── Props ───────────────────────────────────────────────────────────────────
 
@@ -40,21 +29,8 @@ export interface UpdateBannerProps {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 /**
- * In-app update notification banner rendered at the top of the Dashboard
- * layout when the Auto_Updater identifies a candidate update.
- *
- * - Conditionally renders only when status is `available`, `downloading`, or `ready`.
- * - Displays Available_Version and Current_Version using `pill` badges.
- * - Renders Release_Notes as Markdown (truncated at 20,000 chars with expand control).
- * - Shows placeholder text when release notes are unavailable.
- * - Uses `glass-card` container class.
- * - Renders in normal document flow (not position: fixed) so it pushes content down.
- * - Uses `aria-live="polite"` for screen-reader announcements.
- * - Action buttons:
- *   - `available` state: "Update now" (primary) + "Later" (secondary)
- *   - `downloading` state: "Cancel" (enabled)
- *   - `ready` state: "Restart and install" (primary) + "Install on next quit" (secondary)
- *   - `installing` state: all action buttons disabled
+ * Premium update notification popup rendered as a centered modal overlay.
+ * Inspired by Apple's software update and Cursor's update flow.
  */
 export function UpdateBanner({
   state,
@@ -65,154 +41,192 @@ export function UpdateBanner({
   onDefer,
   onDismiss,
 }: UpdateBannerProps) {
-  const [expanded, setExpanded] = useState(false);
+  const [closing, setClosing] = useState(false);
 
   // Only render for actionable update states
   const visibleStates: UpdateState['status'][] = ['available', 'downloading', 'ready', 'installing'];
   if (!visibleStates.includes(state.status)) return null;
   if (dismissed) return null;
 
-  const { status, availableVersion, currentVersion, releaseNotes, progress, error } = state;
-
-  // Determine if release notes need truncation
-  const notesAvailable = releaseNotes != null && releaseNotes.length > 0;
-  const isTruncated = notesAvailable && releaseNotes.length > RELEASE_NOTES_MAX_CHARS;
-  const displayedNotes =
-    notesAvailable && !expanded && isTruncated
-      ? releaseNotes.slice(0, RELEASE_NOTES_MAX_CHARS)
-      : releaseNotes;
-
-  // Determine if actions should be disabled (non-actionable states)
+  const { status, availableVersion, currentVersion, progress, error } = state;
   const isInstalling = status === 'installing';
+
+  const handleDismiss = () => {
+    setClosing(true);
+    setTimeout(() => {
+      setClosing(false);
+      onDismiss();
+    }, 250);
+  };
+
+  const handleDefer = () => {
+    setClosing(true);
+    setTimeout(() => {
+      setClosing(false);
+      onDefer();
+    }, 250);
+  };
+
+  // Status-specific messaging
+  const statusConfig = {
+    available: {
+      icon: <Sparkles size={22} />,
+      title: 'A new update is available',
+      subtitle: `Zule ${availableVersion} is ready to download`,
+      accentClass: 'accent-blue',
+    },
+    downloading: {
+      icon: <Download size={22} />,
+      title: 'Downloading update…',
+      subtitle: progress
+        ? `${computeProgressDisplay(progress.bytesReceived, progress.totalBytes).percent}% complete`
+        : 'Preparing download…',
+      accentClass: 'accent-blue',
+    },
+    ready: {
+      icon: <RefreshCw size={22} />,
+      title: 'Update ready to install',
+      subtitle: `Zule ${availableVersion} has been downloaded`,
+      accentClass: 'accent-green',
+    },
+    installing: {
+      icon: <RefreshCw size={22} className="spin" />,
+      title: 'Installing update…',
+      subtitle: 'Zule will restart shortly',
+      accentClass: 'accent-green',
+    },
+  };
+
+  const config = statusConfig[status as keyof typeof statusConfig] ?? statusConfig.available;
 
   return (
     <div
-      className="update-banner glass-card"
-      aria-live="polite"
-      aria-atomic="true"
+      className={`update-popup-overlay ${closing ? 'is-closing' : ''}`}
+      onClick={handleDismiss}
+      aria-modal="true"
+      role="dialog"
+      aria-label="Software update"
     >
-      {/* Header with version info */}
-      <div className="update-banner-header">
-        <span className="update-banner-title" aria-label="New version available">
-          🆕 Version{' '}
-          <span className="pill pill-blue">{availableVersion}</span>
-          {' '}available
-        </span>
-        <span className="update-banner-current">
-          you're on <span className="pill pill-purple">{currentVersion}</span>
-        </span>
-      </div>
+      <div
+        className={`update-popup ${config.accentClass} ${closing ? 'is-closing' : ''}`}
+        onClick={(e) => e.stopPropagation()}
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {/* Close button */}
+        <button
+          className="update-popup-close"
+          onClick={handleDismiss}
+          aria-label="Dismiss update notification"
+        >
+          <X size={16} />
+        </button>
 
-      {/* Release notes */}
-      <div className="update-banner-notes">
-        {notesAvailable ? (
-          <>
-            <div className="update-banner-notes-content">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {displayedNotes!}
-              </ReactMarkdown>
-            </div>
-            {isTruncated && (
-              <button
-                className="update-banner-expand-btn"
-                onClick={() => setExpanded((prev) => !prev)}
-                aria-expanded={expanded}
-                aria-label={expanded ? 'Collapse release notes' : 'Expand release notes'}
-              >
-                {expanded ? 'Collapse ▴' : 'Expand ▾'}
-              </button>
-            )}
-          </>
-        ) : (
-          <p className="update-banner-placeholder">
-            Release notes are not available for this version.
-          </p>
-        )}
-      </div>
-
-      {/* Download progress (downloading state only) */}
-      {status === 'downloading' && progress && (
-        <div className="update-banner-progress">
-          <div className="update-banner-progress-bar">
-            <div
-              className="update-banner-progress-fill"
-              style={{ width: `${progress.percent}%` }}
-              role="progressbar"
-              aria-valuenow={progress.percent}
-              aria-valuemin={0}
-              aria-valuemax={100}
-            />
+        {/* Icon + shimmer */}
+        <div className="update-popup-icon-wrap">
+          <div className="update-popup-icon">
+            {config.icon}
           </div>
-          <span className="update-banner-progress-text">
-            {(() => {
-              const display = computeProgressDisplay(progress.bytesReceived, progress.totalBytes);
-              return `${display.percent}% \u2022 ${display.displayReceived} MB / ${display.displayTotal} MB`;
-            })()}
+        </div>
+
+        {/* Title */}
+        <h2 className="update-popup-title">{config.title}</h2>
+
+        {/* Subtitle */}
+        <p className="update-popup-subtitle">{config.subtitle}</p>
+
+        {/* Version badges */}
+        <div className="update-popup-versions">
+          <span className="update-popup-version-badge current">
+            v{currentVersion}
+          </span>
+          <ArrowRight size={14} className="update-popup-version-arrow" />
+          <span className="update-popup-version-badge next">
+            v{availableVersion}
           </span>
         </div>
-      )}
 
-      {/* Error message */}
-      {error && (
-        <p className="update-banner-error" role="alert">
-          Update failed: {error.category}
-        </p>
-      )}
-
-      {/* Action buttons */}
-      <div className="update-banner-actions">
-        {status === 'available' && (
-          <>
-            <button
-              className="update-banner-btn update-banner-btn-primary"
-              onClick={onDownload}
-              disabled={isInstalling}
-              aria-label="Update now"
-            >
-              Update now
-            </button>
-            <button
-              className="update-banner-btn update-banner-btn-secondary"
-              onClick={onDismiss}
-              disabled={isInstalling}
-              aria-label="Later"
-            >
-              Later
-            </button>
-          </>
+        {/* Download progress */}
+        {status === 'downloading' && progress && (
+          <div className="update-popup-progress">
+            <div className="update-popup-progress-track">
+              <div
+                className="update-popup-progress-fill"
+                style={{ width: `${progress.percent}%` }}
+                role="progressbar"
+                aria-valuenow={progress.percent}
+                aria-valuemin={0}
+                aria-valuemax={100}
+              />
+            </div>
+            <span className="update-popup-progress-text">
+              {(() => {
+                const display = computeProgressDisplay(progress.bytesReceived, progress.totalBytes);
+                return `${display.displayReceived} / ${display.displayTotal} MB`;
+              })()}
+            </span>
+          </div>
         )}
 
-        {status === 'downloading' && (
-          <button
-            className="update-banner-btn update-banner-btn-primary"
-            onClick={onCancel}
-            disabled={isInstalling}
-            aria-label="Cancel"
-          >
-            Cancel
-          </button>
+        {/* Error message */}
+        {error && (
+          <p className="update-popup-error" role="alert">
+            ⚠ Update failed: {error.category}
+          </p>
         )}
 
-        {(status === 'ready' || status === 'installing') && (
-          <>
+        {/* Action buttons */}
+        <div className="update-popup-actions">
+          {status === 'available' && (
+            <>
+              <button
+                className="update-popup-btn primary"
+                onClick={onDownload}
+                disabled={isInstalling}
+              >
+                <Download size={15} />
+                Update Now
+              </button>
+              <button
+                className="update-popup-btn secondary"
+                onClick={handleDismiss}
+                disabled={isInstalling}
+              >
+                Not Now
+              </button>
+            </>
+          )}
+
+          {status === 'downloading' && (
             <button
-              className="update-banner-btn update-banner-btn-primary"
-              onClick={onInstall}
+              className="update-popup-btn secondary"
+              onClick={onCancel}
               disabled={isInstalling}
-              aria-label="Restart and install"
             >
-              Restart and install
+              Cancel Download
             </button>
-            <button
-              className="update-banner-btn update-banner-btn-secondary"
-              onClick={onDefer}
-              disabled={isInstalling}
-              aria-label="Install on next quit"
-            >
-              Install on next quit
-            </button>
-          </>
-        )}
+          )}
+
+          {(status === 'ready' || status === 'installing') && (
+            <>
+              <button
+                className="update-popup-btn primary"
+                onClick={onInstall}
+                disabled={isInstalling}
+              >
+                <RefreshCw size={15} className={isInstalling ? 'spin' : ''} />
+                {isInstalling ? 'Installing…' : 'Restart & Install'}
+              </button>
+              <button
+                className="update-popup-btn secondary"
+                onClick={handleDefer}
+                disabled={isInstalling}
+              >
+                Install Later
+              </button>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );

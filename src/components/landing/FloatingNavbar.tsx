@@ -37,10 +37,13 @@ import {
 } from 'framer-motion';
 import {
   useCallback,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type FocusEvent as ReactFocusEvent,
   type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
   type RefObject,
 } from 'react';
 
@@ -66,6 +69,96 @@ import { MagneticLink } from './MagneticLink';
  */
 export function isCompact(scrollY: number, heroBottom: number): boolean {
   return scrollY >= heroBottom;
+}
+
+// --------------------------------------------------------------------------
+// Shared target model — interaction ownership
+// --------------------------------------------------------------------------
+
+/**
+ * Every navigable element in the navbar. The three anchor entries share
+ * ids with {@link FloatingNavbarAnchorId}; `blog` and `download` extend
+ * the union so pointer/focus interactions cover the full link group.
+ *
+ * Requirements: 1.2, 1.5, 1.6, 6.2, 8.1, 8.2, 8.3
+ */
+export type NavTargetId =
+  | 'features'
+  | 'how-it-works'
+  | 'faq'
+  | 'blog'
+  | 'download';
+
+/**
+ * Ownership channels for the three distinct input sources that compete
+ * for active-indicator control.
+ *
+ * - `focusTarget` — keyboard navigation; highest priority.
+ * - `hoverTarget` — pointer enter within the link group.
+ * - `scrollActiveTarget` — viewport-center section observation fallback.
+ *
+ * Requirements: 1.2, 1.5, 1.6, 6.2
+ */
+export interface NavOwnership {
+  hoverTarget: NavTargetId | null;
+  focusTarget: NavTargetId | null;
+  scrollActiveTarget: FloatingNavbarAnchorId | null;
+}
+
+/**
+ * Pure resolver that selects the single active target from the three
+ * ownership channels using focus → hover → scroll precedence.
+ *
+ * Focus takes priority while keyboard navigation is active; hover takes
+ * priority over the scroll fallback whenever focus is absent. The scroll
+ * observer can update continuously without changing the resolved target
+ * during direct interaction.
+ *
+ * Requirements: 1.2, 1.5, 1.6, 6.2
+ */
+export function resolveActiveTarget(state: NavOwnership): NavTargetId | null {
+  return state.focusTarget ?? state.hoverTarget ?? state.scrollActiveTarget;
+}
+
+// --------------------------------------------------------------------------
+// Indicator geometry model
+// --------------------------------------------------------------------------
+
+/**
+ * Resolved geometry for the active indicator, expressed relative to the
+ * links shell coordinate space. The shell is a positioned container that
+ * wraps both the link list and the indicator, so `x` and `width` are
+ * exact pixel offsets within that shared parent.
+ *
+ * Requirements: 2.1, 2.3, 2.4, 2.7
+ */
+export interface IndicatorGeometry {
+  /** The nav target this geometry was measured for. */
+  id: NavTargetId;
+  /** Horizontal offset of the target relative to the shell's left edge. */
+  x: number;
+  /** Width of the target element in CSS pixels. */
+  width: number;
+}
+
+/**
+ * Pure helper that converts absolute bounding-client-rect measurements
+ * into shell-relative indicator geometry.
+ *
+ * By subtracting the shell's `left` from the target's `left`, the
+ * resulting `x` is always relative to the shell regardless of the
+ * shell's position in the viewport. This eliminates the coordinate-space
+ * mismatch that occurred when `offsetLeft` was measured against a
+ * different offset parent than the indicator's own container.
+ *
+ * Requirements: 2.3, 2.4
+ */
+export function toIndicatorGeometry(
+  id: NavTargetId,
+  shell: Pick<DOMRect, 'left'>,
+  target: Pick<DOMRect, 'left' | 'width'>,
+): IndicatorGeometry {
+  return { id, x: target.left - shell.left, width: target.width };
 }
 
 // --------------------------------------------------------------------------
@@ -220,19 +313,190 @@ export function FloatingNavbar({
   );
 
   // ----------------------------------------------------------------
-  // Hover tracking — fed into ActiveIndicator's `hoveredId` prop.
-  // We only clear the state if the leaving link was the one currently
-  // tracked, so a quick pointer move between adjacent links never
-  // produces a blank frame where no link is highlighted.
+  // Links shell ref and indicator geometry.
+  //
+  // The shell is a positioned <div> that wraps the <ul> and the
+  // ActiveIndicator. Measuring both the active target and the shell
+  // with getBoundingClientRect and subtracting shell.left gives us
+  // exact relative x/width — no offset-parent mismatch.
+  //
+  // The useLayoutEffect fires before paint so the indicator geometry
+  // is committed atomically as a complete { id, x, width } object.
+  //
+  // Requirements: 2.1, 2.3, 2.4, 2.7
   // ----------------------------------------------------------------
-  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const shellRef = useRef<HTMLDivElement | null>(null);
+  // Indicator geometry is committed before paint by the useLayoutEffect below.
+  // It will be consumed by ActiveIndicator once task 3.1 refactors it.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [indicatorGeometry, setIndicatorGeometry] =
+    useState<IndicatorGeometry | null>(null);
 
+  // ----------------------------------------------------------------
+  // Interaction ownership — delegated at the Link_Group (<ul>) level.
+  //
+  // hoverTarget: set by pointerover on any [data-nav-id] descendant.
+  //   Cleared only on pointerleave of the entire group (not on
+  //   individual pointerout when the related target stays inside).
+  //
+  // focusTarget: set by focusin (capture phase) on any [data-nav-id]
+  //   descendant. Cleared only when focus leaves the group entirely.
+  //
+  // The resolved active target uses focus → hover → scroll precedence
+  // via resolveActiveTarget.
+  //
+  // Requirements: 1.1, 1.2, 1.3, 1.4, 1.6, 4.1, 4.2, 4.6, 6.1, 6.2
+  // ----------------------------------------------------------------
+  const [hoverTarget, setHoverTarget] = useState<NavTargetId | null>(null);
+  const [focusTarget, setFocusTarget] = useState<NavTargetId | null>(null);
+
+  // Ref to the Link_Group (<ul>) for containment checks.
+  const linkGroupRef = useRef<HTMLUListElement | null>(null);
+
+  /**
+   * Resolve a NavTargetId from the closest [data-nav-id] ancestor of
+   * a given event target node. Returns null if the node is not inside
+   * a nav item.
+   */
+  const resolveNavId = useCallback(
+    (node: EventTarget | null): NavTargetId | null => {
+      if (!(node instanceof HTMLElement)) return null;
+      const item = node.closest<HTMLElement>('[data-nav-id]');
+      if (!item) return null;
+      return (item.dataset.navId as NavTargetId) ?? null;
+    },
+    [],
+  );
+
+  /**
+   * Returns true when `node` is contained within the Link_Group.
+   */
+  const isInsideLinkGroup = useCallback(
+    (node: EventTarget | null): boolean => {
+      if (!linkGroupRef.current || !(node instanceof Node)) return false;
+      return linkGroupRef.current.contains(node);
+    },
+    [],
+  );
+
+  // --- Pointer event delegation ---
+
+  const handlePointerOver = useCallback(
+    (event: ReactPointerEvent<HTMLUListElement>) => {
+      const id = resolveNavId(event.target);
+      if (id) setHoverTarget(id);
+    },
+    [resolveNavId],
+  );
+
+  const handlePointerOut = useCallback(
+    (event: ReactPointerEvent<HTMLUListElement>) => {
+      // If the pointer is moving to another element still inside the
+      // Link_Group, don't clear hover — the next pointerover will set
+      // the new target. This eliminates the null-gap between adjacent
+      // link transfers.
+      if (isInsideLinkGroup(event.relatedTarget)) return;
+      // relatedTarget is null or outside the group — treat as leave.
+      setHoverTarget(null);
+    },
+    [isInsideLinkGroup],
+  );
+
+  const handlePointerLeave = useCallback(
+    () => {
+      setHoverTarget(null);
+    },
+    [],
+  );
+
+  // --- Focus event delegation (capture phase) ---
+
+  const handleFocusCapture = useCallback(
+    (event: ReactFocusEvent<HTMLUListElement>) => {
+      const id = resolveNavId(event.target);
+      if (id) setFocusTarget(id);
+    },
+    [resolveNavId],
+  );
+
+  const handleBlurCapture = useCallback(
+    (event: ReactFocusEvent<HTMLUListElement>) => {
+      // Retain focus ownership when relatedTarget remains in the group.
+      if (isInsideLinkGroup(event.relatedTarget)) return;
+      setFocusTarget(null);
+    },
+    [isInsideLinkGroup],
+  );
+
+  // --- Resolved active target ---
+  // This is the "winning" target that ActiveIndicator uses. The
+  // resolveActiveTarget function implements focus → hover → scroll
+  // precedence. scrollActiveTarget currently comes from ActiveIndicator's
+  // internal observer; it is passed here as null until task 2.2 migrates
+  // that observer into this component.
+  const scrollActiveTarget: FloatingNavbarAnchorId | null = null;
+
+  const resolvedActiveTarget = resolveActiveTarget({
+    focusTarget,
+    hoverTarget,
+    scrollActiveTarget,
+  });
+
+  // Legacy hoveredId — still passed to ActiveIndicator for the existing
+  // indicator logic (until task 3.1 refactors it to consume geometry).
+  // The new delegated hoverTarget supersedes the per-link makeHoverHandler
+  // for ownership, but we keep the prop for visual continuity.
+  const hoveredId = resolvedActiveTarget;
+
+  // ----------------------------------------------------------------
+  // Geometry measurement — useLayoutEffect before paint.
+  //
+  // Whenever the resolved active target changes, we measure both the
+  // shell and the target element with getBoundingClientRect and commit
+  // the complete { id, x, width } geometry atomically. Running in a
+  // layout effect ensures the indicator position is ready before the
+  // browser paints, avoiding a stale frame.
+  //
+  // The full remeasurement logic (ResizeObserver, compact state, font
+  // readiness) is added in task 2.2. This effect handles the core
+  // target-change measurement path.
+  //
+  // Requirements: 2.1, 2.3, 2.4, 2.7
+  // ----------------------------------------------------------------
+  useLayoutEffect(() => {
+    if (resolvedActiveTarget === null) {
+      setIndicatorGeometry(null);
+      return;
+    }
+
+    const shellEl = shellRef.current;
+    if (!shellEl) {
+      setIndicatorGeometry(null);
+      return;
+    }
+
+    const targetRef = itemRefs[resolvedActiveTarget];
+    const targetEl = targetRef?.current;
+    if (!targetEl) {
+      setIndicatorGeometry(null);
+      return;
+    }
+
+    const shellRect = shellEl.getBoundingClientRect();
+    const targetRect = targetEl.getBoundingClientRect();
+
+    setIndicatorGeometry(
+      toIndicatorGeometry(resolvedActiveTarget, shellRect, targetRect),
+    );
+  }, [resolvedActiveTarget, itemRefs]);
+
+  // Legacy makeHoverHandler — retained on MagneticLink so the existing
+  // onHoverChange prop is not removed yet (that's task 4.1). These
+  // callbacks are now no-ops for ownership; the Link_Group delegation
+  // above is the source of truth.
   const makeHoverHandler = useCallback(
-    (id: string) => (hovered: boolean) => {
-      setHoveredId((prev) => {
-        if (hovered) return id;
-        return prev === id ? null : prev;
-      });
+    () => () => {
+      // Intentionally no-op: ownership is now delegated at the group level.
     },
     [],
   );
@@ -292,7 +556,16 @@ export function FloatingNavbar({
     >
       <Logo3D className="floating-navbar-logo" />
 
-      <ul className="floating-navbar-items">
+      <div ref={shellRef} className="floating-navbar-links-shell">
+        <ul
+          ref={linkGroupRef}
+          className="floating-navbar-items"
+          onPointerOver={handlePointerOver}
+          onPointerOut={handlePointerOut}
+          onPointerLeave={handlePointerLeave}
+          onFocusCapture={handleFocusCapture}
+          onBlurCapture={handleBlurCapture}
+        >
         {ANCHOR_ITEMS.map((item) => {
           // Picking the right ref per item keeps the JSX flat without
           // an extra map<ref> indirection.
@@ -302,12 +575,22 @@ export function FloatingNavbar({
               : item.id === 'how-it-works'
                 ? howItWorksRef
                 : faqRef;
+
+          // data-active marks the currently resolved active target.
+          const isActive = resolvedActiveTarget === item.id;
+          // aria-current="location" only applies to scroll-derived
+          // active anchors (not hover/focus targets).
+          const isScrollActive =
+            !focusTarget && !hoverTarget && scrollActiveTarget === item.id;
+
           return (
             <li
               key={item.id}
               ref={ref}
               className="floating-navbar-item"
               data-nav-id={item.id}
+              data-active={isActive ? 'true' : undefined}
+              aria-current={isScrollActive ? 'location' : undefined}
             >
               <MagneticLink
                 href={item.href}
@@ -323,6 +606,7 @@ export function FloatingNavbar({
           ref={blogRef}
           className="floating-navbar-item"
           data-nav-id="blog"
+          data-active={resolvedActiveTarget === 'blog' ? 'true' : undefined}
         >
           <MagneticLink
             href="#"
@@ -336,6 +620,7 @@ export function FloatingNavbar({
           ref={downloadRef}
           className="floating-navbar-item floating-navbar-item--cta"
           data-nav-id="download"
+          data-active={resolvedActiveTarget === 'download' ? 'true' : undefined}
         >
           <MagneticLink
             href="#"
@@ -347,11 +632,12 @@ export function FloatingNavbar({
         </li>
       </ul>
 
-      <ActiveIndicator
-        hoveredId={hoveredId}
-        itemRefs={itemRefs}
-        sectionIds={OBSERVED_SECTION_IDS}
-      />
+        <ActiveIndicator
+          hoveredId={hoveredId}
+          itemRefs={itemRefs}
+          sectionIds={OBSERVED_SECTION_IDS}
+        />
+      </div>
     </motion.nav>
   );
 }

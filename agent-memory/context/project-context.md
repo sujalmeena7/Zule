@@ -4863,11 +4863,6 @@ All tasks for the `stealth-window-host` spec are now complete:
 
 Prepared the fail-closed GitHub Actions/self-hosted Windows/Azure Artifact Signing release path without approving the pending native lock. CI now uses committed `package-lock.json` + `npm ci`, immutable labels `stage-c-win10-22h2-v1`, `stage-c-win11-23h2-v1`, and `stage-c-win11-24h2-v1`, preinstalled fixed WebView2 runtimes, GitHub OIDC, and post-signing artifact-derived build hashes. Added strict lock/image/runtime/collector validation, explicit no-restore MSBuild invocation of `ZuleUI.vcxproj`, artifact hashing, real-collector per-row execution, and complete evidence assembly CLIs. Missing collectors or incomplete/invalid evidence exit nonzero and cannot emit approval. The current `pending`/`REVIEW_REQUIRED` lock remains production-disabled.
 
-Added `docs/stage-c-release-runner-setup.md` covering immutable snapshot provisioning, exact labels/runtime paths, ephemeral least-privilege runner registration, collector manifests, npm lock review, and Azure variables/secret. Added targeted lock, CLI, evidence, build, and workflow invariant tests; strengthened canonical evidence hashing. Consolidated targeted Vitest + Electron TypeScript + JavaScript syntax + non-mutating probe + diff validation returned exit 0; diagnostics are clean. A redundant verbose rerun was canceled by the shell tool before returning output and did not change files.
-
----
-
-## Release v1.3.0 preparation — 2026-08-06
 
 Prepared v1.3.0 without commit/tag/push/publish: updated root package metadata via `npm version 1.3.0 --no-git-tag-version --ignore-scripts`, changed the LandingPage badge to “Zule 1.3.0 is now live,” and confirmed all landing download CTAs still resolve through `https://github.com/sujalmeena7/Zule/releases/latest/download/ZuleAI-setup.exe` with electron-builder publish target `sujalmeena7/Zule`. `npm run electron:build` passed and generated `latest.yml` (329 bytes), `ZuleAI-setup.exe` (562,768,167 bytes), and `ZuleAI-setup.exe.blockmap` (576,938 bytes). Root `npm run build` remains blocked by 78 pre-existing unrelated TypeScript errors; Electron TypeScript validation remains blocked by 85 pre-existing errors in unfinished Stage C files, so unrelated work was left untouched.
 
@@ -4876,3 +4871,28 @@ Prepared v1.3.0 without commit/tag/push/publish: updated root package metadata v
 ## Release v1.3.0 source branch published — 2026-08-06
 
 Created and pushed `release/v1.3.0-source` at commit `315e0c5` (`release: publish v1.3.0 source`). The commit contains the v1.3.0 application/release source and supporting specifications while excluding `.env`, `.env.local`, generated release binaries, logs, `.vercel`, `.claude/settings.json`, the abandoned Safe Exam Browser spec, and the unrelated root `implementation_plan.md`. The remote branch is ready for review through a pull request; `main` was not modified.
+
+---
+
+## landing-navbar-hover-polish — fast-task planning
+
+Created the navbar-only fast-task spec at `.kiro/specs/landing-navbar-hover-polish/` (`.config.kiro`, `requirements.md`, `design.md`, `tasks.md`). Investigation found the visible FAQ/How it works lag is primarily caused by child-level `pointerleave` clearing hover before adjacent `pointerenter`, compounded by `ActiveIndicator` resolving geometry through a second state/effect step, a fixed 300 ms transition, and list-item offsets measured in a different coordinate space from the indicator. The plan centralizes pointer/focus/scroll ownership in `FloatingNavbar`, measures target geometry relative to one links shell, makes `ActiveIndicator` presentational with an interruptible 140 ms transition, gates magnetic work for touch/reduced motion, and adds navbar-scoped premium glass/depth/glow, responsive, keyboard, contrast, and regression tests. No application code was modified.
+Added `docs/stage-c-release-runner-setup.md` covering immutable snapshot provisioning, exact labels/runtime paths, ephemeral least-privilege runner registration, collector manifests, npm lock review, and Azure variables/secret. Added targeted lock, CLI, evidence, build, and workflow invariant tests; strengthened canonical evidence hashing. Consolidated targeted Vitest + Electron TypeScript + JavaScript syntax + non-mutating probe + diff validation returned exit 0; diagnostics are clean. A redundant verbose rerun was canceled by the shell tool before returning output and did not change files.
+
+---
+
+
+Prepared v1.3.0 without commit/tag/push/publish: updated root package metadata via 4883: Created the navbar-only fast-task spec at `.kiro/specs/landing-navbar-hover-polish/` (`.config.kiro`, `requirements.md`, `design.md`, `tasks.md`). Investigation found the visible FAQ/How it works lag is primarily caused by child-level `pointerleave` clearing hover before adjacent `pointerenter`, compounded by `ActiveIndicator` resolving geometry through a second state/effect step, a fixed 300 ms transition, and list-item offsets measured in a different coordinate space from the indicator. The plan centralizes pointer/focus/scroll ownership in `FloatingNavbar`, measures target geometry relative to one links shell, makes `ActiveIndicator` presentational with an interruptible 140 ms transition, gates magnetic work for touch/reduced motion, and adds navbar-scoped premium glass/depth/glow, responsive, keyboard, contrast, and regression tests. No application code was modified.
+
+---
+
+## Auto-Updater Popup & Navbar Polish & Release v1.4.0 Preparation — 2026-08-07
+
+- **Navbar Refactor**: Complete refactor of `FloatingNavbar`, `ActiveIndicator`, `MagneticLink`, and `landing-3d.css`. Replaced default glass with layered multi-background glass (noise + backdrop blur saturate), refined indicator positioning to use parent-relative `getBoundingClientRect`, and reduced magnetic displacement from 12px to a subtle 4px to eliminate link bleed/flicker.
+- **Auto-Updater Popup**: Refactored `UpdateBanner.tsx` and `UpdateBanner.css` from an inline banner to a premium, Apple/Cursor-inspired centered modal popup with status-specific icons, version badges, smooth scale+fade animations, and progress bar.
+- **Version Bump & Release Build**: Bumped version to `1.4.0` in `package.json`. Ran `npm run electron:build`, generating `ZuleAI-setup.exe` (v1.4.0), `ZuleAI-setup.exe.blockmap`, and `latest.yml` in `release/`.
+mit contains the v1.3.0 application/release source and supporting specifications while excluding `.env`, `.env.local`, generated release binaries, logs, `.vercel`, `.claude/settings.json`, the abandoned Safe Exam Browser spec, and the unrelated root `implementation_plan.md`. The remote branch is ready for review through a pull request; `main` was not modified.
+
+---
+
+## landing-navbar-hover-polish — fast-task planning</content>
