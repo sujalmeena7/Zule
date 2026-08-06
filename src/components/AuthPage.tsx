@@ -401,7 +401,15 @@ export function AuthPage() {
                         {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                       </button>
                       <button type="submit" className="auth-input-arrow" disabled={loading} aria-label="Sign in">
-                        {loading ? <Loader2 size={18} className="spinner" /> : <ArrowRight size={18} />}
+                        {loading ? (
+                          <motion.div
+                            style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+                            animate={{ rotate: 360 }}
+                            transition={{ repeat: Infinity, duration: 1, ease: 'linear' }}
+                          >
+                            <Loader2 size={18} className="spinner" />
+                          </motion.div>
+                        ) : <ArrowRight size={18} />}
                       </button>
                     </div>
                     {!isSignUp && (

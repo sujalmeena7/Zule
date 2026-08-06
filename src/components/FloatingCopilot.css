@@ -686,8 +686,15 @@
   font-size: 0.85rem;
 }
 
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 .spinner {
-  animation: spin 1s linear infinite;
+  animation: spin 1s linear infinite !important;
+  display: inline-block;
+  transform-origin: center center;
 }
 
 .suggestion-placeholder {

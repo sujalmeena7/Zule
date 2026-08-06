@@ -543,8 +543,21 @@ export class AutoUpdateService {
    * For startup checks, ensures at most one per launch.
    */
   async checkForUpdate(trigger: 'startup' | 'manual' = 'manual'): Promise<UpdateState> {
-    // Dev mode short-circuit (Requirement 2.6)
+    // Dev mode simulation for testing update UI (Requirement 2.6)
     if (!this.isPackaged) {
+      this.transitionTo('checking');
+      setTimeout(() => {
+        this.state = {
+          ...this.state,
+          status: 'available',
+          availableVersion: '1.4.0',
+          currentVersion: this.state.currentVersion,
+          releaseNotes: '### What\'s New in v1.4.0\n- Apple & Cursor style update popup\n- Refactored glassmorphic navbar',
+          progress: null,
+          error: null,
+        };
+        this.broadcast();
+      }, 800);
       return this.getState();
     }
 
@@ -586,7 +599,31 @@ export class AutoUpdateService {
    * Only valid when status is 'available'.
    */
   async downloadUpdate(): Promise<void> {
-    if (!this.isPackaged || !this.autoUpdater) return;
+    if (!this.isPackaged) {
+      if (this.state.status !== 'available') return;
+      this.transitionTo('downloading');
+      let pct = 0;
+      const interval = setInterval(() => {
+        pct += 25;
+        this.state = {
+          ...this.state,
+          status: 'downloading',
+          progress: { percent: pct, bytesReceived: (pct / 100) * 50_000_000, totalBytes: 50_000_000 },
+        };
+        this.broadcast();
+        if (pct >= 100) {
+          clearInterval(interval);
+          this.state = {
+            ...this.state,
+            status: 'ready',
+            progress: null,
+          };
+          this.broadcast();
+        }
+      }, 500);
+      return;
+    }
+    if (!this.autoUpdater) return;
     if (this.state.status !== 'available') {
       throw new Error('No update available to download');
     }
