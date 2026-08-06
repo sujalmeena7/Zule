@@ -4870,3 +4870,9 @@ Added `docs/stage-c-release-runner-setup.md` covering immutable snapshot provisi
 ## Release v1.3.0 preparation — 2026-08-06
 
 Prepared v1.3.0 without commit/tag/push/publish: updated root package metadata via `npm version 1.3.0 --no-git-tag-version --ignore-scripts`, changed the LandingPage badge to “Zule 1.3.0 is now live,” and confirmed all landing download CTAs still resolve through `https://github.com/sujalmeena7/Zule/releases/latest/download/ZuleAI-setup.exe` with electron-builder publish target `sujalmeena7/Zule`. `npm run electron:build` passed and generated `latest.yml` (329 bytes), `ZuleAI-setup.exe` (562,768,167 bytes), and `ZuleAI-setup.exe.blockmap` (576,938 bytes). Root `npm run build` remains blocked by 78 pre-existing unrelated TypeScript errors; Electron TypeScript validation remains blocked by 85 pre-existing errors in unfinished Stage C files, so unrelated work was left untouched.
+
+---
+
+## Release v1.3.0 source branch published — 2026-08-06
+
+Created and pushed `release/v1.3.0-source` at commit `315e0c5` (`release: publish v1.3.0 source`). The commit contains the v1.3.0 application/release source and supporting specifications while excluding `.env`, `.env.local`, generated release binaries, logs, `.vercel`, `.claude/settings.json`, the abandoned Safe Exam Browser spec, and the unrelated root `implementation_plan.md`. The remote branch is ready for review through a pull request; `main` was not modified.
