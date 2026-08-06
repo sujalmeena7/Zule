@@ -3,7 +3,7 @@
 // ============================================
 
 import { useState, useRef, useEffect, type RefObject } from 'react';
-import { Zap, MoreHorizontal, Send, Mic, MicOff, Image as ImageIcon } from 'lucide-react';
+import { Zap, MoreHorizontal, Send, Mic, MicOff, Image as ImageIcon, Square } from 'lucide-react';
 import { useZuleError } from '../../hooks/useZuleError';
 import { WhisperProvider } from '../../brain/transcription/whisper';
 import type { TranscriptionLine } from '../../types/transcription';
@@ -28,6 +28,12 @@ interface InputBarProps {
   /** Optional: called when in-bar voice dictation ends (any exit path), so the
    *  host can resume the main mic pipeline. */
   onDictationEnd?: () => void;
+  /** Optional: true while an AI response is being generated or streamed. When
+   *  true (and `onStopGeneration` is supplied) the send button becomes a stop
+   *  button so the user can cut the answer short and ask something else. */
+  isGenerating?: boolean;
+  /** Optional: aborts the in-flight AI response. Enables the stop button. */
+  onStopGeneration?: () => void;
 }
 
 export function InputBar({
@@ -40,7 +46,13 @@ export function InputBar({
   isScreenActive,
   onDictationStart,
   onDictationEnd,
+  isGenerating,
+  onStopGeneration,
 }: InputBarProps) {
+  // The send slot turns into a stop control only when there is something to
+  // stop AND the host wired up a handler. Otherwise it stays a send button
+  // (disabled while loading) so existing callers are unaffected.
+  const canStop = Boolean(isGenerating && onStopGeneration);
   const [isVoiceTyping, setIsVoiceTyping] = useState(false);
   const recognitionRef = useRef<any>(null);
   const whisperRef = useRef<WhisperProvider | null>(null);
@@ -257,14 +269,25 @@ export function InputBar({
             {isVoiceTyping ? <MicOff size={14} color="#ef4444" /> : <Mic size={14} />}
           </button>
         </div>
-        <button
-          className="input-send-btn"
-          onClick={onSubmit}
-          disabled={isLoading}
-          aria-label="Send message"
-        >
-          <Send size={14} />
-        </button>
+        {canStop ? (
+          <button
+            className="input-send-btn input-stop-btn"
+            onClick={onStopGeneration}
+            aria-label="Stop generating the response"
+            title="Stop generating — keeps what's written so far"
+          >
+            <Square size={12} fill="currentColor" />
+          </button>
+        ) : (
+          <button
+            className="input-send-btn"
+            onClick={onSubmit}
+            disabled={isLoading}
+            aria-label="Send message"
+          >
+            <Send size={14} />
+          </button>
+        )}
       </div>
     </div>
   );

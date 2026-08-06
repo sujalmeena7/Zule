@@ -30,6 +30,7 @@ export type ZuleError =
   | { kind: 'screen.permission-denied' }
   | { kind: 'screen.autoplay-blocked' }
   | { kind: 'screen.unsupported' }
+  | { kind: 'screen.frame-not-available' }
 
   // OCR_Worker
   | { kind: 'ocr.worker-failed'; consecutiveFailures: number }
@@ -54,6 +55,12 @@ export type ZuleError =
   | { kind: 'provider.server-error'; providerId: string; status: number }
   | { kind: 'provider.unauthorized'; providerId: string }
   | { kind: 'provider.aborted' }
+  // Raised before any HTTP request when a cloud prompt carries no complete
+  // redaction attestation — content-free by construction.
+  | { kind: 'provider.redaction-incomplete'; providerId: string }
+  // Raised by Provider_Sync when an enabled provider entry has blank required
+  // fields. `missing` holds field *names* only, never their values.
+  | { kind: 'provider.config-incomplete'; providerId: string; missing: string[] }
 
   // Persistence (IndexedDB) and import/export
   | { kind: 'storage.quota-exceeded' }

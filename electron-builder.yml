@@ -21,7 +21,7 @@ copyright: Copyright © 2024 Zule AI
 # `InputAssistant`). DO NOT impersonate a Windows system process name —
 # AVs flag exes that mimic `svchost.exe`, `lsass.exe`, etc. as malware.
 #
-# executableName: DesktopHelper
+executableName: DesktopHelper
 
 directories:
   buildResources: public
@@ -38,15 +38,20 @@ files:
   # @huggingface/jinja) UNDER @huggingface/transformers/node_modules/, so this
   # single glob captures the whole stack including the native binaries.
   - node_modules/@huggingface/transformers/**/*
+  # koffi FFI — native stealth module calls Win32 APIs directly for
+  # capture exclusion, DWM cloaking, and window style hardening.
+  - node_modules/koffi/**/*
 
 # Native binaries (.node, .dll) cannot be loaded from inside the asar archive,
 # so unpack the ML stack to app.asar.unpacked/. onnxruntime-node ships
 # onnxruntime_binding.node + onnxruntime.dll/DirectML.dll; sharp ships native
 # image bindings. The whisper model files are read from dist/vendor (inside
 # asar is fine — they're read via fs, which Electron serves transparently).
+# koffi ships a prebuilt .node binary for Win/macOS/Linux.
 asarUnpack:
   - node_modules/@huggingface/transformers/node_modules/onnxruntime-node/**/*
   - node_modules/@huggingface/transformers/node_modules/sharp/**/*
+  - node_modules/koffi/**/*
   - "**/*.node"
   - "**/*.dll"
 

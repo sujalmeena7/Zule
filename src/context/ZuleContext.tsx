@@ -16,7 +16,7 @@ import { isElectron } from '../hooks/useElectronBridge';
 
 // ---- Page & Hash Routing ----
 
-export type Page = 'landing' | 'auth' | 'dashboard' | 'copilot' | 'meeting-detail' | 'settings' | 'diagnostics' | 'blog' | 'blog-post';
+export type Page = 'landing' | 'auth' | 'dashboard' | 'copilot' | 'meeting-detail' | 'settings' | 'diagnostics' | 'blog' | 'blog-post' | 'pricing';
 
 const PAGE_TO_HASH: Record<Page, string> = {
   landing: '',
@@ -28,6 +28,7 @@ const PAGE_TO_HASH: Record<Page, string> = {
   diagnostics: '#diagnostics',
   blog: '#blog',
   'blog-post': '#blog-post',
+  pricing: '#pricing',
 };
 
 const HASH_TO_PAGE: Record<string, Page> = {
@@ -41,6 +42,7 @@ const HASH_TO_PAGE: Record<string, Page> = {
   '#diagnostics': 'diagnostics',
   '#blog': 'blog',
   '#blog-post': 'blog-post',
+  '#pricing': 'pricing',
 };
 
 function pageFromHash(): Page {

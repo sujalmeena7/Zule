@@ -13,6 +13,10 @@ import { formatDuration, formatDate, formatTimestamp } from '../utils/formatters
 import { database as storage } from '../data/database';
 import { retrySummary } from '../brain/stopSession';
 import { MODE_CONFIGS, type CopilotMode } from '../brain/modePrompts';
+import { useSubscription } from '../context/SubscriptionContext';
+import { UpgradeModal } from './UpgradeModal';
+import { Lock } from 'lucide-react';
+import type { GatedFeature } from '../types/subscription';
 import './MeetingDetail.css';
 import { useZule } from '../context/ZuleContext';
 import toast from 'react-hot-toast';
@@ -27,6 +31,12 @@ export function MeetingDetail() {
   const [copiedSection, setCopiedSection] = useState<'summary' | 'transcript' | 'email' | null>(null);
   const [isRetryingSummary, setIsRetryingSummary] = useState(false);
   const [currentMeeting, setCurrentMeeting] = useState(meeting);
+
+  const { isFeatureAvailable } = useSubscription();
+  const [upgradeModal, setUpgradeModal] = useState<{
+    reason: 'feature-locked';
+    feature?: GatedFeature;
+  } | null>(null);
 
   const toggleAction = useCallback((id: string) => {
     setActionItems(prev => {
@@ -79,6 +89,10 @@ Best regards`;
   };
 
   const handleCopy = (text: string, section: 'summary' | 'transcript' | 'email') => {
+    if (!isFeatureAvailable('export.transcripts')) {
+      setUpgradeModal({ reason: 'feature-locked', feature: 'export.transcripts' });
+      return;
+    }
     navigator.clipboard.writeText(text);
     setCopiedSection(section);
     setTimeout(() => setCopiedSection(null), 2000);
@@ -88,6 +102,13 @@ Best regards`;
 
   return (
     <div className="meeting-detail page-container">
+      {upgradeModal && (
+        <UpgradeModal
+          reason={upgradeModal.reason}
+          feature={upgradeModal.feature}
+          onClose={() => setUpgradeModal(null)}
+        />
+      )}
       {/* Header */}
       <div className="detail-header animate-slide-up">
         <button className="btn-secondary" onClick={onBack}>
@@ -131,12 +152,22 @@ Best regards`;
           <button
             key={tab}
             className={`detail-tab ${activeTab === tab ? 'active' : ''}`}
-            onClick={() => setActiveTab(tab)}
+            onClick={() => {
+              if (tab === 'analytics' && !isFeatureAvailable('coaching.metrics')) {
+                setUpgradeModal({ reason: 'feature-locked', feature: 'coaching.metrics' });
+                return;
+              }
+              setActiveTab(tab);
+            }}
           >
             {tab === 'summary' && 'Summary'}
             {tab === 'transcript' && 'Transcript'}
             {tab === 'actions' && 'Action Items'}
-            {tab === 'analytics' && 'Analytics'}
+            {tab === 'analytics' && (
+              <span style={{ display: 'flex', alignItems: 'center' }}>
+                Analytics {!isFeatureAvailable('coaching.metrics') && <Lock size={12} style={{ marginLeft: 6, opacity: 0.5 }} />}
+              </span>
+            )}
             {tab === 'followup' && 'Follow-up Email'}
           </button>
         ))}

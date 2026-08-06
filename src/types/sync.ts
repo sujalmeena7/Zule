@@ -34,8 +34,10 @@ export interface CoachingMetrics {
   confidenceScore: number;
 }
 
-/** Modalities that contributed to the most-recent prompt assembly. */
-export type Modality = 'audio' | 'screen' | 'knowledge' | 'memory';
+/** Modalities that contributed to the most-recent prompt assembly.
+ *  'keyframe' and 'screenText' are reported when screen context is armed and
+ *  the respective data was attached to the request (Req 8.4). */
+export type Modality = 'audio' | 'screen' | 'knowledge' | 'memory' | 'keyframe' | 'screenText';
 
 /**
  * Actions originated by the detached window and forwarded to the host

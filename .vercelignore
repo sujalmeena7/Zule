@@ -1,0 +1,16 @@
+node_modules
+dist
+dist-electron
+electron
+release
+out
+coverage
+.git
+.vscode
+*.mp4
+*.exe
+*.dmg
+*.zip
+*.msi
+public/vendor/models
+dist/vendor/models

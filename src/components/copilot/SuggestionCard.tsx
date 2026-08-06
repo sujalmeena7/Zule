@@ -21,8 +21,8 @@ interface SuggestionCardProps {
   providerId?: string;
   /** Model id for rating attribution (defaults to 'unknown'). */
   modelId?: string;
-  /** Modalities used in the latest context window (Requirement 23.4). */
-  modalitiesUsed?: ('audio' | 'screen' | 'knowledge' | 'memory')[];
+  /** Modalities used in the latest context window (Requirement 23.4, 8.4). */
+  modalitiesUsed?: ('audio' | 'screen' | 'knowledge' | 'memory' | 'keyframe' | 'screenText')[];
   /** Citation info for knowledge/memory chips (Requirements 5.5, 24.2). */
   citations?: CitationInfo[];
   /** Optional handler for citation chip clicks (e.g., navigate to meeting detail). */
@@ -137,6 +137,12 @@ export function SuggestionCard({
           )}
           {modalitiesUsed.includes('memory') && (
             <span className="modality-badge modality-memory">🧠 Memory</span>
+          )}
+          {modalitiesUsed.includes('keyframe') && (
+            <span className="modality-badge modality-screen">📷 Keyframe</span>
+          )}
+          {modalitiesUsed.includes('screenText') && (
+            <span className="modality-badge modality-screen">📝 Screen Text</span>
           )}
           {citations && citations.length > 0 && (
             <>

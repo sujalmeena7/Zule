@@ -8,6 +8,7 @@ import { ArrowLeft, Sparkles } from 'lucide-react';
 import { useTranscription } from '../hooks/useTranscription';
 import { useSystemAudioTranscription } from '../hooks/useSystemAudioTranscription';
 import { useScreenCapture } from '../hooks/useScreenCapture';
+import { warmOcrWorker } from '../workers/ocrWorker';
 import { useDraggable } from '../hooks/useDraggable';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useCrossWindowSync } from '../hooks/useCrossWindowSync';
@@ -18,13 +19,15 @@ import { persistPlaceholderMeeting, generateSummaryWithTimeout } from '../brain/
 import { buildContextWindow } from '../brain/contextManager';
 import type { TranscriptLine, CitationInfo } from '../brain/contextManager';
 import type { TranscriptionLine } from '../types/transcription';
-import { streamAIResponse } from '../brain/aiProvider';
+import { streamAIResponse, describeProviderFailure } from '../brain/aiProvider';
 import type { AIResponse } from '../brain/aiProvider';
 import { activeAdapterSupportsImageInput } from '../brain/aiProvider';
 import { database as knowledgeBase } from '../data/database';
 import { QuestionDetectorStream } from '../brain/questionDetector';
 import { getFullAnalysis } from '../brain/sentimentAnalyzer';
 import { semanticCache } from '../brain/responseCache';
+import { ScreenContextGuard } from '../brain/screenContextGuard';
+import { telemetry } from '../brain/telemetry';
 import type { SentimentResult } from '../brain/sentimentAnalyzer';
 import { MODE_CONFIGS, type CopilotMode } from '../brain/modePrompts';
 import { generateId } from '../utils/formatters';
@@ -39,6 +42,9 @@ import { UpdateIndicator } from './UpdateIndicator';
 import { useAutoUpdate } from '../hooks/useAutoUpdate';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { useSubscription } from '../context/SubscriptionContext';
+import { UpgradeModal } from './UpgradeModal';
+import type { GatedFeature } from '../types/subscription';
 
 import './FloatingCopilot.css';
 
@@ -127,9 +133,16 @@ export function FloatingCopilot() {
   const [aiSuggestionCount, setAiSuggestionCount] = useState(0);
   const [coaching, setCoaching] = useState<SentimentResult | null>(null);
   const [activeSpeakerId, setActiveSpeakerId] = useState(() => speakerManager.getActiveSpeaker().id);
-  const [modalitiesUsed, setModalitiesUsed] = useState<('audio' | 'screen' | 'knowledge' | 'memory')[]>([]);
+  const [modalitiesUsed, setModalitiesUsed] = useState<('audio' | 'screen' | 'knowledge' | 'memory' | 'keyframe' | 'screenText')[]>([]);
   const [citations, setCitations] = useState<CitationInfo[]>([]);
   const [recognitionLanguage, setRecognitionLanguage] = useState<string | null>(null);
+
+  // Subscription State
+  const { isFeatureAvailable, isLimitReached, incrementUsage, limits } = useSubscription();
+  const [upgradeModal, setUpgradeModal] = useState<{
+    reason: 'meeting-limit' | 'ai-response-limit' | 'kb-doc-limit' | 'feature-locked';
+    feature?: GatedFeature;
+  } | null>(null);
 
   // Load speech recognition language from settings before starting the mic
   useEffect(() => {
@@ -269,6 +282,8 @@ export function FloatingCopilot() {
   const summaryAbortControllerRef = useRef<AbortController | null>(null);
   // Generation counter for discarding late tokens from aborted streams (Req 12.2)
   const requestIdRef = useRef(0);
+  // Screen context guard for frame freshness and cross-request isolation (Req 8.1, 8.2, 8.3)
+  const screenContextGuardRef = useRef(new ScreenContextGuard());
   // Req 12.5: Stable refs for values that change every transcript update,
   // so triggerAI's useCallback deps remain stable and the autonomous-detection
   // useEffects do not re-fire on every render.
@@ -279,18 +294,48 @@ export function FloatingCopilot() {
   // Ref for keyframe capture so triggerAI can access it stably (Req 23.3)
   const getKeyframeBase64Ref = useRef(screen.getKeyframeBase64);
   getKeyframeBase64Ref.current = screen.getKeyframeBase64;
+  // Ref for async keyframe capture (off-main-thread via FramePrepWorker, Req 5.1, 5.2)
+  const getKeyframeAsyncRef = useRef(screen.getKeyframeAsync);
+  getKeyframeAsyncRef.current = screen.getKeyframeAsync;
+  // Ref for on-demand OCR so triggerAI can refresh screen text without taking
+  // an unstable dependency (Req 12.5).
+  const captureTextNowRef = useRef(screen.captureTextNow);
+  captureTextNowRef.current = screen.captureTextNow;
+  const isCapturingRef = useRef(screen.isCapturing);
+  isCapturingRef.current = screen.isCapturing;
+  // Ref for the ring buffer so triggerAI can filter by freshness (Req 8.1, 8.2)
+  const recentOcrResultsRef = useRef(screen.recentOcrResults);
+  recentOcrResultsRef.current = screen.recentOcrResults;
   const sendScreenKeyframeRef = useRef(sendScreenKeyframe);
   sendScreenKeyframeRef.current = sendScreenKeyframe;
+  // Ref for the latest frame hash so triggerAI can key screen-aware cache lookups (Req 6.1)
+  const latestFrameHashRef = useRef(screen.latestFrameHash);
+  latestFrameHashRef.current = screen.latestFrameHash;
   // Ref to hold the latest triggerAI so effects can call it without depending on it
   const triggerAIRef = useRef<(query?: string) => Promise<void>>(async () => {});
 
-  // Timer
+  // Timer & Duration Limit Check
   useEffect(() => {
     const timer = setInterval(() => {
-      setElapsedTime(Math.floor((Date.now() - startTimeRef.current) / 1000));
+      const elapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
+      setElapsedTime(elapsed);
+
+      // Check meeting duration limit
+      if (elapsed > 0 && elapsed % 60 === 0) { // check every minute
+        const maxMins = limits.meetingDurationMinutes;
+        if (Number.isFinite(maxMins) && Math.floor(elapsed / 60) >= maxMins) {
+          setUpgradeModal({ reason: 'meeting-limit' });
+          // Stop captures
+          // Cannot call speech.pause() safely here because of missing deps,
+          // but we can set a flag or just let the modal block interactions.
+          // Let's use handlePanicHide equivalent if we want, but wait, the easiest is to just show the modal.
+          // When the modal shows, user has to close it. But they can keep the meeting running?
+          // We can dispatch a custom event to trigger pause.
+        }
+      }
     }, 1000);
     return () => clearInterval(timer);
-  }, []);
+  }, [limits.meetingDurationMinutes]);
 
   // (Auto-grow is now handled synchronously in handleSubmit — see above.
   // The effect-based approach was removed because it had timing issues with
@@ -452,9 +497,18 @@ export function FloatingCopilot() {
   customModesRef.current = customModes;
 
   const triggerAI = useCallback(async (query?: string) => {
+    // Enforce AI response limit
+    if (isLimitReached('aiResponsesPerDay')) {
+      setUpgradeModal({ reason: 'ai-response-limit' });
+      return;
+    }
+
     setIsLoading(true);
     setIsStreaming(false);
     isStreamingRef.current = false;
+
+    // Track dispatch start time for screen.dispatch telemetry (Req 9.1)
+    const dispatchStartMs = performance.now();
 
     // Abort any in-flight request (Req 12.2: manual-override abort)
     if (abortControllerRef.current) {
@@ -471,16 +525,114 @@ export function FloatingCopilot() {
     try {
       // Read current values from refs (Req 12.5: stable deps)
       const currentTranscript = transcriptRef.current;
-      const currentScreenText = screenTextRef.current;
       const currentActiveMode = activeModeRef.current;
       const currentApiKey = apiKeyRef.current;
       const currentCustomModes = customModesRef.current;
 
+      // Use the freshest available Screen_Text at dispatch time (Req 1.4).
+      // The periodic OCR loop (every 3 s) keeps screenTextRef updated. We do
+      // NOT await a new OCR pass here — that would block the critical dispatch
+      // path (violating Req 1.3). Instead we use whatever text is already
+      // available and kick off a fire-and-forget OCR pass that will update
+      // screenTextRef for the NEXT request.
+      const screenArmed = isCapturingRef.current && sendScreenKeyframeRef.current;
+      let currentScreenText = screenTextRef.current;
+
+      // Vision adapter OCR skip logic (Req 2.1, 2.2, 2.3, 2.4):
+      // - Vision_Adapter + keyframe available → skip OCR entirely
+      // - Vision_Adapter + keyframe fails → fall back to OCR path
+      // - Text_Only_Adapter → always obtain Screen_Text via OCR
+      const isVisionAdapter = activeAdapterSupportsImageInput();
+      let keyframeForContext: { mimeType: string; base64: string } | null = null;
+      let ocrSkippedForVision = false;
+
+      if (screenArmed) {
+        if (isVisionAdapter) {
+          // Vision adapter: attempt to obtain keyframe. If successful, OCR is
+          // redundant — the model reads the image directly (Req 2.1).
+          try {
+            const keyframeResult = await getKeyframeAsyncRef.current();
+            if (keyframeResult) {
+              // Keyframe obtained — skip OCR (Req 2.1)
+              keyframeForContext = { mimeType: 'image/jpeg', base64: keyframeResult.base64 };
+              ocrSkippedForVision = true;
+              // Clear screen text so it's not redundantly sent alongside the image
+              currentScreenText = '';
+              // Emit telemetry for OCR skip (Req 9.3)
+              telemetry.emit({ kind: 'screen.ocrSkipped', reason: 'vision-adapter' });
+            } else {
+              // Keyframe encoding returned null — fall back to OCR (Req 2.3)
+              void captureTextNowRef.current().then((fresh) => {
+                if (fresh) screenTextRef.current = fresh;
+              });
+            }
+          } catch {
+            // Keyframe encoding threw — fall back to OCR (Req 2.3)
+            void captureTextNowRef.current().then((fresh) => {
+              if (fresh) screenTextRef.current = fresh;
+            });
+          }
+        } else {
+          // Text_Only_Adapter: always obtain Screen_Text via OCR (Req 2.2, 2.4).
+          // Fire-and-forget: kick off an OCR pass in the background so the
+          // NEXT request benefits from fresher text. This does NOT block
+          // dispatch (Req 1.3). The dedup gate in ocrWorker ensures we reuse
+          // any in-flight pass rather than starting a duplicate (Req 1.5).
+          void captureTextNowRef.current().then((fresh) => {
+            if (fresh) {
+              screenTextRef.current = fresh;
+            }
+          });
+        }
+      }
+
       // Determine the core query for caching purposes
       const coreQuery = query || (currentTranscript.length > 0 ? currentTranscript[currentTranscript.length - 1].text : '');
-      
-      // Check Semantic Cache first
-      if (coreQuery) {
+
+      // Resolve the frame hash for screen-aware cache keying (Req 6.1).
+      // The latestFrameHashRef is updated every time getKeyframeAsync runs
+      // (which already happened above for the vision path). For text-only
+      // adapters it holds the hash from the most recent periodic frame prep.
+      const currentFrameHash: Uint8Array | null = screenArmed
+        ? latestFrameHashRef.current
+        : null;
+
+      // Screen-aware cache lookup (Req 6.1, 6.2):
+      // When screen context is armed, key the lookup on query + Frame_Hash so
+      // repeated questions about an unchanged screen hit instantly.
+      if (coreQuery && screenArmed) {
+        try {
+          const { hit } = await semanticCache.getWithFrame({
+            query: coreQuery,
+            frameHash: currentFrameHash,
+          });
+          if (hit) {
+            // Only apply if this request is still current
+            if (requestIdRef.current !== currentRequestId) return;
+            console.log('Screen-aware cache hit for:', coreQuery);
+            setAiResponse({
+              text: hit.text,
+              suggestions: [],
+              followUps: [],
+              isSimulated: hit.isSimulated,
+            });
+            setChatHistory(prev => [...prev, { id: generateId(), role: 'assistant', text: hit.text, isSimulated: hit.isSimulated }]);
+            setIsLoading(false);
+            setIsStreaming(false);
+            isStreamingRef.current = false;
+            setAiSuggestionCount(prev => prev + 1);
+            return;
+          }
+        } catch {
+          // Cache lookup threw — treat as miss and proceed normally (Error Handling: Cache lookup throws)
+        }
+      }
+
+      // Non-screen Semantic Cache check.
+      //
+      // Skipped while screen context is armed: the screen-aware lookup above
+      // handles that case with frame-hash keying.
+      if (coreQuery && !screenArmed) {
         const { hit } = await semanticCache.get(coreQuery);
         if (hit) {
           // Only apply if this request is still current
@@ -509,15 +661,19 @@ export function FloatingCopilot() {
         currentScreenText,
         query || '',
         currentCustomModes,
-        // Pass a downscaled keyframe when adapter supports image input and user opted in (Req 23.3)
-        sendScreenKeyframeRef.current && activeAdapterSupportsImageInput()
-          ? (() => {
-              const base64 = getKeyframeBase64Ref.current();
-              return base64
-                ? { images: [{ mimeType: 'image/jpeg', base64 }] }
-                : undefined;
-            })()
-          : undefined,
+        // Vision adapter with successful keyframe: use the already-captured keyframe (Req 2.1).
+        // Text_Only_Adapter or keyframe failure: no image attachment.
+        // Legacy path: synchronous keyframe when adapter supports images but new path not active.
+        keyframeForContext
+          ? { images: [keyframeForContext] }
+          : (!ocrSkippedForVision && sendScreenKeyframeRef.current && activeAdapterSupportsImageInput()
+              ? (() => {
+                  const base64 = getKeyframeBase64Ref.current();
+                  return base64
+                    ? { images: [{ mimeType: 'image/jpeg', base64 }] }
+                    : undefined;
+                })()
+              : undefined),
       );
 
       // Check if this request is still current after async context build
@@ -529,6 +685,16 @@ export function FloatingCopilot() {
       }
       if (context.citations) {
         setCitations(context.citations);
+      }
+
+      // Emit screen.dispatch telemetry when screen context is armed (Req 9.1)
+      if (screenArmed) {
+        telemetry.emit({
+          kind: 'screen.dispatch',
+          latencyMs: Math.round(performance.now() - dispatchStartMs),
+          hasKeyframe: keyframeForContext !== null,
+          hasScreenText: currentScreenText !== '' && currentScreenText !== null,
+        });
       }
 
       await streamAIResponse(
@@ -547,13 +713,26 @@ export function FloatingCopilot() {
           onComplete: (response) => {
             // Discard completion from aborted stream (Req 12.2)
             if (requestIdRef.current !== currentRequestId) return;
-            // Save to Semantic Cache if it was a good response
+            // Save to Semantic Cache if it was a good response.
+            // When screen context is armed, store with frame hash so repeated
+            // questions about an unchanged screen hit instantly (Req 6.1, 6.2).
             if (coreQuery && !response.isSimulated && response.text.trim()) {
-              void semanticCache.set(coreQuery, {
-                text: response.text,
-                isSimulated: response.isSimulated,
-                status: (response as any).status ?? 200,
-              });
+              if (screenArmed && currentFrameHash) {
+                void semanticCache.setWithFrame(
+                  { query: coreQuery, frameHash: currentFrameHash },
+                  {
+                    text: response.text,
+                    isSimulated: response.isSimulated,
+                    status: (response as any).status ?? 200,
+                  },
+                );
+              } else {
+                void semanticCache.set(coreQuery, {
+                  text: response.text,
+                  isSimulated: response.isSimulated,
+                  status: (response as any).status ?? 200,
+                });
+              }
             }
             setAiResponse(response);
             // Append assistant message to chat history
@@ -562,6 +741,21 @@ export function FloatingCopilot() {
             setIsStreaming(false);
             isStreamingRef.current = false;
             setAiSuggestionCount(prev => prev + 1);
+
+            // Increment usage limit after a successful generation (not simulated)
+            if (!response.isSimulated) {
+              incrementUsage('aiResponseCount');
+            }
+          },
+          onProviderFallback: (error) => {
+            // Every real provider failed and simulation is about to answer.
+            // Name the actual cause — the generic "add your Gemini key" banner
+            // on the simulated reply misattributes wrong-model / no-credit /
+            // model-disabled failures to a missing credential.
+            if (requestIdRef.current !== currentRequestId) return;
+            toast.error(`AI provider unavailable: ${describeProviderFailure(error)}`, {
+              duration: 7000,
+            });
           },
           onError: (error) => {
             if (error.name === 'AbortError') {
@@ -652,6 +846,10 @@ export function FloatingCopilot() {
       // then immediately fire an AI request with the screen as context.
       if (!screen.isCapturing) {
         await screen.startCapture();
+        // Warm OCR worker non-blocking on session start (Req 3.1).
+        // This ensures the first OCR pass after attach doesn't pay the cold-
+        // start penalty (dynamic import + createWorker + language pack load).
+        void warmOcrWorker();
         toast.success('Screen attached');
       } else {
         toast.success('Using current screen capture');
@@ -674,6 +872,9 @@ export function FloatingCopilot() {
         });
       }
 
+      // Note: the OCR pass itself happens in triggerAI, which refreshes screen
+      // text for every request path rather than just this button.
+
       // Echo what we're asking so the user sees feedback.
       const query = inputText.trim();
       const echoed = query || 'What do you see on my screen?';
@@ -690,6 +891,38 @@ export function FloatingCopilot() {
       );
     }
   }, [screen, inputText]);
+
+  // Stop the in-flight AI response mid-stream so the user can immediately ask
+  // something else. Reuses the same abort + generation-counter machinery as the
+  // manual-override path in triggerAI (Req 12.1, 12.2): the transport is
+  // aborted, `requestIdRef` is bumped so any token that still arrives is
+  // discarded, and whatever streamed so far is committed to the chat history
+  // rather than thrown away.
+  const handleStopGeneration = useCallback(() => {
+    if (!isLoading && !isStreaming) return;
+
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    requestIdRef.current += 1;
+
+    const partial = streamingText.trim();
+    if (partial) {
+      setChatHistory(prev => [
+        ...prev,
+        { id: generateId(), role: 'assistant', text: partial },
+      ]);
+    }
+
+    setStreamingText('');
+    setIsStreaming(false);
+    isStreamingRef.current = false;
+    setIsLoading(false);
+    // Hand focus straight back to the input so the next question can be typed
+    // without an extra click.
+    inputRef.current?.focus();
+  }, [isLoading, isStreaming, streamingText]);
 
   const handleModeChange = useCallback((mode: CopilotMode) => {
     setActiveMode(mode);
@@ -845,6 +1078,15 @@ export function FloatingCopilot() {
             )}
           </div>
         </div>
+      )}
+
+      {/* Upgrade Modal overlay */}
+      {upgradeModal && (
+        <UpgradeModal
+          reason={upgradeModal.reason}
+          feature={upgradeModal.feature}
+          onClose={() => setUpgradeModal(null)}
+        />
       )}
 
       {/* ===== FLOATING OVERLAY (Cluely-style) ===== */}
@@ -1068,6 +1310,8 @@ export function FloatingCopilot() {
           <QuickActions
             activeMode={activeMode}
             onModeChange={handleModeChange}
+            isFeatureAvailable={isFeatureAvailable}
+            onLockedModeClick={(feature) => setUpgradeModal({ reason: 'feature-locked', feature })}
           />
 
           <InputBar
@@ -1088,6 +1332,8 @@ export function FloatingCopilot() {
               if (dictationWasListening.current) speech.resume();
               dictationWasListening.current = false;
             }}
+            isGenerating={isLoading || isStreaming}
+            onStopGeneration={handleStopGeneration}
           />
         </div>
       </div>

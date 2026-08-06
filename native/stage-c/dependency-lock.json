@@ -1,0 +1,254 @@
+{
+  "lockVersion": 1,
+  "generatedAt": "2025-07-04T00:00:00Z",
+  "architecture": "x64",
+  "reviewedBy": null,
+  "reviewDate": null,
+  "notes": "Stage C native dependency lock. All items require explicit review before version changes. Floating ranges are rejected. See README.md for the review process.",
+
+  "toolchain": {
+    "msvc": {
+      "description": "Microsoft Visual C++ compiler and linker (cl.exe, link.exe)",
+      "version": "19.42.34435",
+      "componentIds": [
+        "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+        "Microsoft.VisualStudio.Component.VC.14.42.17.12.x86.x64"
+      ],
+      "source": "https://aka.ms/vs/17/release/vs_BuildTools.exe",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "REVIEW_REQUIRED:msvc-compiler-hash-must-be-recorded-from-pinned-ci-image"
+      },
+      "license": "Microsoft Visual Studio Build Tools License (proprietary, redistribution restricted)",
+      "architecture": "x64",
+      "reviewStatus": "pending",
+      "transitiveDependencies": [
+        "ucrt-headers",
+        "ucrt-libs",
+        "msvc-crt-headers",
+        "msvc-crt-libs"
+      ]
+    },
+    "msbuild": {
+      "description": "Microsoft Build Engine",
+      "version": "17.12.12",
+      "componentIds": [
+        "Microsoft.Component.MSBuild"
+      ],
+      "source": "https://aka.ms/vs/17/release/vs_BuildTools.exe",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "REVIEW_REQUIRED:msbuild-hash-must-be-recorded-from-pinned-ci-image"
+      },
+      "license": "MIT",
+      "architecture": "x64",
+      "reviewStatus": "pending",
+      "transitiveDependencies": []
+    },
+    "windowsSdk": {
+      "description": "Windows 10/11 SDK (headers, libs, tools)",
+      "version": "10.0.22621.0",
+      "componentIds": [
+        "Microsoft.VisualStudio.Component.Windows11SDK.22621"
+      ],
+      "source": "https://aka.ms/vs/17/release/vs_BuildTools.exe",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "REVIEW_REQUIRED:windows-sdk-hash-must-be-recorded-from-pinned-ci-image"
+      },
+      "license": "Microsoft Windows SDK License (proprietary)",
+      "architecture": "x64",
+      "reviewStatus": "pending",
+      "transitiveDependencies": [
+        "windows-sdk-headers",
+        "windows-sdk-libs",
+        "windows-sdk-tools"
+      ]
+    }
+  },
+
+  "dependencies": {
+    "webview2Sdk": {
+      "description": "Microsoft WebView2 SDK (C++ interfaces and loader)",
+      "version": "1.0.2903.40",
+      "packageId": "Microsoft.Web.WebView2",
+      "provisionedRoot": "C:\\StageC\\packages\\Microsoft.Web.WebView2.1.0.2903.40\\build\\native",
+      "source": "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/1.0.2903.40",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "REVIEW_REQUIRED:webview2-sdk-nupkg-sha256-from-nuget"
+      },
+      "license": "BSD-3-Clause",
+      "architecture": "x64",
+      "reviewStatus": "pending",
+      "includes": {
+        "headers": "build/native/include/",
+        "loader": "build/native/x64/WebView2LoaderStatic.lib",
+        "idl": "build/native/include/WebView2.idl"
+      },
+      "transitiveDependencies": []
+    }
+  },
+
+  "transitiveDependencies": {
+    "ucrt-headers": {
+      "description": "Universal C Runtime headers (provided by Windows SDK)",
+      "version": "10.0.22621.0",
+      "source": "Windows SDK 10.0.22621.0 component",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "REVIEW_REQUIRED:ucrt-headers-hash"
+      },
+      "license": "Microsoft Windows SDK License (proprietary)",
+      "architecture": "x64",
+      "reviewStatus": "pending"
+    },
+    "ucrt-libs": {
+      "description": "Universal C Runtime import libraries (provided by Windows SDK)",
+      "version": "10.0.22621.0",
+      "source": "Windows SDK 10.0.22621.0 component",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "REVIEW_REQUIRED:ucrt-libs-hash"
+      },
+      "license": "Microsoft Windows SDK License (proprietary)",
+      "architecture": "x64",
+      "reviewStatus": "pending"
+    },
+    "msvc-crt-headers": {
+      "description": "MSVC C/C++ Runtime headers (provided by MSVC toolset)",
+      "version": "14.42.34435",
+      "source": "MSVC v143 toolset 14.42",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "REVIEW_REQUIRED:msvc-crt-headers-hash"
+      },
+      "license": "Microsoft Visual Studio Build Tools License (proprietary)",
+      "architecture": "x64",
+      "reviewStatus": "pending"
+    },
+    "msvc-crt-libs": {
+      "description": "MSVC C/C++ Runtime import libraries (provided by MSVC toolset)",
+      "version": "14.42.34435",
+      "source": "MSVC v143 toolset 14.42",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "REVIEW_REQUIRED:msvc-crt-libs-hash"
+      },
+      "license": "Microsoft Visual Studio Build Tools License (proprietary)",
+      "architecture": "x64",
+      "reviewStatus": "pending"
+    },
+    "windows-sdk-headers": {
+      "description": "Windows API headers (um, shared, winrt)",
+      "version": "10.0.22621.0",
+      "source": "Windows SDK 10.0.22621.0 component",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "REVIEW_REQUIRED:windows-sdk-headers-hash"
+      },
+      "license": "Microsoft Windows SDK License (proprietary)",
+      "architecture": "x64",
+      "reviewStatus": "pending"
+    },
+    "windows-sdk-libs": {
+      "description": "Windows API import libraries (um, ucrt)",
+      "version": "10.0.22621.0",
+      "source": "Windows SDK 10.0.22621.0 component",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "REVIEW_REQUIRED:windows-sdk-libs-hash"
+      },
+      "license": "Microsoft Windows SDK License (proprietary)",
+      "architecture": "x64",
+      "reviewStatus": "pending"
+    },
+    "windows-sdk-tools": {
+      "description": "Windows SDK build tools (rc.exe, midl.exe, mc.exe)",
+      "version": "10.0.22621.0",
+      "source": "Windows SDK 10.0.22621.0 component",
+      "integrity": {
+        "algorithm": "sha256",
+        "digest": "REVIEW_REQUIRED:windows-sdk-tools-hash"
+      },
+      "license": "Microsoft Windows SDK License (proprietary)",
+      "architecture": "x64",
+      "reviewStatus": "pending"
+    }
+  },
+
+  "ciEnvironment": {
+    "description": "Reviewed immutable self-hosted Windows VM snapshots for Stage C release builds and gates",
+    "imageReference": "stage-c-win11-24h2-v1",
+    "imageDigest": "REVIEW_REQUIRED:build-ci-image-digest",
+    "source": "Customer-managed immutable Windows VM snapshots registered as ephemeral GitHub Actions runners",
+    "integrity": {
+      "algorithm": "sha256",
+      "digest": "REVIEW_REQUIRED:build-ci-image-manifest-digest"
+    },
+    "reviewStatus": "pending",
+    "installedComponents": [
+      "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+      "Microsoft.VisualStudio.Component.VC.14.42.17.12.x86.x64",
+      "Microsoft.Component.MSBuild",
+      "Microsoft.VisualStudio.Component.Windows11SDK.22621"
+    ],
+    "snapshots": [
+      {
+        "osBuild": "win10_22h2",
+        "runnerLabel": "stage-c-win10-22h2-v1",
+        "imageDigest": "REVIEW_REQUIRED:win10-22h2-v1-image-digest",
+        "collectorManifestDigest": "REVIEW_REQUIRED:win10-22h2-v1-collector-manifest-digest",
+        "integrity": { "algorithm": "sha256", "digest": "REVIEW_REQUIRED:win10-22h2-v1-manifest-digest" },
+        "reviewStatus": "pending",
+        "webView2Runtimes": [
+          { "version": "119.0.2151.0", "path": "C:\\StageC\\runtimes\\119.0.2151.0", "integrity": { "algorithm": "sha256", "digest": "REVIEW_REQUIRED:webview2-runtime-119-digest" }, "reviewStatus": "pending" },
+          { "version": "120.0.2210.0", "path": "C:\\StageC\\runtimes\\120.0.2210.0", "integrity": { "algorithm": "sha256", "digest": "REVIEW_REQUIRED:webview2-runtime-120-digest" }, "reviewStatus": "pending" },
+          { "version": "124.0.2478.0", "path": "C:\\StageC\\runtimes\\124.0.2478.0", "integrity": { "algorithm": "sha256", "digest": "REVIEW_REQUIRED:webview2-runtime-124-digest" }, "reviewStatus": "pending" }
+        ]
+      },
+      {
+        "osBuild": "win11_23h2",
+        "runnerLabel": "stage-c-win11-23h2-v1",
+        "imageDigest": "REVIEW_REQUIRED:win11-23h2-v1-image-digest",
+        "collectorManifestDigest": "REVIEW_REQUIRED:win11-23h2-v1-collector-manifest-digest",
+        "integrity": { "algorithm": "sha256", "digest": "REVIEW_REQUIRED:win11-23h2-v1-manifest-digest" },
+        "reviewStatus": "pending",
+        "webView2Runtimes": [
+          { "version": "119.0.2151.0", "path": "C:\\StageC\\runtimes\\119.0.2151.0", "integrity": { "algorithm": "sha256", "digest": "REVIEW_REQUIRED:webview2-runtime-119-digest" }, "reviewStatus": "pending" },
+          { "version": "120.0.2210.0", "path": "C:\\StageC\\runtimes\\120.0.2210.0", "integrity": { "algorithm": "sha256", "digest": "REVIEW_REQUIRED:webview2-runtime-120-digest" }, "reviewStatus": "pending" },
+          { "version": "124.0.2478.0", "path": "C:\\StageC\\runtimes\\124.0.2478.0", "integrity": { "algorithm": "sha256", "digest": "REVIEW_REQUIRED:webview2-runtime-124-digest" }, "reviewStatus": "pending" }
+        ]
+      },
+      {
+        "osBuild": "win11_24h2",
+        "runnerLabel": "stage-c-win11-24h2-v1",
+        "imageDigest": "REVIEW_REQUIRED:win11-24h2-v1-image-digest",
+        "collectorManifestDigest": "REVIEW_REQUIRED:win11-24h2-v1-collector-manifest-digest",
+        "integrity": { "algorithm": "sha256", "digest": "REVIEW_REQUIRED:win11-24h2-v1-manifest-digest" },
+        "reviewStatus": "pending",
+        "webView2Runtimes": [
+          { "version": "119.0.2151.0", "path": "C:\\StageC\\runtimes\\119.0.2151.0", "integrity": { "algorithm": "sha256", "digest": "REVIEW_REQUIRED:webview2-runtime-119-digest" }, "reviewStatus": "pending" },
+          { "version": "120.0.2210.0", "path": "C:\\StageC\\runtimes\\120.0.2210.0", "integrity": { "algorithm": "sha256", "digest": "REVIEW_REQUIRED:webview2-runtime-120-digest" }, "reviewStatus": "pending" },
+          { "version": "124.0.2478.0", "path": "C:\\StageC\\runtimes\\124.0.2478.0", "integrity": { "algorithm": "sha256", "digest": "REVIEW_REQUIRED:webview2-runtime-124-digest" }, "reviewStatus": "pending" }
+        ]
+      }
+    ]
+  },
+
+  "policy": {
+    "allowFloatingRanges": false,
+    "allowUnlistedDependencies": false,
+    "allowAutoDownload": false,
+    "allowAlternateCompilers": false,
+    "requireReviewBeforeUpdate": true,
+    "requiredReviewChecks": [
+      "integrity",
+      "license",
+      "vulnerability",
+      "publisher",
+      "architecture",
+      "reproducibility"
+    ]
+  }
+}

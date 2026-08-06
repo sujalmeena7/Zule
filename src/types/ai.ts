@@ -26,6 +26,30 @@ export interface Capabilities {
 }
 
 /**
+ * `Context_Builder`'s report of what redaction it performed while
+ * assembling a prompt (see design.md §Redaction attestation).
+ *
+ * `Context_Builder` is the single redaction site, so adapters cannot see
+ * the segment structure themselves; instead the builder attests to its
+ * own work and egress-sensitive adapters (the custom OpenAI-compatible
+ * provider) refuse to transmit an unattested prompt.
+ *
+ * An empty rule set is *not* a failure: applying an empty User rule set
+ * over every segment is a completed application, so `ruleCount: 0` with
+ * `segmentsRedacted === segmentsTotal` attests successfully.
+ */
+export interface RedactionAttestation {
+  /** True only when every section passed through the Redaction_Engine. */
+  applied: boolean;
+  /** Number of User-defined + built-in rules applied (0 is legitimate). */
+  ruleCount: number;
+  /** Number of `ContextSection`s emitted into the prompt. */
+  segmentsTotal: number;
+  /** Number of those sections passed through `redactText`. */
+  segmentsRedacted: number;
+}
+
+/**
  * The structured prompt handed to an adapter. `fullPrompt` is the
  * already-assembled, redacted, citation-tagged text emitted by
  * `Context_Builder`; `systemPrompt` and `userText` are kept separate so
@@ -45,6 +69,14 @@ export interface PromptInput {
   fullPrompt: string;
   /** Optional image attachments for adapters with `imageInput`. */
   images?: Array<{ mimeType: string; base64: string }>;
+  /**
+   * Stamped by `Context_Builder`; required by the custom
+   * OpenAI-compatible adapter, which issues zero HTTP requests when it is
+   * absent, reports `applied: false`, or reports fewer redacted segments
+   * than total segments. Optional so existing construction sites (and
+   * local-only paths) keep compiling.
+   */
+  redaction?: RedactionAttestation;
 }
 
 /**
@@ -127,4 +159,6 @@ export type ProviderId =
   | 'openai'
   | 'anthropic'
   | 'ollama'
-  | 'simulation';
+  | 'simulation'
+  /** User-configured OpenAI-compatible endpoint (opt-in, disabled by default). */
+  | 'custom';

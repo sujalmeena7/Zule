@@ -64,8 +64,17 @@ export interface ElectronAPI {
   // Global Shortcuts (Phase 3)
   onGlobalShortcut: (callback: (shortcutId: string) => void) => () => void;
 
+  // Secure Storage (OS-backed encryption for provider API keys)
+  secureStorageIsAvailable?: () => Promise<boolean>;
+  secureStorageEncrypt?: (plaintext: string) => Promise<string>;
+  secureStorageDecrypt?: (ciphertext: string) => Promise<string>;
+
   // Authentication
   loginViaBrowser?: () => Promise<string>;
+
+  // External URLs & Window Focus
+  openExternal?: (url: string) => Promise<void>;
+  focusWindow?: () => Promise<void>;
 
   // Native Screen Capture (Phase 3)
   getDesktopSources: () => Promise<

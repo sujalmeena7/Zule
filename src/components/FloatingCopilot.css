@@ -1059,6 +1059,34 @@
   transform: none;
 }
 
+/* Stop control — occupies the send slot while a response is generating so the
+   user can cut the answer short and ask the next question straight away. */
+.input-stop-btn {
+  background: #ef4444;
+  box-shadow: 0 2px 10px rgba(239, 68, 68, 0.35);
+  animation: stop-btn-pulse 1.6s ease-in-out infinite;
+}
+
+.input-stop-btn:hover {
+  background: #dc2626;
+}
+
+@keyframes stop-btn-pulse {
+  0%,
+  100% {
+    box-shadow: 0 2px 10px rgba(239, 68, 68, 0.35);
+  }
+  50% {
+    box-shadow: 0 2px 16px rgba(239, 68, 68, 0.65);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .input-stop-btn {
+    animation: none;
+  }
+}
+
 
 /* ===== MARKDOWN ===== */
 .markdown-content {
@@ -1310,9 +1338,9 @@
    In the native overlay window, cursor shape changes (I-beam on inputs,
    pointer on buttons) leak the presence of invisible UI elements to
    anyone watching via a low-level screen recorder or observing the
-   user's cursor behavior during a screen share. Force the cursor to
-   stay as the default arrow at all times so the overlay is completely
-   undetectable from cursor behavior alone.
+   user's cursor behavior during a screen share. Keep the native-overlay cursor
+   visually consistent; this is presentation hardening only and is not a claim
+   that the Electron process or overlay is undetectable.
 
    Scoped to .mode-2-card-root so Mode 1 (dashboard) remains unaffected. */
 
@@ -1333,6 +1361,7 @@
 .mode-2-card-root .citation-chip,
 .mode-2-card-root .use-screen-btn,
 .mode-2-card-root .input-send-btn,
+.mode-2-card-root .input-stop-btn,
 .mode-2-card-root .rating-btn,
 .mode-2-card-root .toolbar-more-btn {
   cursor: default !important;

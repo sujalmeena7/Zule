@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ZuleUI.vcxproj — Stage C native sidecar build project.
+  Locked to MSVC v143, C++20, Windows SDK 10.0.22621.0, WebView2 1.0.2903.40.
+  No CLR, MFC, ATL, NuGet auto-restore, alternate compiler, or runtime download.
+-->
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <!-- Reject any attempt to run on non-x64 or with an alternate platform -->
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
+    <RootNamespace>ZuleUI</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0.22621.0</WindowsTargetPlatformVersion>
+    <ProjectName>ZuleUI</ProjectName>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <!-- Configuration: Release|x64 only -->
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <!-- Shared configuration properties -->
+  <PropertyGroup Condition="'$(Platform)'=='x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Release'">false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization Condition="'$(Configuration)'=='Release'">true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+    <!-- Explicitly disable managed, MFC, ATL -->
+    <CLRSupport>false</CLRSupport>
+    <UseOfMfc>false</UseOfMfc>
+    <UseOfAtl>false</UseOfAtl>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+
+  <!-- Disable NuGet auto-restore and package download -->
+  <PropertyGroup>
+    <RestorePackages>false</RestorePackages>
+    <ResolveNuGetPackages>false</ResolveNuGetPackages>
+    <NuGetInteractive>false</NuGetInteractive>
+  </PropertyGroup>
+
+  <!-- WebView2SdkRoot is supplied only by build-native.mjs after lock/probe validation. -->
+  <PropertyGroup>
+    <WebView2SdkRoot Condition="'$(WebView2SdkRoot)'!=''">$([System.IO.Path]::GetFullPath('$(WebView2SdkRoot)'))</WebView2SdkRoot>
+  </PropertyGroup>
+
+  <!-- Compiler settings: C++20, no exceptions from SEH, conformant -->
+  <ItemDefinitionGroup Condition="'$(Platform)'=='x64'">
+    <ClCompile>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(WebView2SdkRoot)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <ConformanceMode>true</ConformanceMode>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <SDLCheck>true</SDLCheck>
+      <RuntimeLibrary Condition="'$(Configuration)'=='Release'">MultiThreaded</RuntimeLibrary>
+      <RuntimeLibrary Condition="'$(Configuration)'=='Debug'">MultiThreadedDebug</RuntimeLibrary>
+      <!-- No /clr, no managed extensions -->
+      <CompileAsManaged>false</CompileAsManaged>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>user32.lib;gdi32.lib;ole32.lib;comctl32.lib;dwmapi.lib;dcomp.lib;shcore.lib;$(WebView2SdkRoot)x64\WebView2LoaderStatic.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- System library search: no PATH fallback, system directories only -->
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <OutputFile>$(OutDir)ZuleUI.exe</OutputFile>
+      <EntryPointSymbol>wWinMainCRTStartup</EntryPointSymbol>
+      <!-- No delay-load, no auto-download -->
+      <LinkTimeCodeGeneration Condition="'$(Configuration)'=='Release'">UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+    </Link>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ResourceCompile>
+    <Manifest>
+      <AdditionalManifestFiles>$(ProjectDir)ZuleUI.exe.manifest</AdditionalManifestFiles>
+    </Manifest>
+  </ItemDefinitionGroup>
+
+  <!-- Release-specific optimizations -->
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release' And '$(Platform)'=='x64'">
+    <ClCompile>
+      <Optimization>MaxSpeed</Optimization>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+    </ClCompile>
+    <Link>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <!-- Debug-specific settings -->
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug' And '$(Platform)'=='x64'">
+    <ClCompile>
+      <Optimization>Disabled</Optimization>
+    </ClCompile>
+  </ItemDefinitionGroup>
+
+  <!-- Source files -->
+  <ItemGroup>
+    <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\floating_surface.cpp" />
+    <ClCompile Include="src\webview2_probe.cpp" />
+    <ClCompile Include="src\composition.cpp" />
+    <ClCompile Include="src\pch.cpp">
+      <PrecompiledHeader>Create</PrecompiledHeader>
+    </ClCompile>
+  </ItemGroup>
+
+  <!-- Header files -->
+  <ItemGroup>
+    <ClInclude Include="src\pch.h" />
+    <ClInclude Include="src\floating_surface.h" />
+    <ClInclude Include="src\webview2_probe.h" />
+    <ClInclude Include="src\composition.h" />
+    <ClInclude Include="src\overlay_mode.h" />
+  </ItemGroup>
+
+  <!-- Resource files -->
+  <ItemGroup>
+    <ResourceCompile Include="src\resources.rc" />
+  </ItemGroup>
+
+  <!-- Application manifest -->
+  <ItemGroup>
+    <Manifest Include="ZuleUI.exe.manifest" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+
+  <!-- Fail-closed guard: reject unsupported platforms -->
+  <Target Name="RejectUnsupportedPlatform" BeforeTargets="Build"
+          Condition="'$(Platform)'!='x64'">
+    <Error Text="Stage C builds only for x64. Architecture '$(Platform)' is not supported. See dependency-lock.json." />
+  </Target>
+
+  <!-- Fail-closed guards: the entry script supplies a pre-provisioned exact SDK path. -->
+  <Target Name="ValidateLockedSdk" BeforeTargets="Build">
+    <Error Condition="'$(WindowsTargetPlatformVersion)'!='10.0.22621.0'"
+           Text="Windows SDK version must be exactly 10.0.22621.0 (from dependency-lock.json). Found: $(WindowsTargetPlatformVersion)" />
+    <Error Condition="'$(WebView2SdkRoot)'==''"
+           Text="WebView2SdkRoot must be supplied by the reviewed Stage C build entry script." />
+    <Error Condition="!Exists('$(WebView2SdkRoot)include\WebView2.h')"
+           Text="Locked WebView2 headers are absent from $(WebView2SdkRoot). No restore or download is permitted." />
+    <Error Condition="!Exists('$(WebView2SdkRoot)x64\WebView2LoaderStatic.lib')"
+           Text="Locked WebView2 loader is absent from $(WebView2SdkRoot). No restore or download is permitted." />
+  </Target>
+
+</Project>

@@ -26,6 +26,8 @@ import {
   database,
   STORE_TELEMETRY,
 } from '../data/database';
+import { apply as applyRedaction } from './redaction';
+import type { RedactionRule } from '../types/redaction';
 
 // ---------------------------------------------------------------------
 // MetricEvent — discriminated union (no free-form payload)
@@ -49,6 +51,13 @@ import {
  * error category tags. No OS user name, machine ID, network address,
  * file path, or release-notes body is included in any update telemetry
  * payload (auto-updater Requirements 9.1, 9.2, 9.3, 9.4, 9.5, 9.6).
+ *
+ * The `screen.*` variants are added by the Screen Context Latency
+ * feature and carry only numeric measurements (latencyMs, durationMs,
+ * passes, finalBytes) and boolean flags (hasKeyframe, hasScreenText,
+ * deduped). No recognized screen text, raw image bytes, or user
+ * content is included (screen-context-latency Requirements 9.1, 9.2,
+ * 9.3, 9.4, 9.5, 9.6).
  */
 export type MetricEvent =
   | { kind: 'ttft'; ms: number; modelId: string; providerId: string }
@@ -70,7 +79,11 @@ export type MetricEvent =
   | { kind: 'update.available'; currentVersion: string; availableVersion: string }
   | { kind: 'update.downloaded'; availableVersion: string; durationMs: number }
   | { kind: 'update.installed'; currentVersion: string }
-  | { kind: 'update.error'; stage: 'check' | 'download' | 'integrity' | 'install'; category: string };
+  | { kind: 'update.error'; stage: 'check' | 'download' | 'integrity' | 'install'; category: string }
+  | { kind: 'screen.dispatch'; latencyMs: number; hasKeyframe: boolean; hasScreenText: boolean }
+  | { kind: 'screen.ocrComplete'; durationMs: number; deduped: boolean }
+  | { kind: 'screen.ocrSkipped'; reason: 'vision-adapter' }
+  | { kind: 'screen.keyframeReencode'; passes: number; finalBytes: number };
 
 // ---------------------------------------------------------------------
 // Stored row shape
@@ -90,6 +103,147 @@ export interface StoredTelemetryEvent {
 
 function generateId(): string {
   return `tel-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// ---------------------------------------------------------------------
+// Screen Telemetry Payload Validation (Requirements 9.5, 9.6)
+// ---------------------------------------------------------------------
+
+/**
+ * Heuristic patterns that detect raw user content that must never appear
+ * in telemetry payloads:
+ *
+ * - Base64-encoded image data (data URI prefix or raw base64 chunk ≥ 64 chars)
+ * - JPEG/PNG binary magic bytes expressed as escaped sequences
+ * - Multi-word natural language text (≥ 4 space-separated words suggests
+ *   recognized screen text rather than an identifier or error class)
+ *
+ * These checks are a runtime safety net layered on top of the structural
+ * guarantee provided by the `MetricEvent` discriminated union. They catch
+ * accidental future regressions where a new field might introduce text.
+ */
+const BASE64_DATA_URI_RE = /^data:image\/(jpeg|png|webp);base64,/i;
+const RAW_BASE64_CHUNK_RE = /^[A-Za-z0-9+/]{64,}={0,2}$/;
+const JPEG_MAGIC = '\xFF\xD8\xFF';
+const PNG_MAGIC = '\x89PNG';
+const MULTI_WORD_TEXT_RE = /(?:\S+\s+){3,}\S+/; // 4+ space-separated words
+
+/**
+ * Returns true if `value` looks like raw image bytes (base64 or binary).
+ */
+function looksLikeImageData(value: string): boolean {
+  if (BASE64_DATA_URI_RE.test(value)) return true;
+  if (RAW_BASE64_CHUNK_RE.test(value)) return true;
+  if (value.startsWith(JPEG_MAGIC)) return true;
+  if (value.startsWith(PNG_MAGIC)) return true;
+  return false;
+}
+
+/**
+ * Returns true if `value` looks like recognized screen text (natural
+ * language with multiple words). Short identifiers, enum values, and
+ * error class names pass through.
+ */
+function looksLikeScreenText(value: string): boolean {
+  // Short strings (< 20 chars) are almost certainly identifiers
+  if (value.length < 20) return false;
+  return MULTI_WORD_TEXT_RE.test(value);
+}
+
+/**
+ * Validate that a screen telemetry payload contains no raw user content.
+ * Returns the event unchanged if safe, or throws if content is detected.
+ *
+ * This is invoked internally by `emit` for `screen.*` events as a
+ * defence-in-depth measure (Requirement 9.5, 9.6). The TypeScript type
+ * system is the primary guard; this runtime check catches regressions.
+ */
+export function validateScreenTelemetryPayload(event: MetricEvent): void {
+  for (const [fieldName, fieldValue] of Object.entries(event)) {
+    if (fieldName === 'kind') continue;
+    if (typeof fieldValue !== 'string') continue;
+
+    if (looksLikeImageData(fieldValue)) {
+      throw new Error(
+        `[telemetry] screen.* event "${event.kind}" contains raw image data in field "${fieldName}" — blocked`,
+      );
+    }
+    if (looksLikeScreenText(fieldValue)) {
+      throw new Error(
+        `[telemetry] screen.* event "${event.kind}" contains suspected screen text in field "${fieldName}" — blocked`,
+      );
+    }
+  }
+}
+
+/**
+ * Apply the project's redaction rules to any string fields in a telemetry
+ * event. This is a safety net for `screen.*` events: if a text-derived field
+ * is ever added to a screen telemetry variant, it will be redacted before
+ * persistence or external dispatch (Requirement 9.6).
+ *
+ * For the current `screen.*` variants (which carry only numbers and booleans),
+ * this function is effectively a no-op — but it ensures forward safety if the
+ * schema evolves.
+ */
+export function redactTelemetryPayload<T extends MetricEvent>(
+  event: T,
+  rules: readonly RedactionRule[],
+): T {
+  if (rules.length === 0) return event;
+
+  let modified = false;
+  const result: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(event)) {
+    if (key === 'kind' || typeof value !== 'string') {
+      result[key] = value;
+      continue;
+    }
+    const redacted = applyRedaction(value, rules);
+    if (redacted !== value) modified = true;
+    result[key] = redacted;
+  }
+
+  return modified ? (result as T) : event;
+}
+
+/**
+ * Redaction rules to apply to screen telemetry payloads. Loaded lazily
+ * from the settings store. The module-level cache avoids repeated async
+ * loads on the hot path — rules are refreshed when `loadRedactionRules`
+ * is called (e.g., on settings change or app start).
+ */
+let cachedRedactionRules: readonly RedactionRule[] = [];
+
+/**
+ * Load (or refresh) the redaction rules from the settings store. Should be
+ * called at app startup and whenever the user changes redaction settings.
+ * Non-blocking: if loading fails, the cached rules remain (defaults to []).
+ */
+export async function loadRedactionRules(): Promise<void> {
+  try {
+    const stored = await database.getSetting<RedactionRule[]>('redactionRules', []);
+    if (Array.isArray(stored)) {
+      cachedRedactionRules = stored;
+    }
+  } catch {
+    // Graceful degradation: keep existing cached rules
+  }
+}
+
+/**
+ * Set redaction rules directly (for testing or synchronous initialization).
+ */
+export function setRedactionRulesForTelemetry(rules: readonly RedactionRule[]): void {
+  cachedRedactionRules = rules;
+}
+
+/**
+ * Get the currently cached redaction rules (for testing).
+ */
+export function getRedactionRulesForTelemetry(): readonly RedactionRule[] {
+  return cachedRedactionRules;
 }
 
 // ---------------------------------------------------------------------
@@ -143,12 +297,32 @@ export class TelemetryModule {
    * Persist a metric event to `STORE_TELEMETRY`. Fire-and-forget:
    * errors are logged but do not propagate to the caller so the hot
    * path (e.g. streaming tokens) is never blocked by a failed write.
+   *
+   * For `screen.*` events, a runtime validation guard verifies that no
+   * raw image data or recognized screen text is present (Req 9.5), and
+   * the project's redaction rules are applied to any text-derived fields
+   * (Req 9.6). If validation fails, the event is dropped and an error
+   * is logged — this is a defence-in-depth layer on top of the structural
+   * type-system guarantee.
    */
   emit(event: MetricEvent): void {
+    let safeEvent = event;
+
+    // Apply screen telemetry redaction guard (Requirements 9.5, 9.6)
+    if (event.kind.startsWith('screen.')) {
+      try {
+        validateScreenTelemetryPayload(event);
+      } catch (err) {
+        console.error('[telemetry]', err instanceof Error ? err.message : err);
+        return; // Drop the event — it contains unsafe content
+      }
+      safeEvent = redactTelemetryPayload(event, cachedRedactionRules);
+    }
+
     const row: StoredTelemetryEvent = {
       id: generateId(),
       at: Date.now(),
-      ...event,
+      ...safeEvent,
     };
     // Async write — fire and forget.
     database.putTelemetryEvent(row).catch((err) => {
@@ -166,16 +340,33 @@ export class TelemetryModule {
    * keys) structurally cannot reach this path because `MetricEvent`
    * has no free-form payload field.
    *
+   * For `screen.*` events, the same runtime validation and redaction
+   * applied by `emit` is enforced here (Requirements 9.5, 9.6).
+   *
    * Actual HTTP send is deferred/batched; for now events are queued
    * in-memory. A future `flush()` method will POST the queue over
    * HTTPS to the configured endpoint.
    */
   enqueueExternal(event: MetricEvent): void {
     if (!this.optedIn) return;
+
+    let safeEvent = event;
+
+    // Apply screen telemetry redaction guard (Requirements 9.5, 9.6)
+    if (event.kind.startsWith('screen.')) {
+      try {
+        validateScreenTelemetryPayload(event);
+      } catch (err) {
+        console.error('[telemetry]', err instanceof Error ? err.message : err);
+        return; // Drop the event — it contains unsafe content
+      }
+      safeEvent = redactTelemetryPayload(event, cachedRedactionRules);
+    }
+
     this.externalQueue.push({
       id: generateId(),
       at: Date.now(),
-      ...event,
+      ...safeEvent,
     });
   }
 

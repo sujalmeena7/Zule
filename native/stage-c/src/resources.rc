@@ -1,0 +1,58 @@
+// ============================================================================
+// ZuleUI.exe version resources — Stage C native sidecar
+// Zule AI — stable, truthful, Zule-owned metadata.
+//
+// Requirements: 2.1–2.3, 2.7–2.9
+//   - OriginalFilename = ZuleUI.exe
+//   - CompanyName = Zule AI
+//   - ProductName = Zule AI
+//   - No randomized, generic, concealment, or third-party-claiming values
+//   - Identical across launches of the same release
+// ============================================================================
+
+#include <windows.h>
+
+// Version numbers: MAJOR.MINOR.PATCH.BUILD
+// These MUST match the values committed in the Stage C manifest and dependency lock.
+#define ZULEUI_VERSION_MAJOR    1
+#define ZULEUI_VERSION_MINOR    0
+#define ZULEUI_VERSION_PATCH    0
+#define ZULEUI_VERSION_BUILD    0
+
+#define ZULEUI_VERSION_STR      "1.0.0.0"
+#define ZULEUI_PRODUCT_VERSION_STR "1.0.0.0"
+
+#ifdef _DEBUG
+#define ZULEUI_FILEFLAGS        VS_FF_DEBUG
+#else
+#define ZULEUI_FILEFLAGS        0
+#endif
+
+VS_VERSION_INFO VERSIONINFO
+    FILEVERSION     ZULEUI_VERSION_MAJOR, ZULEUI_VERSION_MINOR, ZULEUI_VERSION_PATCH, ZULEUI_VERSION_BUILD
+    PRODUCTVERSION  ZULEUI_VERSION_MAJOR, ZULEUI_VERSION_MINOR, ZULEUI_VERSION_PATCH, ZULEUI_VERSION_BUILD
+    FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+    FILEFLAGS       ZULEUI_FILEFLAGS
+    FILEOS          VOS_NT_WINDOWS32
+    FILETYPE        VFT_APP
+    FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"  // English (US), Unicode
+        BEGIN
+            VALUE "CompanyName",      "Zule AI"
+            VALUE "FileDescription",  "Zule AI Overlay Host"
+            VALUE "FileVersion",      ZULEUI_VERSION_STR
+            VALUE "InternalName",     "ZuleUI"
+            VALUE "LegalCopyright",   "Copyright (c) 2025 Zule AI. All rights reserved."
+            VALUE "OriginalFilename", "ZuleUI.exe"
+            VALUE "ProductName",      "Zule AI"
+            VALUE "ProductVersion",   ZULEUI_PRODUCT_VERSION_STR
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 0x04B0  // English (US), Unicode
+    END
+END

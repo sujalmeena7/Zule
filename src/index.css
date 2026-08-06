@@ -48,9 +48,9 @@
   --accent-blue: #3b82f6;
   --accent-blue-hover: #2563eb;
   --accent-blue-glow: rgba(59, 130, 246, 0.3);
-  --accent-purple: #8b5cf6;
-  --accent-gradient: linear-gradient(135deg, #3b82f6, #8b5cf6);
-  --accent-gradient-vibrant: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 50%, #ec4899 100%);
+  --accent-purple: #3b82f6; /* Replaced with blue to keep things professional */
+  --accent-gradient: linear-gradient(135deg, #1d4ed8, #3b82f6);
+  --accent-gradient-vibrant: linear-gradient(135deg, #1e3a8a 0%, #2563eb 50%, #60a5fa 100%);
   --accent-green: #22c55e;
   --accent-yellow: #eab308;
   --accent-red: #ef4444;

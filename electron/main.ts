@@ -24,21 +24,28 @@ import { createRequire } from 'node:module';
 import * as electronRaw from 'electron';
 const require = createRequire(import.meta.url);
 const electronApi: any = (electronRaw && (electronRaw as any).app) ? electronRaw : require('electron');
-const { app, BrowserWindow, ipcMain, session, desktopCapturer, shell } =
+const { app, BrowserWindow, ipcMain, session, desktopCapturer, shell, Tray, Menu, safeStorage } =
   electronApi as typeof import('electron');
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { OverlayManager } from './overlayManager';
+import { applyNativeStealth, removeNativeStealth, isNativeStealthAvailable } from './nativeStealth';
 import type { UpdateState } from './autoUpdateService';
+type BrowserWindowType = import('electron').BrowserWindow;
 
 // ── Paths ────────────────────────────────────────────────────────────────────
 // ESM doesn't have __dirname, so we reconstruct it from import.meta.url
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const DIST = path.join(__dirname, '../dist');
-const PRELOAD = path.join(__dirname, 'preload.mjs');
+// .cjs (not .mjs): sandboxed preload scripts are executed by Electron's own
+// restricted CommonJS-style wrapper, never through Node's ESM loader — an
+// `import` statement here throws "Cannot use import statement outside a
+// module" as soon as sandbox: true. See the preload build config in
+// vite.electron.config.ts (format: 'cjs') that produces this file.
+const PRELOAD = path.join(__dirname, 'preload.cjs');
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173';
 const isDev = !app.isPackaged;
 
@@ -99,6 +106,18 @@ app.commandLine.appendSwitch(
 app.commandLine.appendSwitch('disable-component-update');
 app.commandLine.appendSwitch('disable-domain-reliability');
 
+// ── Additional stealth hardening ────────────────────────────────────────────
+//
+// Reduce the process fingerprint visible to proctoring suites that inspect
+// GPU process metadata, accessibility trees, and renderer debug surfaces.
+app.commandLine.appendSwitch('disable-gpu-driver-bug-workarounds');
+// Prevent the accessibility tree from being exposed to external tools. Some
+// proctoring and monitoring suites enumerate windows via UI Automation /
+// MSAA; this switch reduces the information surface without affecting
+// in-app a11y (screen readers within the renderer still work because they
+// query the renderer process, not the GPU process).
+app.commandLine.appendSwitch('disable-renderer-accessibility');
+
 // NOTE: the on-device ML stack (local Whisper) now runs in the MAIN PROCESS via
 // onnxruntime-node (see electron/whisperService.ts), so no renderer GPU/WASM
 // flags are needed here. The earlier enable-unsafe-webgpu / SharedArrayBuffer
@@ -109,6 +128,7 @@ app.commandLine.appendSwitch('disable-domain-reliability');
 
 let mainWindow: BrowserWindowType | null = null;
 let overlayManager: OverlayManager | null = null;
+let appTray: any = null;
 
 // ── IPC Fan-Out: Auto-Update State ───────────────────────────────────────────
 //
@@ -185,25 +205,24 @@ let autoUpdateServiceModule: typeof import('./autoUpdateService') | null = null;
 let vectorIndexService: typeof import('./vectorIndexService') | null = null;
 
 // ── CSP Relaxation ───────────────────────────────────────────────────────────
-// The index.html has a strict CSP that blocks Electron's preload script.
-// We intercept response headers and relax script-src for the Electron context.
-
+// index.html's CSP is a <meta http-equiv> tag, not an HTTP response header —
+// `onHeadersReceived` only sees real network response headers, so it can
+// never see or rewrite that tag. Confirmed no HTTP response in this app
+// (dev server or packaged file:// load) ever sets an actual
+// `Content-Security-Policy` header (grepped electron/ and both vite
+// configs — nothing sets one), so a script-src 'unsafe-inline' widening
+// here would always be dead code. It has been removed; preload scripts
+// aren't `<script>` tags and were never subject to the page's script-src
+// in the first place, so nothing relied on it.
+//
+// The COOP/COEP strip below is the real fix and stays: Google's identity
+// endpoints send those headers on real HTTP responses, and without
+// stripping them Firebase Auth's popup flow breaks with "Cross-Origin-
+// Opener-Policy policy would block the window.closed call."
 function relaxCSPForElectron(): void {
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     const headers = details.responseHeaders ?? {};
 
-    // Remove CSP meta-tag enforcement by stripping the header
-    // (Electron's preload needs 'unsafe-inline' for injection)
-    if (headers['content-security-policy']) {
-      headers['content-security-policy'] = headers['content-security-policy'].map(
-        (csp) =>
-          csp
-            .replace(/script-src\s+'self'/, "script-src 'self' 'unsafe-inline'")
-      );
-    }
-
-    // Strip COOP/COEP headers that isolate popups and break Firebase Auth
-    // "Cross-Origin-Opener-Policy policy would block the window.closed call."
     if (headers['cross-origin-opener-policy']) {
       delete headers['cross-origin-opener-policy'];
     }
@@ -310,16 +329,49 @@ function createMainWindow(): void {
       preload: PRELOAD,
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      // preload.ts only imports { contextBridge, ipcRenderer } — no direct
+      // fs/path/child_process/Node built-ins — so it works unchanged under
+      // Chromium's OS-level sandbox. Sandboxed preloads still get
+      // contextBridge/ipcRenderer; this just removes the renderer
+      // process's ability to touch Node APIs directly if it's ever
+      // compromised (XSS in a webview, a malicious knowledge-base upload
+      // triggering a renderer bug, etc.).
+      sandbox: true,
       backgroundThrottling: false,
-      webSecurity: true,
+      // In development the renderer loads from http://localhost:5173, so the
+      // browser's same-origin policy blocks fetch to arbitrary gateways (CORS
+      // preflight fails). Disabling webSecurity in dev lets the custom provider
+      // reach any user-configured endpoint without a proxy. In production the
+      // app loads from file:// / custom protocol where CORS does not apply.
+      webSecurity: !isDev,
     },
   });
 
   // Allow normal external links to open in the system browser
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  mainWindow.webContents.setWindowOpenHandler(({ url }: { url: string }) => {
     shell.openExternal(url);
     return { action: 'deny' };
+  });
+
+  // Open a URL in the system browser (used by payment flow, etc.)
+  ipcMain.handle('open-external', async (_event: unknown, url: string) => {
+    if (url && typeof url === 'string') {
+      await shell.openExternal(url);
+    }
+  });
+
+  // Bring the main window back to the foreground (used after payment completes)
+  ipcMain.handle('focus-window', async () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      // On Windows, just calling show/focus isn't always enough to steal focus
+      // from another app (like the browser).
+      mainWindow.setAlwaysOnTop(true);
+      mainWindow.show();
+      mainWindow.focus();
+      app.focus({ steal: true });
+      mainWindow.setAlwaysOnTop(false);
+    }
   });
 
   // Handle Firebase auth via system browser deep-link
@@ -327,11 +379,31 @@ function createMainWindow(): void {
     return new Promise((resolve, reject) => {
       // 1. Generate a secure random state/nonce to prevent CSRF
       const stateNonce = crypto.randomBytes(32).toString('hex');
-      
+
+      // The only page that should ever be able to reach this loopback
+      // server is our own web app (dev server or the deployed origin).
+      // Computed up front so both the CORS header and the auth deep-link
+      // below use the same value. `new URL(...).origin` strips any
+      // trailing slash/path — VITE_DEV_SERVER_URL (which DEV_URL falls
+      // back to process.env for) is set by vite-plugin-electron WITH a
+      // trailing slash, but a browser's `Origin` header never has one, so
+      // comparing against DEV_URL raw would always mismatch.
+      const expectedOrigin = new URL(isDev ? DEV_URL : 'https://zuleai.vercel.app').origin;
+
       // 2. Create the temporary HTTP server
       const server = http.createServer((req, res) => {
-        // Set CORS headers so the web app can POST to this local server
-        res.setHeader('Access-Control-Allow-Origin', '*');
+        // Reject anything that isn't our web app before doing anything else
+        // (including CORS preflight) — an ephemeral 127.0.0.1 port with a
+        // wildcard Allow-Origin can be probed/POSTed by any other local
+        // process/page during the 5-minute window this server is open.
+        if (req.headers.origin !== expectedOrigin) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Forbidden origin' }));
+          return;
+        }
+
+        // Origin verified — safe to echo back (never a wildcard).
+        res.setHeader('Access-Control-Allow-Origin', expectedOrigin);
         res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
         res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
@@ -352,14 +424,14 @@ function createMainWindow(): void {
                 res.end(JSON.stringify({ error: 'Invalid state nonce' }));
                 return;
               }
-              
+
               // Success!
               res.writeHead(200, { 'Content-Type': 'application/json' });
               res.end(JSON.stringify({ success: true }));
-              
+
               // Clean up and resolve
               cleanup();
-              
+
               // Bring the Electron app back to the foreground
               const win = mainWindow;
               if (win && !win.isDestroyed()) {
@@ -368,7 +440,7 @@ function createMainWindow(): void {
                 win.focus();
                 app.focus({ steal: true });
               }
-              
+
               resolve(data.idToken);
             } catch (err) {
               res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -400,10 +472,10 @@ function createMainWindow(): void {
           const port = address.port;
           // Construct the deep link to the web app
           // Use localhost in dev, vercel url in production
-          let baseUrl = isDev ? DEV_URL : 'https://zuleai.vercel.app';
+          let baseUrl = expectedOrigin;
           if (!baseUrl.endsWith('/')) baseUrl += '/';
           const authUrl = `${baseUrl}?desktop_login=true&port=${port}&state=${stateNonce}`;
-          
+
           // Open the system default browser
           shell.openExternal(authUrl);
         } else {
@@ -411,7 +483,7 @@ function createMainWindow(): void {
           reject(new Error('Failed to start local auth server'));
         }
       });
-      
+
       server.on('error', (err) => {
         cleanup();
         reject(err);
@@ -432,6 +504,21 @@ function createMainWindow(): void {
     console.warn(`[main] setContentProtection on dashboard failed: ${message}`);
   }
 
+  // Native Win32 stealth: apply defense-in-depth layers (display affinity
+  // verification, DWM preview hardening, window style hardening) on top of Electron's
+  // setContentProtection. Gracefully degrades on non-Windows platforms.
+  if (isNativeStealthAvailable()) {
+    try {
+      const result = applyNativeStealth(mainWindow.getNativeWindowHandle());
+      if (!result.ok) {
+        console.warn('[main] Native stealth on dashboard: no layers applied');
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[main] Native stealth on dashboard failed: ${msg}`);
+    }
+  }
+
   if (isDev) {
     mainWindow.loadURL(DEV_URL);
     mainWindow.webContents.openDevTools({ mode: 'detach' });
@@ -448,7 +535,7 @@ function createMainWindow(): void {
   // distinguish an OOM kill from a WASM/native crash etc. Without this the
   // only signal is "DevTools was disconnected" which says nothing about the
   // cause.
-  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+  mainWindow.webContents.on('render-process-gone', (_event: Electron.Event, details: Electron.RenderProcessGoneDetails) => {
     console.error(
       `[main] RENDERER GONE — reason="${details.reason}" exitCode=${details.exitCode}`,
     );
@@ -502,6 +589,36 @@ function applyMode2Transition(win: BrowserWindowType): void {
 // ── IPC Handlers ─────────────────────────────────────────────────────────────
 
 function registerIpcHandlers(): void {
+  // ── Secure Storage (OS-backed encryption for provider API keys) ─────────
+  // Provider API keys (OpenAI/Anthropic/Gemini) were previously persisted
+  // as plaintext in IndexedDB under the misleadingly-named `apiKeyCipher`
+  // field. `safeStorage` encrypts strings using the OS credential store
+  // (DPAPI on Windows, Keychain on macOS, libsecret on Linux) tied to the
+  // logged-in OS user — no passphrase for the user to set or lose. The
+  // renderer never sees the encryption key; it only ever sends/receives
+  // opaque base64 blobs over IPC.
+  ipcMain.handle('secureStorage:isAvailable', () => {
+    try {
+      return safeStorage.isEncryptionAvailable();
+    } catch {
+      return false;
+    }
+  });
+
+  ipcMain.handle('secureStorage:encrypt', (_event, plaintext: string) => {
+    if (!safeStorage.isEncryptionAvailable()) {
+      throw new Error('secureStorage: OS-level encryption is unavailable on this machine');
+    }
+    return safeStorage.encryptString(plaintext).toString('base64');
+  });
+
+  ipcMain.handle('secureStorage:decrypt', (_event, ciphertextBase64: string) => {
+    if (!safeStorage.isEncryptionAvailable()) {
+      throw new Error('secureStorage: OS-level encryption is unavailable on this machine');
+    }
+    return safeStorage.decryptString(Buffer.from(ciphertextBase64, 'base64'));
+  });
+
   // Mode 1 → Mode 2 transition. The channel takes no payload; any payload is
   // silently ignored. Operates on the existing dashboard BrowserWindow — does
   // NOT create a new window, does NOT close/destroy the existing one.
@@ -563,10 +680,28 @@ function registerIpcHandlers(): void {
           }`,
         );
       }
+
+      // Native stealth layers on the dashboard window
+      if (isNativeStealthAvailable()) {
+        try {
+          if (enabled) {
+            applyNativeStealth(win.getNativeWindowHandle());
+          } else {
+            removeNativeStealth(win.getNativeWindowHandle());
+          }
+        } catch (err: unknown) {
+          console.warn(
+            `[main] Native stealth toggle on dashboard failed: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+      }
     }
     // OverlayManager.setContentProtection has its own try/catch and
     // emits an 'overlay-error' IPC event on failure — we don't override
     // its behavior here, but we do reflect its outcome in the return value.
+    // OverlayManager also applies/removes native stealth layers internally.
     const overlayOk = overlayManager ? overlayManager.setContentProtection(enabled) : true;
     return ok && overlayOk;
   });
@@ -856,7 +991,55 @@ app.whenReady().then(() => {
   registerDisplayMediaHandler();
   registerMediaPermissionHandlers();
   registerIpcHandlers();
+
+  // ── Dev-only IPC: Chromium class-name scanner ────────────────────────────
+  // Exposes findChromiumTopLevelClasses for manual verification of
+  // class-name concealment during development. Not registered in prod.
+  // Requirements: 1.3, 1.5, 2.2
+  if (isDev) {
+    const scanChannel = 'dev:scan-chromium-classes';
+    ipcMain.handle(scanChannel, async () => {
+      const { findChromiumTopLevelClasses } = await import('./win32/enumScanner');
+      return findChromiumTopLevelClasses();
+    });
+  }
+
   createMainWindow();
+
+  // Create System Tray
+  try {
+    appTray = new Tray(path.join(__dirname, '../public/favicon.ico'));
+    const contextMenu = Menu.buildFromTemplate([
+      {
+        label: 'Open Dashboard',
+        click: () => {
+          if (mainWindow) {
+            if (mainWindow.isMinimized()) mainWindow.restore();
+            mainWindow.show();
+            mainWindow.focus();
+          }
+        },
+      },
+      { type: 'separator' },
+      {
+        label: 'Quit Zule AI',
+        click: () => {
+          app.quit();
+        },
+      },
+    ]);
+    appTray.setToolTip('Zule AI');
+    appTray.setContextMenu(contextMenu);
+    appTray.on('click', () => {
+      if (mainWindow) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+      }
+    });
+  } catch (err) {
+    console.error('Failed to create tray icon:', err);
+  }
 
   // Instantiate OverlayManager — owns all overlay lifecycle from here
   overlayManager = new OverlayManager({

@@ -125,8 +125,27 @@ export async function fetchWithTimeout(
     }, timeoutMs);
   }
 
+  // Electron's Chromium net stack uses chunked transfer encoding when
+  // Content-Length is absent, which causes `chunked_data_pipe_upload_data_stream`
+  // errors with some gateways/proxies (e.g. Lumosel, Cloudflare Workers).
+  // Explicitly set Content-Length for string bodies to force a fixed-length upload.
+  let mergedInit: RequestInit = { ...init, signal: controller.signal };
+  if (
+    typeof init?.body === 'string' &&
+    !(init.headers && ('content-length' in init.headers || 'Content-Length' in init.headers))
+  ) {
+    const contentLength = new TextEncoder().encode(init.body).byteLength;
+    mergedInit = {
+      ...mergedInit,
+      headers: {
+        ...(mergedInit.headers as Record<string, string> | undefined),
+        'Content-Length': String(contentLength),
+      },
+    };
+  }
+
   try {
-    return await fetchImpl(input, { ...init, signal: controller.signal });
+    return await fetchImpl(input, mergedInit);
   } catch (err) {
     if (timedOut) {
       // Normalise: callers (and Property 10) can branch on `name === 'AbortError'`.

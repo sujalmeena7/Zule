@@ -99,6 +99,12 @@ export function describeZuleError(e: ZuleError): ToastSpec {
         message: "This browser doesn't support screen capture.",
         severity: 'alert',
       };
+    case 'screen.frame-not-available':
+      return {
+        message:
+          'Screen frame not available — answering without screen context.',
+        severity: 'status',
+      };
 
     // OCR_Worker ---------------------------------------------------------
     case 'ocr.worker-failed':

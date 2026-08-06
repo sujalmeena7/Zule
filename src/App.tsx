@@ -11,12 +11,14 @@ import { Settings } from './components/Settings';
 import { DiagnosticsPanel } from './components/DiagnosticsPanel';
 import { ZuleProvider, useZule } from './context/ZuleContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { OverlayShell } from './components/OverlayShell';
 import { DetachedCopilot } from './components/copilot/DetachedCopilot';
 import { LandingPage } from './components/LandingPage';
 import { AuthPage } from './components/AuthPage';
 import { PrivacyPolicy } from './components/PrivacyPolicy';
 import { TermsOfService } from './components/TermsOfService';
 import { AuthProvider, useAuth } from './firebase/AuthContext';
+import { SubscriptionProvider } from './context/SubscriptionContext';
 import { ModelLoader } from './components/common/ModelLoader';
 import { LayoutDashboard, Settings as SettingsIcon, Activity } from 'lucide-react';
 import { Toaster } from 'react-hot-toast';
@@ -27,28 +29,9 @@ import { setRouterOffline } from './brain/aiProvider';
 import { isElectron } from './hooks/useElectronBridge';
 import { BlogPage } from './components/BlogPage';
 import { BlogPost } from './components/BlogPost';
+import { PricingPage } from './components/PricingPage';
+import { SubscriptionBadge } from './components/SubscriptionBadge';
 import { useIpcTelemetrySink } from './hooks/useIpcTelemetrySink';
-// Wrapper for the Electron Overlay that strips the opaque background
-function OverlayShell() {
-  useEffect(() => {
-    // Force body and html to be transparent for the overlay window
-    document.documentElement.style.backgroundColor = 'transparent';
-    document.body.style.backgroundColor = 'transparent';
-    
-    return () => {
-      document.documentElement.style.backgroundColor = '';
-      document.body.style.backgroundColor = '';
-    };
-  }, []);
-
-  return (
-    <div className="electron-overlay-root">
-      <ErrorBoundary>
-        <FloatingCopilot />
-      </ErrorBoundary>
-    </div>
-  );
-}
 
 function AppContent() {
   const { state } = useZule();
@@ -132,7 +115,7 @@ function AppContent() {
           <div className="logo-icon" />
           <span>Zule AI</span>
         </div>
-        
+
         <div className="nav-links">
           <a href="#dashboard" className={`nav-link ${currentPage === 'dashboard' ? 'active' : ''}`}>
             <LayoutDashboard size={18} />
@@ -146,6 +129,11 @@ function AppContent() {
             <Activity size={18} />
             Diagnostics
           </a>
+
+          {/* Subscription badge */}
+          <div style={{ marginTop: 16 }}>
+            <SubscriptionBadge />
+          </div>
         </div>
 
         {/* User Profile */}
@@ -183,6 +171,7 @@ function AppContent() {
           {currentPage === 'dashboard' && <Dashboard />}
           {currentPage === 'settings' && <Settings />}
           {currentPage === 'diagnostics' && <DiagnosticsPanel />}
+          {currentPage === 'pricing' && <PricingPage />}
           {currentPage === 'meeting-detail' && state.selectedMeeting && (
             <MeetingDetail />
           )}
@@ -220,26 +209,13 @@ function App() {
   }
 
   // Electron overlay window — renders ONLY the FloatingCopilot
-  // in a transparent container (no dashboard, no sidebar)
+  // in a transparent container (no dashboard, no sidebar).
+  // OverlayShell provides its own Auth/Subscription/Zule providers
+  // and MotionConfig/Toaster, since this branch mounts in isolation
+  // (this route is actually intercepted earlier in main.tsx before
+  // App ever mounts, but is kept here for web-mode/dev parity).
   if (hashRoute === '#overlay') {
-    return (
-      <ZuleProvider>
-        <MotionConfig reducedMotion="user">
-          <OverlayShell />
-          <Toaster
-            position="bottom-right"
-            toastOptions={{
-              style: {
-                background: '#1e293b',
-                color: '#f8fafc',
-                border: '1px solid rgba(255, 255, 255, 0.1)',
-                backdropFilter: 'blur(10px)',
-              },
-            }}
-          />
-        </MotionConfig>
-      </ZuleProvider>
-    );
+    return <OverlayShell />;
   }
 
   // Legal and Main Pages wrapped in AnimatePresence for smooth transitions
@@ -270,25 +246,27 @@ function App() {
 
   return (
     <AuthProvider>
-      <ZuleProvider>
-        <MotionConfig reducedMotion="user">
-          <AnimatePresence mode="wait">
-            {currentView}
-          </AnimatePresence>
-          <ModelLoader />
-          <Toaster 
-            position="bottom-right"
-            toastOptions={{
-              style: {
-                background: '#1e293b',
-                color: '#f8fafc',
-                border: '1px solid rgba(255, 255, 255, 0.1)',
-                backdropFilter: 'blur(10px)',
-              },
-            }}
-          />
-        </MotionConfig>
-      </ZuleProvider>
+      <SubscriptionProvider>
+        <ZuleProvider>
+          <MotionConfig reducedMotion="user">
+            <AnimatePresence mode="wait">
+              {currentView}
+            </AnimatePresence>
+            <ModelLoader />
+            <Toaster
+              position="bottom-right"
+              toastOptions={{
+                style: {
+                  background: '#1e293b',
+                  color: '#f8fafc',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  backdropFilter: 'blur(10px)',
+                },
+              }}
+            />
+          </MotionConfig>
+        </ZuleProvider>
+      </SubscriptionProvider>
     </AuthProvider>
   );
 }

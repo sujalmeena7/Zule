@@ -150,3 +150,33 @@ export function clampSize(
     height: Math.max(constraints.minHeight, Math.min(height, constraints.maxHeight)),
   };
 }
+
+// ─── Initial Bounds Recovery ─────────────────────────────────────────────────
+
+/**
+ * Resolve startup bounds and repair the exact work-area origin persisted by
+ * the failed Stage A topology. After SetParent, Electron reported the child's
+ * parent-relative (0, 0) as though it were screen coordinates; retaining that
+ * value leaves the repaired Layer 0 window pinned in the upper-left corner.
+ */
+export function resolveInitialOverlayBounds(
+  saved: Rect | undefined,
+  workArea: Rect,
+): Rect {
+  const width = saved?.width ?? MIN_WIDTH;
+  const height = saved?.height ?? MIN_HEIGHT;
+  const defaultBounds = {
+    x: workArea.x + Math.round((workArea.width - width) / 2),
+    y: workArea.y + 20,
+    width,
+    height,
+  };
+
+  if (!saved) return clampToWorkArea(defaultBounds, workArea);
+
+  const clamped = clampToWorkArea(saved, workArea);
+  const isLegacyChildOrigin = clamped.x === workArea.x && clamped.y === workArea.y;
+  return isLegacyChildOrigin
+    ? clampToWorkArea(defaultBounds, workArea)
+    : clamped;
+}

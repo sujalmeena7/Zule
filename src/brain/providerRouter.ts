@@ -34,8 +34,14 @@ import { isRetryableError } from './providers/http';
  * browser is offline. All other providers are considered "cloud" and
  * require both the vault to be unlocked and network connectivity.
  * Requirements: 15.2, 20.1.
+ *
+ * INVARIANT — membership is exactly `{ollama, simulation}`. Every cloud gate
+ * in this router (vault-locked, offline, 429 cooldown) keys off *non*-membership
+ * here, so adding a remote provider (e.g. `custom`) to this set would exempt it
+ * from those gates and ship transcript content off-device while the app
+ * believes it is offline. Exported so tests can pin the membership directly.
  */
-const LOCAL_PROVIDER_NAMES = new Set<string>(['ollama', 'simulation']);
+export const LOCAL_PROVIDER_NAMES = new Set<string>(['ollama', 'simulation']);
 
 /**
  * How long to skip a provider after it returns HTTP 429 (rate-limited /
@@ -129,6 +135,20 @@ export class AI_Provider_Router {
    */
   registerAdapter(adapter: ProviderAdapter): void {
     this.adapters.set(adapter.name, adapter);
+  }
+
+  /**
+   * Remove an adapter so no subsequent request can be routed to it.
+   * Also drops the name from the priority list and clears any post-429
+   * cooldown entry, so a later re-registration starts from a clean slate.
+   * Returns whether an adapter with that name was registered.
+   * Requirement 1.5.
+   */
+  unregisterAdapter(name: string): boolean {
+    const wasPresent = this.adapters.delete(name);
+    this.priority = this.priority.filter((n) => n !== name);
+    this.rateLimitedUntil.delete(name);
+    return wasPresent;
   }
 
   /**

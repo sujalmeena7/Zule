@@ -18,7 +18,10 @@
 import { generateAIResponse } from './aiProvider';
 import { extractJsonObject } from './jsonExtract';
 import { pendingTaskTracker } from '../utils/pendingTaskTracker';
+import { apply as redact } from './redaction';
 import type { TranscriptLine } from './contextManager';
+import type { RedactionRule } from '../types/redaction';
+import type { RedactionAttestation } from '../types/ai';
 
 // ------------------------------------------------------------------
 // Public types
@@ -89,6 +92,58 @@ ${transcriptText}
 Output ONLY this JSON structure:
 {"summary":"...","actionItems":[{"text":"...","sourceQuote":"..."}],"followUpEmail":"...","keyFacts":["..."]}
   `;
+}
+
+/**
+ * The summary path assembles its prompt by hand rather than through
+ * `Context_Builder`, so it has to run the Redaction_Engine itself and stamp its
+ * own attestation. Without this the two `ContextWindow` literals below would
+ * reach `aiProvider.toPromptInput` with `redaction: undefined`, and the
+ * Custom_Provider_Adapter's `assertRedacted` pre-flight would refuse every
+ * summary request (Requirements 2.9, 2.10).
+ *
+ * The attestation is measured, never assumed: `segmentsTotal` is the one
+ * transcript segment this path emits, and `segmentsRedacted` counts only the
+ * segments that actually went through `redact`. A missing or unreadable
+ * `redactionRules` setting degrades to an empty rule set — the segment still
+ * passed through the Redaction_Engine, there was simply nothing to match, which
+ * is the same `ruleCount: 0` success the Context_Builder attests to. If `redact`
+ * itself throws we return the *original* text with `applied: false` so no
+ * un-redacted transcript can be attested as clean.
+ */
+async function redactTranscriptForSummary(
+  transcriptText: string,
+): Promise<{ text: string; redaction: RedactionAttestation }> {
+  let rules: RedactionRule[] = [];
+  try {
+    const { database } = await import('../data/database');
+    const stored = await database.getSetting<RedactionRule[]>('redactionRules', []);
+    if (Array.isArray(stored)) rules = stored;
+  } catch {
+    // Settings store might not be initialised yet — empty rule set.
+  }
+
+  try {
+    return {
+      text: redact(transcriptText, rules),
+      redaction: {
+        applied: true,
+        ruleCount: rules.length,
+        segmentsTotal: 1,
+        segmentsRedacted: 1,
+      },
+    };
+  } catch {
+    return {
+      text: transcriptText,
+      redaction: {
+        applied: false,
+        ruleCount: rules.length,
+        segmentsTotal: 1,
+        segmentsRedacted: 0,
+      },
+    };
+  }
 }
 
 /**
@@ -203,17 +258,23 @@ export async function generateMeetingSummary(
     };
   }
 
+  // Redact once, up front, and reuse the same redacted text for every segment
+  // of both attempts so the stamped attestation describes exactly what is sent.
+  const { text: safeTranscriptText, redaction } =
+    await redactTranscriptForSummary(fullTranscriptText);
+
   try {
     // First attempt
-    const prompt = buildSummaryPrompt(fullTranscriptText);
+    const prompt = buildSummaryPrompt(safeTranscriptText);
     const response = await generateAIResponse(
       {
         systemPrompt: 'You are an expert executive assistant.',
         knowledgeContext: '',
-        transcriptContext: `Full transcript:\n${fullTranscriptText.substring(0, 3000)}`,
+        transcriptContext: `Full transcript:\n${safeTranscriptText.substring(0, 3000)}`,
         screenContext: '',
         userQuery: 'Generate a structured meeting summary.',
         fullPrompt: prompt,
+        redaction,
       },
       apiKey,
       signal,
@@ -223,15 +284,16 @@ export async function generateMeetingSummary(
 
     // Retry once with stricter prompt on extraction failure (Requirement 10.3)
     if (!result) {
-      const retryPrompt = buildStrictRetryPrompt(fullTranscriptText);
+      const retryPrompt = buildStrictRetryPrompt(safeTranscriptText);
       const retryResponse = await generateAIResponse(
         {
           systemPrompt: 'You are a JSON-only assistant. Respond ONLY with valid JSON, nothing else.',
           knowledgeContext: '',
-          transcriptContext: `Full transcript:\n${fullTranscriptText.substring(0, 3000)}`,
+          transcriptContext: `Full transcript:\n${safeTranscriptText.substring(0, 3000)}`,
           screenContext: '',
           userQuery: 'Generate a structured meeting summary as JSON.',
           fullPrompt: retryPrompt,
+          redaction,
         },
         apiKey,
         signal,

@@ -143,12 +143,20 @@ export interface ExportedData {
  * `CryptoVault.encrypt` and is only readable while the vault is unlocked.
  */
 export interface ProviderConfig {
-  id: 'gemini' | 'openai' | 'anthropic' | 'ollama' | 'simulation';
+  id: 'gemini' | 'openai' | 'anthropic' | 'ollama' | 'simulation' | 'custom';
   enabled: boolean;
+  /** 1-based failover position; integer in [1, 10]. Lower = tried earlier. */
   priority: number;
+  /** Ciphertext from `secureKeyStorage.encryptApiKey`. Never plaintext for `custom`. */
   apiKeyCipher?: string;
+  /** Normalised absolute http(s) prefix; `/chat/completions` is appended by the adapter. */
   baseUrl?: string;
+  /** The `model` field value sent in the request body. */
+  modelId?: string;
+  /** Optional User-supplied pricing so Spend_Tracker can cost custom requests. */
   pricePerMTokens?: { input: number; output: number };
+  /** Epoch ms at which the User acknowledged the data-egress disclosure. */
+  acknowledgedEgressAt?: number;
 }
 
 // --- Database Constants ---
