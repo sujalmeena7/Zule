@@ -15,6 +15,7 @@ import {
   type User,
 } from 'firebase/auth';
 import { auth } from '../firebase/config';
+import { setActiveUser } from '../data/database';
 
 interface AuthContextType {
   user: User | null;
@@ -33,8 +34,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
-      setUser(firebaseUser);
-      setLoading(false);
+      // Repoint local storage at this account's private partition *before*
+      // exposing the user to React. Consumers read the database as soon as
+      // they see a non-null user, so publishing first would let them read
+      // the previous account's rows.
+      void (async () => {
+        try {
+          await setActiveUser(firebaseUser?.uid ?? null);
+        } catch (error) {
+          console.error('[AuthContext] Failed to bind account data partition:', error);
+        } finally {
+          setUser(firebaseUser);
+          setLoading(false);
+        }
+      })();
     });
     return unsubscribe;
   }, []);

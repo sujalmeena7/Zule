@@ -162,11 +162,32 @@ export interface ProviderConfig {
 
 // --- Database Constants ---
 
-const DB_NAME = 'zule-unified';
+/**
+ * Base name for the unified database. Never opened directly — every
+ * connection resolves through {@link currentDBName} so each signed-in
+ * account gets a physically separate IndexedDB. Sharing one database
+ * across accounts leaked meetings, Knowledge_Base documents and the
+ * cached subscription tier into freshly created accounts.
+ */
+const DB_NAME_BASE = 'zule-unified';
+
+/**
+ * The pre-partitioning database name. Installs created before
+ * per-account isolation hold all their data here. {@link adoptSharedDatabase}
+ * hands it to the first account that signs in and then marks it claimed,
+ * so no second account can ever read it.
+ */
+const SHARED_DB_NAME = DB_NAME_BASE;
+
 const DB_VERSION = 4;
 
 const LEGACY_DB_NAME = 'zule-store';
 const LEGACY_DB_VERSION = 1;
+
+/** Written into the shared DB to record which uid claimed it. */
+const SHARED_DB_CLAIM_FLAG = '__migration.sharedDbClaimedBy';
+/** Written into a per-account DB once adoption has been considered. */
+const SHARED_DB_ADOPTED_FLAG = '__migration.sharedDbAdopted';
 
 export const STORE_MEETINGS = 'meetings';
 export const STORE_SETTINGS = 'settings';
@@ -284,9 +305,176 @@ function applyUpgrade(
   }
 }
 
+// --- Active account partition -------------------------------------------
+
+/**
+ * The uid whose partition every subsequent `openDB()` call resolves to.
+ * `null` means "no account signed in yet"; those callers get a throwaway
+ * `-anon` partition so a signed-out session can never read or write
+ * another account's rows.
+ */
+let activeUserId: string | null = null;
+
+/** Deduplicates the one-time shared-DB adoption per uid. */
+let adoptionPromise: Promise<void> | null = null;
+
+function dbNameForUser(uid: string | null): string {
+  return uid ? `${DB_NAME_BASE}-u-${uid}` : `${DB_NAME_BASE}-anon`;
+}
+
+/** Name of the IndexedDB backing the currently signed-in account. */
+function currentDBName(): string {
+  return dbNameForUser(activeUserId);
+}
+
+/** The uid whose data is currently readable, for diagnostics/tests. */
+export function getActiveUserId(): string | null {
+  return activeUserId;
+}
+
+/**
+ * Point the data layer at `uid`'s private partition. Must be awaited
+ * before any read that renders account-scoped UI, which is why
+ * `AuthProvider` awaits it inside `onAuthStateChanged` before exposing
+ * the new user to React.
+ *
+ * Switching accounts drops cached migration state so the incoming
+ * account re-evaluates migrations against its own database rather than
+ * inheriting the previous account's "already done" flags.
+ */
+export async function setActiveUser(uid: string | null): Promise<void> {
+  if (uid === activeUserId) return;
+
+  activeUserId = uid;
+  postOpenMigrationPromise = null;
+  inFlightLegacyMigration = null;
+  adoptionPromise = null;
+
+  if (!uid) return;
+
+  adoptionPromise = adoptSharedDatabase(uid).catch((error) => {
+    console.error('[database] Shared-DB adoption failed:', error);
+  });
+  await adoptionPromise;
+}
+
+// --- Shared-database adoption -------------------------------------------
+
+/** Detect whether a database with `name` exists, when the host allows it. */
+async function databaseExistsByName(name: string): Promise<boolean> {
+  const factory = indexedDB as IDBFactory & {
+    databases?: () => Promise<{ name?: string; version?: number }[]>;
+  };
+  if (typeof factory.databases !== 'function') return false;
+  try {
+    const list = await factory.databases();
+    return list.some((d) => d.name === name);
+  } catch {
+    return false;
+  }
+}
+
+/** Open an existing DB at whatever version it already is, no upgrade. */
+function openExistingDatabase(name: string): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(name);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+    request.onblocked = () => reject(new Error(`IndexedDB open blocked: ${name}`));
+  });
+}
+
+function readFlag(db: IDBDatabase, key: string): Promise<unknown> {
+  if (!db.objectStoreNames.contains(STORE_SETTINGS)) return Promise.resolve(undefined);
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_SETTINGS, 'readonly');
+    const request = tx.objectStore(STORE_SETTINGS).get(key);
+    request.onsuccess = () => resolve(request.result?.value);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function writeFlag(db: IDBDatabase, key: string, value: unknown): Promise<void> {
+  if (!db.objectStoreNames.contains(STORE_SETTINGS)) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_SETTINGS, 'readwrite');
+    tx.objectStore(STORE_SETTINGS).put({ key, value });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+function copyStore(source: IDBDatabase, target: IDBDatabase, storeName: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const readTx = source.transaction(storeName, 'readonly');
+    const request = readTx.objectStore(storeName).getAll();
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const rows = request.result as unknown[];
+      if (rows.length === 0) {
+        resolve(0);
+        return;
+      }
+      const writeTx = target.transaction(storeName, 'readwrite');
+      const store = writeTx.objectStore(storeName);
+      for (const row of rows) store.put(row);
+      writeTx.oncomplete = () => resolve(rows.length);
+      writeTx.onerror = () => reject(writeTx.error);
+    };
+  });
+}
+
+/**
+ * Migrate a pre-partitioning install into its owner's private partition.
+ *
+ * The shared `zule-unified` database is claimed by exactly one uid — the
+ * first account to sign in after upgrading, which on a single-user
+ * desktop install is the person who created that data. Every later
+ * account observes the claim, records that adoption was considered, and
+ * starts empty. That is what stops a newly created account from seeing
+ * the previous account's dashboard.
+ */
+async function adoptSharedDatabase(uid: string): Promise<void> {
+  const target = await openDBForInternalUse();
+  try {
+    if (await readFlag(target, SHARED_DB_ADOPTED_FLAG)) return;
+
+    if (!(await databaseExistsByName(SHARED_DB_NAME))) {
+      await writeFlag(target, SHARED_DB_ADOPTED_FLAG, true);
+      return;
+    }
+
+    const shared = await openExistingDatabase(SHARED_DB_NAME);
+    try {
+      const claimedBy = await readFlag(shared, SHARED_DB_CLAIM_FLAG);
+
+      if (claimedBy && claimedBy !== uid) {
+        // Another account already owns this data — start clean.
+        await writeFlag(target, SHARED_DB_ADOPTED_FLAG, true);
+        return;
+      }
+
+      if (!claimedBy) await writeFlag(shared, SHARED_DB_CLAIM_FLAG, uid);
+
+      let copied = 0;
+      for (const storeName of Array.from(shared.objectStoreNames)) {
+        if (!target.objectStoreNames.contains(storeName)) continue;
+        copied += await copyStore(shared, target, storeName);
+      }
+      console.info(`[database] Adopted ${copied} pre-existing rows into account partition.`);
+    } finally {
+      shared.close();
+    }
+
+    await writeFlag(target, SHARED_DB_ADOPTED_FLAG, true);
+  } finally {
+    target.close();
+  }
+}
+
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    const request = indexedDB.open(currentDBName(), DB_VERSION);
 
     request.onupgradeneeded = (event) => {
       const db = request.result;
@@ -336,6 +524,10 @@ function openDB(): Promise<IDBDatabase> {
  */
 function runPostOpenMigrations(): Promise<void> {
   if (postOpenMigrationPromise) return postOpenMigrationPromise;
+  // Deliberately deferred until an account owns the connection: copying
+  // the legacy store into the throwaway `-anon` partition would delete
+  // the source and strand the rows where no account can reach them.
+  if (!activeUserId) return Promise.resolve();
   postOpenMigrationPromise = (async () => {
     try {
       await migrateLegacyZuleStore();
@@ -353,18 +545,7 @@ function runPostOpenMigrations(): Promise<void> {
  * accidentally creating an empty legacy DB on every page load.
  */
 async function legacyDatabaseExists(): Promise<boolean> {
-  const factory = indexedDB as IDBFactory & {
-    databases?: () => Promise<{ name?: string; version?: number }[]>;
-  };
-  if (typeof factory.databases !== 'function') {
-    return false;
-  }
-  try {
-    const list = await factory.databases();
-    return list.some((d) => d.name === LEGACY_DB_NAME);
-  } catch {
-    return false;
-  }
+  return databaseExistsByName(LEGACY_DB_NAME);
 }
 
 /** Open the legacy DB strictly for read/copy purposes. */
@@ -605,7 +786,7 @@ async function setSettingInternal<T>(key: string, value: T): Promise<void> {
  */
 function openDBForInternalUse(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    const request = indexedDB.open(currentDBName(), DB_VERSION);
     request.onupgradeneeded = (event) => {
       const db = request.result;
       const tx = (event.target as IDBOpenDBRequest).transaction;
@@ -1732,13 +1913,23 @@ export function classifyStorageError(error: unknown): ZuleError | null {
 export function __resetDatabaseForTests(): void {
   postOpenMigrationPromise = null;
   inFlightLegacyMigration = null;
+  adoptionPromise = null;
+  activeUserId = null;
 }
 
 /** Stable export of constants/internals used by the property test. */
 export const __dbConstantsForTests = {
-  DB_NAME,
+  /** Resolves to the partition currently in use, not the base name. */
+  get DB_NAME() {
+    return currentDBName();
+  },
+  DB_NAME_BASE,
+  SHARED_DB_NAME,
   DB_VERSION,
   LEGACY_DB_NAME,
   LEGACY_DB_VERSION,
   MIGRATION_FLAG_LEGACY_COPY,
+  SHARED_DB_CLAIM_FLAG,
+  SHARED_DB_ADOPTED_FLAG,
+  dbNameForUser,
 };
