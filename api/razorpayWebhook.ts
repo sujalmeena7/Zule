@@ -12,14 +12,27 @@ export const config = {
   },
 };
 
-if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: admin.credential.cert({
-      projectId: process.env.FIREBASE_PROJECT_ID,
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-    }),
-  });
+function getFirebaseAdmin() {
+  if (!admin.apps.length) {
+    let privateKey = process.env.FIREBASE_PRIVATE_KEY || '';
+    privateKey = privateKey.trim();
+    if (
+      (privateKey.startsWith('"') && privateKey.endsWith('"')) ||
+      (privateKey.startsWith("'") && privateKey.endsWith("'"))
+    ) {
+      privateKey = privateKey.slice(1, -1);
+    }
+    privateKey = privateKey.replace(/\\n/g, '\n');
+
+    admin.initializeApp({
+      credential: admin.credential.cert({
+        projectId: process.env.FIREBASE_PROJECT_ID?.trim(),
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL?.trim(),
+        privateKey,
+      }),
+    });
+  }
+  return admin;
 }
 
 function readRawBody(req: VercelRequest): Promise<Buffer> {
@@ -38,6 +51,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  const adminApp = getFirebaseAdmin();
   const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
   if (!webhookSecret) {
     console.error('Webhook secret not configured');
@@ -59,9 +73,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const expectedBuf = Buffer.from(expectedSignature, 'hex');
   const providedBuf = Buffer.from(signature, 'hex');
 
-  // Constant-time comparison — a plain `!==` on hex strings leaks timing
-  // information proportional to the number of matching leading characters,
-  // which an attacker can use to brute-force a valid signature byte-by-byte.
   const signatureValid =
     expectedBuf.length === providedBuf.length &&
     crypto.timingSafeEqual(expectedBuf, providedBuf);
@@ -80,21 +91,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const event = body.event;
   const payload = body.payload;
 
-  // Idempotency: Razorpay retries webhooks on timeout/non-2xx, and the same
-  // event can legitimately be redelivered. Record each event id up front
-  // using a create-only write (fails if the doc already exists) so a replay
-  // — malicious or a Razorpay retry racing a slow first attempt — is a
-  // guaranteed no-op rather than reapplying the state change twice.
   const eventId = req.headers['x-razorpay-event-id'];
   if (eventId && typeof eventId === 'string') {
     try {
-      await admin
+      await adminApp
         .firestore()
         .collection('webhookEvents')
         .doc(eventId)
         .create({
           event: event ?? null,
-          receivedAt: admin.firestore.FieldValue.serverTimestamp(),
+          receivedAt: adminApp.firestore.FieldValue.serverTimestamp(),
         });
     } catch (err: any) {
       if (err?.code === 6 /* ALREADY_EXISTS */) {
@@ -113,12 +119,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       if (uid && plan) {
         // Update user subscription in Firestore
-        await admin.firestore().collection('users').doc(uid).collection('subscription').doc('current').set({
+        await adminApp.firestore().collection('users').doc(uid).collection('subscription').doc('current').set({
           plan: plan,
           status: 'active',
           interval: interval || 'monthly',
           subscriptionId: subscription.id,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: adminApp.firestore.FieldValue.serverTimestamp(),
           paymentId: payload.payment?.entity?.id || null,
         });
       }
@@ -127,9 +133,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const uid = subscription.notes?.uid;
 
       if (uid) {
-        await admin.firestore().collection('users').doc(uid).collection('subscription').doc('current').update({
+        await adminApp.firestore().collection('users').doc(uid).collection('subscription').doc('current').update({
           status: 'cancelled',
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: adminApp.firestore.FieldValue.serverTimestamp(),
         });
       }
     }

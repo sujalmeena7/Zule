@@ -76,7 +76,13 @@ export function SuggestionCard({
               exit={{ opacity: 0, y: -5 }}
               className="suggestion-loading"
             >
-              <Loader2 size={18} className="spinner" />
+              <motion.div
+                style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+                animate={{ rotate: 360 }}
+                transition={{ repeat: Infinity, duration: 1, ease: 'linear' }}
+              >
+                <Loader2 size={18} className="spinner" />
+              </motion.div>
               <span>Thinking...</span>
             </motion.div>
           ) : isStreaming && streamingText ? (

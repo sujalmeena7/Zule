@@ -3,7 +3,13 @@
 // ============================================
 
 import { initializeApp } from 'firebase/app';
-import { getAuth, browserLocalPersistence, setPersistence } from 'firebase/auth';
+import {
+  getAuth,
+  setPersistence,
+  indexedDBLocalPersistence,
+  browserLocalPersistence,
+  inMemoryPersistence,
+} from 'firebase/auth';
 
 const firebaseConfig = {
   apiKey: "AIzaSyAPlJ2c1qBHs1Fgi7WVApUb7VElOQCg8X0",
@@ -18,7 +24,11 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 
-// Persist auth state across app restarts (works in Electron too)
-setPersistence(auth, browserLocalPersistence);
+// Persist auth state across app restarts (safe for both Web & Electron production builds)
+setPersistence(auth, indexedDBLocalPersistence).catch(() => {
+  setPersistence(auth, browserLocalPersistence).catch(() => {
+    setPersistence(auth, inMemoryPersistence).catch(() => {});
+  });
+});
 
 export default app;

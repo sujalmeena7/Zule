@@ -45,6 +45,8 @@ const PROVIDER_ID = 'gemini' as const;
 /** Default model when the router (or caller) does not supply `opts.modelId`. */
 const DEFAULT_MODEL_ID = 'gemini-2.0-flash';
 
+
+
 /** Generative Language base URL. The model id is path-segmented in. */
 const DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 

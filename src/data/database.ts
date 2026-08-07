@@ -63,6 +63,7 @@ import {
 
 export interface StoredMeeting {
   id: string;
+  userId?: string;
   title: string;
   mode: string;
   startedAt: number;
@@ -770,14 +771,17 @@ export const database = {
     }
   },
 
-  async getAllMeetings(): Promise<StoredMeeting[]> {
+  async getAllMeetings(userId?: string): Promise<StoredMeeting[]> {
     try {
       const db = await openDB();
       return new Promise((resolve, reject) => {
         const tx = db.transaction(STORE_MEETINGS, 'readonly');
         const request = tx.objectStore(STORE_MEETINGS).getAll();
         request.onsuccess = () => {
-          const meetings = request.result as StoredMeeting[];
+          let meetings = request.result as StoredMeeting[];
+          if (userId) {
+            meetings = meetings.filter((m) => !m.userId || m.userId === userId);
+          }
           meetings.sort((a, b) => b.startedAt - a.startedAt);
           resolve(meetings);
         };

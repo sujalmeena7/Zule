@@ -13,6 +13,7 @@ import {
 import { database as storage, type StoredMeeting, type CustomMode } from '../data/database';
 import type { CopilotMode } from '../brain/modePrompts';
 import { isElectron } from '../hooks/useElectronBridge';
+import { useAuth } from '../firebase/AuthContext';
 
 // ---- Page & Hash Routing ----
 
@@ -195,15 +196,21 @@ interface ZuleProviderProps {
 
 export function ZuleProvider({ children }: ZuleProviderProps) {
   const [state, dispatch] = useReducer(zuleReducer, initialState);
+  const { user } = useAuth();
 
-  // --- Load initial state from IndexedDB ---
+  // --- Load persisted state from IndexedDB (scoped per logged-in user) ---
   useEffect(() => {
     async function loadPersistedState() {
+      if (!user) {
+        dispatch({ type: 'SET_MEETINGS', payload: [] });
+        dispatch({ type: 'SET_SELECTED_MEETING', payload: null });
+        return;
+      }
       const [apiKey, theme, defaultMode, meetings, customModes] = await Promise.all([
         storage.getSetting<string>('apiKey', ''),
         storage.getSetting<'dark' | 'light'>('theme', 'dark'),
         storage.getSetting<CopilotMode>('defaultMode', 'assist'),
-        storage.getAllMeetings(),
+        storage.getAllMeetings(user.uid),
         storage.getAllCustomModes(),
       ]);
       dispatch({ type: 'SET_API_KEY', payload: apiKey });
@@ -213,7 +220,7 @@ export function ZuleProvider({ children }: ZuleProviderProps) {
       dispatch({ type: 'SET_CUSTOM_MODES', payload: customModes });
     }
     loadPersistedState();
-  }, []);
+  }, [user]);
 
   // --- Apply theme to document ---
   useEffect(() => {
@@ -297,11 +304,12 @@ export function ZuleProvider({ children }: ZuleProviderProps) {
       if (isElectron()) {
         window.electronAPI!.stopOverlay();
       }
-      await storage.saveMeeting(meeting);
-      const updated = await storage.getAllMeetings();
+      const meetingWithUser = { ...meeting, userId: meeting.userId || user?.uid };
+      await storage.saveMeeting(meetingWithUser);
+      const updated = await storage.getAllMeetings(user?.uid);
       dispatch({ type: 'SET_MEETINGS', payload: updated });
     },
-    [],
+    [user],
   );
 
   const viewMeeting = useCallback(
@@ -316,10 +324,10 @@ export function ZuleProvider({ children }: ZuleProviderProps) {
     async (id: string) => {
       dispatch({ type: 'DELETE_MEETING', payload: id });
       await storage.deleteMeeting(id);
-      const updated = await storage.getAllMeetings();
+      const updated = await storage.getAllMeetings(user?.uid);
       dispatch({ type: 'SET_MEETINGS', payload: updated });
     },
-    [],
+    [user],
   );
 
   const saveCustomMode = useCallback(
