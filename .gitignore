@@ -40,4 +40,12 @@ coverage/
 *.sw?
 
 .vercel
-.env*.local
+
+# Secrets & credentials — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+serviceAccount*.json
+*-serviceaccount*.json

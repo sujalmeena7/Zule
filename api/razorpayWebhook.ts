@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import admin from 'firebase-admin';
+import { getApps, initializeApp, cert } from 'firebase-admin/app';
+import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import crypto from 'crypto';
 
 // Razorpay signs the RAW request body bytes. Vercel's default body parser
@@ -12,8 +13,8 @@ export const config = {
   },
 };
 
-function getFirebaseAdmin() {
-  if (!admin.apps.length) {
+function ensureFirebaseAdmin() {
+  if (getApps().length === 0) {
     let privateKey = process.env.FIREBASE_PRIVATE_KEY || '';
     privateKey = privateKey.trim();
     if (
@@ -24,15 +25,14 @@ function getFirebaseAdmin() {
     }
     privateKey = privateKey.replace(/\\n/g, '\n');
 
-    admin.initializeApp({
-      credential: admin.credential.cert({
+    initializeApp({
+      credential: cert({
         projectId: process.env.FIREBASE_PROJECT_ID?.trim(),
         clientEmail: process.env.FIREBASE_CLIENT_EMAIL?.trim(),
         privateKey,
       }),
     });
   }
-  return admin;
 }
 
 function readRawBody(req: VercelRequest): Promise<Buffer> {
@@ -51,7 +51,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const adminApp = getFirebaseAdmin();
+  ensureFirebaseAdmin();
+
   const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
   if (!webhookSecret) {
     console.error('Webhook secret not configured');
@@ -73,6 +74,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const expectedBuf = Buffer.from(expectedSignature, 'hex');
   const providedBuf = Buffer.from(signature, 'hex');
 
+  // Constant-time comparison to prevent timing attacks
   const signatureValid =
     expectedBuf.length === providedBuf.length &&
     crypto.timingSafeEqual(expectedBuf, providedBuf);
@@ -91,16 +93,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const event = body.event;
   const payload = body.payload;
 
+  // Idempotency: deduplicate webhook deliveries
   const eventId = req.headers['x-razorpay-event-id'];
   if (eventId && typeof eventId === 'string') {
     try {
-      await adminApp
-        .firestore()
+      await getFirestore()
         .collection('webhookEvents')
         .doc(eventId)
         .create({
           event: event ?? null,
-          receivedAt: adminApp.firestore.FieldValue.serverTimestamp(),
+          receivedAt: FieldValue.serverTimestamp(),
         });
     } catch (err: any) {
       if (err?.code === 6 /* ALREADY_EXISTS */) {
@@ -118,13 +120,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const interval = subscription.notes?.interval;
 
       if (uid && plan) {
-        // Update user subscription in Firestore
-        await adminApp.firestore().collection('users').doc(uid).collection('subscription').doc('current').set({
+        await getFirestore().collection('users').doc(uid).collection('subscription').doc('current').set({
           plan: plan,
           status: 'active',
           interval: interval || 'monthly',
           subscriptionId: subscription.id,
-          updatedAt: adminApp.firestore.FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
           paymentId: payload.payment?.entity?.id || null,
         });
       }
@@ -133,9 +134,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const uid = subscription.notes?.uid;
 
       if (uid) {
-        await adminApp.firestore().collection('users').doc(uid).collection('subscription').doc('current').update({
+        await getFirestore().collection('users').doc(uid).collection('subscription').doc('current').update({
           status: 'cancelled',
-          updatedAt: adminApp.firestore.FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
         });
       }
     }
