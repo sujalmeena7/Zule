@@ -1,9 +1,11 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import admin from 'firebase-admin';
+import { getApps, initializeApp, cert } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
+import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import Razorpay from 'razorpay';
 
-function getFirebaseAdmin() {
-  if (!admin.apps.length) {
+function ensureFirebaseAdmin() {
+  if (getApps().length === 0) {
     let privateKey = process.env.FIREBASE_PRIVATE_KEY || '';
     privateKey = privateKey.trim();
     if (
@@ -21,15 +23,10 @@ function getFirebaseAdmin() {
       throw new Error(`Firebase Admin credentials incomplete: projectId=${!!projectId}, clientEmail=${!!clientEmail}, privateKey=${!!privateKey}`);
     }
 
-    admin.initializeApp({
-      credential: admin.credential.cert({
-        projectId,
-        clientEmail,
-        privateKey,
-      }),
+    initializeApp({
+      credential: cert({ projectId, clientEmail, privateKey }),
     });
   }
-  return admin;
 }
 
 function getRazorpay() {
@@ -81,7 +78,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const adminApp = getFirebaseAdmin();
+    ensureFirebaseAdmin();
     const razorpayClient = getRazorpay();
 
     const authHeader = req.headers.authorization;
@@ -90,17 +87,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const idToken = authHeader.split('Bearer ')[1];
-    const decodedToken = await adminApp.auth().verifyIdToken(idToken);
+    const decodedToken = await getAuth().verifyIdToken(idToken);
     const uid = decodedToken.uid;
 
     const { plan, interval } = req.body;
 
     if (plan === 'free') {
-      await adminApp.firestore().collection('users').doc(uid).collection('subscription').doc('current').set({
+      await getFirestore().collection('users').doc(uid).collection('subscription').doc('current').set({
         plan: 'free',
         status: 'active',
         interval: 'monthly',
-        updatedAt: adminApp.firestore.FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
       });
       return res.status(200).json({ success: true, plan: 'free' });
     }
