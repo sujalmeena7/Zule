@@ -109,6 +109,7 @@ function RestoreIcon() {
 
 export function FloatingCopilot() {
   const { state, actions } = useZule();
+  const { user } = useAuth();
   const { defaultMode, apiKey, customModes } = state;
   const { stopCopilot, navigateTo } = actions;
 
@@ -967,6 +968,7 @@ export function FloatingCopilot() {
     const meetingId = `meeting-${generateId()}`;
     const placeholderMeeting = await persistPlaceholderMeeting({
       id: meetingId,
+      userId: user?.uid,
       title: `${MODE_CONFIGS[activeMode].label} Session`,
       mode: activeMode,
       startedAt: startTimeRef.current,

@@ -200,3 +200,207 @@ export async function testCustomProviderConnection(
 
   return modelEcho === undefined ? { ok: true, latencyMs } : { ok: true, latencyMs, modelEcho };
 }
+
+export interface ProviderConnectionTestInput {
+  providerId: string;
+  apiKey?: string;
+  baseUrl?: string;
+  modelId?: string;
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+}
+
+/**
+ * Universal connection test that routes to the appropriate provider-specific probe.
+ * Supports gemini, openai, anthropic, ollama, and custom.
+ */
+export async function testProviderConnection(
+  input: ProviderConnectionTestInput,
+): Promise<ConnectionTestResult> {
+  const { providerId, apiKey = '', baseUrl = '', modelId = '', fetchImpl, timeoutMs } = input;
+  const scrub = (text: string): string => scrubSecret(text, apiKey);
+  const timeout =
+    typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? timeoutMs
+      : DEFAULT_NON_STREAMING_TIMEOUT_MS;
+
+  switch (providerId) {
+    case 'gemini': {
+      if (!apiKey.trim()) {
+        return { ok: false, category: 'unauthorized', detail: scrub('API key is required') };
+      }
+      const geminiModel = modelId.trim() || 'gemini-2.0-flash';
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent`;
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey.trim(),
+      };
+      const body = JSON.stringify({
+        contents: [{ parts: [{ text: PROBE_CONTENT }] }],
+        generationConfig: { maxOutputTokens: 1 },
+      });
+      const startedAt = Date.now();
+      try {
+        const response = await fetchWithTimeout(
+          endpoint,
+          { method: 'POST', headers, body },
+          { timeoutMs: timeout, kind: 'non-streaming', fetchImpl },
+        );
+        let latencyMs = Math.max(0, Date.now() - startedAt);
+
+        // Fallback across standard Google Gemini model endpoints on 429 or 404
+        if (!response.ok && (response.status === 429 || response.status === 404)) {
+          const fallbacks = [
+            'gemini-2.0-flash',
+            'gemini-1.5-flash',
+            'gemini-1.5-pro',
+            'gemini-2.0-flash-lite',
+          ].filter((m) => m !== geminiModel);
+          for (const fallbackModel of fallbacks) {
+            const fallbackEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${fallbackModel}:generateContent`;
+            const fallbackStarted = Date.now();
+            try {
+              const fallbackRes = await fetchWithTimeout(
+                fallbackEndpoint,
+                { method: 'POST', headers, body },
+                { timeoutMs: timeout, kind: 'non-streaming', fetchImpl },
+              );
+              if (fallbackRes.ok) {
+                latencyMs = Math.max(0, Date.now() - fallbackStarted);
+                return { ok: true, latencyMs, modelEcho: fallbackModel };
+              }
+            } catch {
+              // Ignore fallback network error and try next
+            }
+          }
+        }
+
+
+
+        if (!response.ok) {
+          return {
+            ok: false,
+            category: categorizeStatus(response.status),
+            status: response.status,
+            detail: scrub(`HTTP ${response.status}`),
+          };
+        }
+        return { ok: true, latencyMs, modelEcho: geminiModel };
+      } catch (err) {
+        if (isAbortError(err)) {
+          return { ok: false, category: 'timeout', detail: scrub(`Timed out after ${timeout} ms`) };
+        }
+        return { ok: false, category: 'network', detail: scrub('Network request failed') };
+      }
+    }
+
+
+
+    case 'openai': {
+      if (!apiKey.trim()) {
+        return { ok: false, category: 'unauthorized', detail: scrub('API key is required') };
+      }
+      const openaiModel = modelId.trim() || 'gpt-4o-mini';
+      return testCustomProviderConnection({
+        baseUrl: 'https://api.openai.com/v1',
+        apiKey: apiKey.trim(),
+        modelId: openaiModel,
+        fetchImpl,
+        timeoutMs: timeout,
+      });
+    }
+
+    case 'anthropic': {
+      if (!apiKey.trim()) {
+        return { ok: false, category: 'unauthorized', detail: scrub('API key is required') };
+      }
+      const anthropicModel = modelId.trim() || 'claude-3-5-sonnet-20241022';
+      let endpoint = 'https://api.anthropic.com/v1/messages';
+      if (baseUrl.trim().length > 0) {
+        const normalized = normalizeBaseUrl(baseUrl.trim());
+        if (normalized.ok) {
+          endpoint = normalized.url.endsWith('/messages')
+            ? normalized.url
+            : `${normalized.url}/messages`;
+        }
+      }
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey.trim(),
+        'anthropic-version': '2023-06-01',
+      };
+      const body = JSON.stringify({
+        model: anthropicModel,
+        messages: [{ role: 'user', content: PROBE_CONTENT }],
+        max_tokens: 1,
+      });
+      const startedAt = Date.now();
+      try {
+        const response = await fetchWithTimeout(
+          endpoint,
+          { method: 'POST', headers, body },
+          { timeoutMs: timeout, kind: 'non-streaming', fetchImpl },
+        );
+        const latencyMs = Math.max(0, Date.now() - startedAt);
+        if (!response.ok) {
+          return {
+            ok: false,
+            category: categorizeStatus(response.status),
+            status: response.status,
+            detail: scrub(`HTTP ${response.status}`),
+          };
+        }
+        return { ok: true, latencyMs, modelEcho: anthropicModel };
+      } catch (err) {
+        if (isAbortError(err)) {
+          return { ok: false, category: 'timeout', detail: scrub(`Timed out after ${timeout} ms`) };
+        }
+        return { ok: false, category: 'network', detail: scrub('Network request failed') };
+      }
+    }
+
+    case 'ollama': {
+      const rawUrl = baseUrl.trim() || 'http://localhost:11434';
+      const base = normalizeBaseUrl(rawUrl);
+      if (!base.ok) {
+        return { ok: false, category: 'invalid-url', detail: scrub(BASE_URL_DETAIL[base.reason]) };
+      }
+      const endpoint = `${base.url.replace(/\/v1\/?$/, '')}/api/tags`;
+      const startedAt = Date.now();
+      try {
+        const response = await fetchWithTimeout(
+          endpoint,
+          { method: 'GET' },
+          { timeoutMs: timeout, kind: 'non-streaming', fetchImpl },
+        );
+        const latencyMs = Math.max(0, Date.now() - startedAt);
+        if (!response.ok) {
+          return {
+            ok: false,
+            category: categorizeStatus(response.status),
+            status: response.status,
+            detail: scrub(`HTTP ${response.status}`),
+          };
+        }
+        return { ok: true, latencyMs };
+      } catch (err) {
+        if (isAbortError(err)) {
+          return { ok: false, category: 'timeout', detail: scrub(`Timed out after ${timeout} ms`) };
+        }
+        return { ok: false, category: 'network', detail: scrub('Could not connect to Ollama server') };
+      }
+    }
+
+    case 'custom':
+    default: {
+      return testCustomProviderConnection({
+        baseUrl: baseUrl.trim(),
+        apiKey: apiKey.trim(),
+        modelId: modelId.trim(),
+        fetchImpl,
+        timeoutMs: timeout,
+      });
+    }
+  }
+}
+

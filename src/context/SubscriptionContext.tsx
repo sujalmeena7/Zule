@@ -235,7 +235,11 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
       });
 
       if (!response.ok) {
-        throw new Error(`Failed to create subscription: ${response.statusText}`);
+        const errorJson = await response.json().catch(() => ({}));
+        const detailedMsg = errorJson.error
+          ? errorJson.error
+          : `Backend API at ${apiUrl} returned HTTP ${response.status}. Please check Vercel Environment Variables for Razorpay/Firebase.`;
+        throw new Error(detailedMsg);
       }
 
       const result = await response.json();
@@ -299,10 +303,11 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
           clearInterval(poller);
         }
       }, pollInterval);
-    } catch (err) {
+    } catch (err: any) {
       console.error('[SubscriptionContext] Upgrade flow error:', err);
       if (typeof window !== 'undefined' && window.alert) {
-        window.alert('Unable to initialize payment checkout. Please check your connection or try again later.');
+        const msg = err instanceof Error ? err.message : 'Unable to initialize payment checkout.';
+        window.alert(`Checkout error: ${msg}`);
       }
     } finally {
       setLoading(false);

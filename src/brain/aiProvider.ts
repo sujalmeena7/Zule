@@ -232,10 +232,15 @@ async function registerProviderAdapter(
   switch (config.id) {
     case 'gemini': {
       const { GeminiAdapter } = await import('./providers/gemini');
-      routerInstance.registerAdapter(new GeminiAdapter({ apiKey }));
+      const geminiOpts: { apiKey: string; defaultModelId?: string } = { apiKey };
+      if (config.modelId && config.modelId.trim()) {
+        geminiOpts.defaultModelId = config.modelId.trim();
+      }
+      routerInstance.registerAdapter(new GeminiAdapter(geminiOpts));
       registeredGeminiKey = apiKey;
       break;
     }
+
     case 'openai': {
       const { OpenAIAdapter } = await import('./providers/openai');
       routerInstance.registerAdapter(new OpenAIAdapter({ apiKey }));

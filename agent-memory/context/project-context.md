@@ -4881,8 +4881,11 @@ Added `docs/stage-c-release-runner-setup.md` covering immutable snapshot provisi
 
 ---
 
+## Fix Provider Connection Test Pipeline — 2026-08-07
 
-Prepared v1.3.0 without commit/tag/push/publish: updated root package metadata via 4883: Created the navbar-only fast-task spec at `.kiro/specs/landing-navbar-hover-polish/` (`.config.kiro`, `requirements.md`, `design.md`, `tasks.md`). Investigation found the visible FAQ/How it works lag is primarily caused by child-level `pointerleave` clearing hover before adjacent `pointerenter`, compounded by `ActiveIndicator` resolving geometry through a second state/effect step, a fixed 300 ms transition, and list-item offsets measured in a different coordinate space from the indicator. The plan centralizes pointer/focus/scroll ownership in `FloatingNavbar`, measures target geometry relative to one links shell, makes `ActiveIndicator` presentational with an interruptible 140 ms transition, gates magnetic work for touch/reduced motion, and adds navbar-scoped premium glass/depth/glow, responsive, keyboard, contrast, and regression tests. No application code was modified.
+- **Multi-Provider Probe**: Extended `src/brain/providers/connectionTest.ts` with `testProviderConnection(input)`, supporting Gemini (`generativelanguage.googleapis.com` with `x-goog-api-key`), OpenAI (`api.openai.com`), Anthropic (`api.anthropic.com` with `x-api-key`), Ollama (`GET /api/tags`), and Custom provider.
+- **Per-Provider UI**: Updated `src/components/Settings.tsx` to move the connection test button into each provider card (Gemini, OpenAI, Anthropic, Ollama, Custom), replaced single custom status state with per-provider map `providerTestStatus`, and removed the legacy custom-only bottom test button.
+- **Testing**: Added 5 new unit tests in `src/brain/providers/connectionTest.test.ts` (17/17 vitest tests passing).
 
 ---
 
@@ -4890,9 +4893,25 @@ Prepared v1.3.0 without commit/tag/push/publish: updated root package metadata v
 
 - **Navbar Refactor**: Complete refactor of `FloatingNavbar`, `ActiveIndicator`, `MagneticLink`, and `landing-3d.css`. Replaced default glass with layered multi-background glass (noise + backdrop blur saturate), refined indicator positioning to use parent-relative `getBoundingClientRect`, and reduced magnetic displacement from 12px to a subtle 4px to eliminate link bleed/flicker.
 - **Auto-Updater Popup**: Refactored `UpdateBanner.tsx` and `UpdateBanner.css` from an inline banner to a premium, Apple/Cursor-inspired centered modal popup with status-specific icons, version badges, smooth scale+fade animations, and progress bar.
-- **Version Bump & Release Build**: Bumped version to `1.4.0` in `package.json`. Ran `npm run electron:build`, generating `ZuleAI-setup.exe` (v1.4.0), `ZuleAI-setup.exe.blockmap`, and `latest.yml` in `release/`.
-mit contains the v1.3.0 application/release source and supporting specifications while excluding `.env`, `.env.local`, generated release binaries, logs, `.vercel`, `.claude/settings.json`, the abandoned Safe Exam Browser spec, and the unrelated root `implementation_plan.md`. The remote branch is ready for review through a pull request; `main` was not modified.
+---
+
+## landing-navbar-hover-polish — fast-task planning
 
 ---
 
-## landing-navbar-hover-polish — fast-task planning</content>
+## Lumosel Claude Code Gateway Diagnostics & Resolution — 2026-08-07
+
+- **Issue Diagnosis**: User reported inability to use Claude Code CLI with Lumosel gateway (`api.lumosel.vip`). Direct curl tests to `https://api.lumosel.vip/v1/messages` returned `HTTP 500 Internal Server Error`.
+- **Root Cause**: Lumosel dashboard screenshot showed **Balance: $0.00**. Lumosel returns `500 Internal Server Error` when account balance is $0 or depleted.
+- **Claude Code Config Verification**: Inspected `~/.claude/settings.json`. `ANTHROPIC_BASE_URL` (`https://api.lumosel.vip`) and `ANTHROPIC_AUTH_TOKEN` (`lumo_live_...`) are properly configured.
+- **Resolution**: Advised user to recharge account balance on `lumosel.vip` and verify `ANTHROPIC_MODEL` parameter.
+
+---
+
+## Account Data Isolation, Firebase Auth Headers & Razorpay Function Diagnostics — 2026-08-07
+
+- **User Data Leak Prevention**: Updated `src/data/database.ts` (`StoredMeeting` interface & `getAllMeetings(userId)`), `src/context/ZuleContext.tsx`, and `src/components/FloatingCopilot.tsx` to tag and filter meetings by `user.uid`. Logging out or switching accounts now resets in-memory meeting states and loads only the active user's meetings.
+- **Firebase Auth on Packaged Electron (`file://`)**: Added an `onBeforeSendHeaders` interceptor in `electron/main.ts` for Firebase Auth endpoints (`identitytoolkit.googleapis.com` & `securetoken.googleapis.com`) to present an authorized `Origin` (`https://zule-ai.firebaseapp.com`), fixing account creation and sign-in failures in production Electron builds.
+- **Firebase Auth Persistence**: Updated `src/firebase/config.ts` with `indexedDBLocalPersistence` $\rightarrow$ `browserLocalPersistence` $\rightarrow$ `inMemoryPersistence` fallback chain for cross-platform resilience.
+- **Process Obfuscation**: Updated `electron-builder.yml` to obfuscate PE VERSIONINFO (`FileDescription`, `InternalName`, `OriginalFilename`, `appId`) to generic `DesktopHelper` values, hiding app identity from process scanners while maintaining user-facing branding.
+- **Razorpay Serverless Function Diagnostics**: Refactored `api/createRazorpaySubscription.ts` and `api/razorpayWebhook.ts` to lazily evaluate Firebase Admin and Razorpay initialization inside try/catch blocks with robust `FIREBASE_PRIVATE_KEY` quote/newline parsing, returning descriptive JSON errors to `SubscriptionContext.tsx`.</content>

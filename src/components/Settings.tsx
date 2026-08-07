@@ -351,11 +351,12 @@ export function Settings() {
   // masked placeholder, and a blank save keeps the stored cipher
   // (Requirements 1.10, 3.1).
   const [hasStoredKey, setHasStoredKey] = useState<Record<string, boolean>>({});
-  // Result of the most recent Connection_Test (task 11.5). Holds presentation
+  // Result of the most recent Connection_Test per provider. Holds presentation
   // text only — the probe's `detail` is already scrubbed and the decrypted key
   // never enters state (Requirements 3.3, 3.9).
-  const [customTestStatus, setCustomTestStatus] =
-    useState<CustomConnectionTestStatus | null>(null);
+  const [providerTestStatus, setProviderTestStatus] =
+    useState<Record<string, CustomConnectionTestStatus | null>>({});
+
 
   // Performance Profile & Ephemeral Mode State
   type Profile = 'speed' | 'balanced' | 'cost' | 'privacy';
@@ -612,7 +613,7 @@ export function Settings() {
     setCustomBaseUrlError(null);
     // A Connection_Test result describes one specific configuration; editing
     // any field makes it stale, so it is discarded rather than left to mislead.
-    setCustomTestStatus(null);
+    setProviderTestStatus((prev) => ({ ...prev, [CUSTOM_PROVIDER_ID]: null }));
     const clamped = clampField('baseUrl', value);
     setProviders((prev) =>
       prev.map((p) => (p.id === CUSTOM_PROVIDER_ID ? { ...p, baseUrl: clamped } : p)),
@@ -623,7 +624,7 @@ export function Settings() {
     // As with the Base_URL, editing clears the stale message so the error only
     // ever reflects the most recent save attempt (Requirements 3.10, 3.11).
     setCustomApiKeyError(null);
-    setCustomTestStatus(null);
+    setProviderTestStatus((prev) => ({ ...prev, [CUSTOM_PROVIDER_ID]: null }));
     setProviderKeys((prev) => ({
       ...prev,
       [CUSTOM_PROVIDER_ID]: clampField('apiKey', value),
@@ -631,113 +632,123 @@ export function Settings() {
   }, []);
 
   const handleCustomModelIdChange = useCallback((value: string) => {
-    setCustomTestStatus(null);
+    setProviderTestStatus((prev) => ({ ...prev, [CUSTOM_PROVIDER_ID]: null }));
     const clamped = clampField('modelId', value);
     setProviders((prev) =>
       prev.map((p) => (p.id === CUSTOM_PROVIDER_ID ? { ...p, modelId: clamped } : p)),
     );
   }, []);
 
+
   const handleToggleProviderKeyVisibility = useCallback((id: string) => {
     setShowProviderKey((prev) => ({ ...prev, [id]: !prev[id] }));
   }, []);
 
-  // --- Connection_Test (task 11.5, Requirements 3.3, 3.9) -----------------
+  // --- Connection_Test per provider ----------------------------------------
 
-  /** The single `custom` entry, if the panel has loaded one. */
-  const customEntry = useMemo(
-    () => providers.find((p) => p.id === CUSTOM_PROVIDER_ID),
-    [providers],
+  /**
+   * Evaluates whether a connection probe can be issued for a given provider.
+   */
+  const canTestProviderConnection = useCallback(
+    (providerId: string): boolean => {
+      const entry = providers.find((p) => p.id === providerId);
+      if (!entry) return false;
+      if (providerId === 'simulation') return false;
+
+      const hasDraftKey = (providerKeys[providerId] ?? '').trim().length > 0;
+      const hasKey =
+        hasDraftKey || (hasStoredKey[providerId] === true && Boolean(entry.apiKeyCipher));
+
+      if (providerId === CUSTOM_PROVIDER_ID) {
+        const hasBaseUrl = (entry.baseUrl ?? '').trim().length > 0;
+        const hasModelId = (entry.modelId ?? '').trim().length > 0;
+        return hasBaseUrl && hasModelId && hasKey;
+      }
+
+      if (providerId === 'ollama') {
+        return (entry.baseUrl ?? '').trim().length > 0;
+      }
+
+      return hasKey;
+    },
+    [providers, providerKeys, hasStoredKey],
   );
 
   /**
-   * The probe needs all three fields. The credential counts as present either
-   * as a live draft or as a persisted cipher — for `custom` the stored cipher
-   * is deliberately never decrypted into the input (Requirement 1.10), so an
-   * empty field with `hasStoredKey` set still means "a key is configured".
+   * Runs a single-request Connection_Test against the provider's configuration.
    */
-  const canTestCustomConnection = useMemo(() => {
-    if (!customEntry) return false;
-    const hasBaseUrl = (customEntry.baseUrl ?? '').trim().length > 0;
-    const hasModelId = (customEntry.modelId ?? '').trim().length > 0;
-    const hasKey =
-      (providerKeys[CUSTOM_PROVIDER_ID] ?? '').trim().length > 0 ||
-      (hasStoredKey[CUSTOM_PROVIDER_ID] === true && Boolean(customEntry.apiKeyCipher));
-    return hasBaseUrl && hasModelId && hasKey;
-  }, [customEntry, providerKeys, hasStoredKey]);
+  const handleTestProviderConnection = useCallback(
+    async (providerId: string) => {
+      const entry = providers.find((p) => p.id === providerId);
+      if (!entry) return;
 
-  /**
-   * Runs the single-request Connection_Test against the current drafts.
-   *
-   * The credential is resolved at test time: the draft when the User has typed
-   * one, otherwise the stored cipher decrypted into a local `const` only. It is
-   * never written to component state and never rendered (Requirement 1.10).
-   *
-   * `testCustomProviderConnection` never throws and its `detail` is already
-   * passed through `scrubSecret` — a short classification string such as
-   * `HTTP 401`, never a response body and never the URL — so it is safe to
-   * render as returned (Requirement 3.9).
-   */
-  const handleTestCustomConnection = useCallback(async () => {
-    const entry = providers.find((p) => p.id === CUSTOM_PROVIDER_ID);
-    if (!entry) return;
+      const draftKey = (providerKeys[providerId] ?? '').trim();
+      let apiKey = '';
 
-    // Re-clamp: `maxLength` and the onChange clamps are UA courtesies, so the
-    // probe sees exactly the values a save would persist (Requirement 1.2).
-    const baseUrl = clampField('baseUrl', entry.baseUrl ?? '');
-    const modelId = clampField('modelId', entry.modelId ?? '');
-    const draftKey = clampField('apiKey', providerKeys[CUSTOM_PROVIDER_ID] ?? '');
+      if (draftKey.length > 0) {
+        apiKey = draftKey;
+      } else if (entry.apiKeyCipher && providerId !== 'ollama') {
+        try {
+          apiKey = await decryptApiKey(entry.apiKeyCipher);
+        } catch (error) {
+          console.error(`[Settings] Stored credential for ${providerId} could not be read:`, error);
+          apiKey = '';
+        }
+        if (apiKey.trim().length === 0 && providerId !== 'ollama') {
+          const message = 'The saved API key could not be read — re-enter it and save again.';
+          setProviderTestStatus((prev) => ({
+            ...prev,
+            [providerId]: { state: 'failed', message },
+          }));
+          toast.error(message);
+          return;
+        }
+      }
 
-    setCustomTestStatus({ state: 'testing' });
+      setProviderTestStatus((prev) => ({
+        ...prev,
+        [providerId]: { state: 'testing' },
+      }));
 
-    let apiKey = '';
-    if (draftKey.trim().length > 0) {
-      apiKey = draftKey;
-    } else if (entry.apiKeyCipher) {
       try {
-        apiKey = await decryptApiKey(entry.apiKeyCipher);
+        const { testProviderConnection } = await import('../brain/providers/connectionTest');
+        const baseUrl =
+          providerId === CUSTOM_PROVIDER_ID || providerId === 'ollama' || providerId === 'anthropic'
+            ? entry.baseUrl ?? ''
+            : undefined;
+        const modelId = entry.modelId ?? '';
+
+        const result = await testProviderConnection({
+          providerId,
+          apiKey,
+          baseUrl,
+          modelId,
+        });
+
+        const outcome = describeConnectionTestResult(result);
+        setProviderTestStatus((prev) => ({
+          ...prev,
+          [providerId]: outcome,
+        }));
+
+        if (outcome.state === 'ok') {
+          toast.success(`${PROVIDER_LABELS[providerId] ?? providerId}: ${outcome.message}`);
+        } else {
+          toast.error(`${PROVIDER_LABELS[providerId] ?? providerId}: ${outcome.message}`);
+        }
       } catch (error) {
-        // The error object comes from the keystore, not from the credential,
-        // but nothing derived from it is surfaced either way.
-        console.error('[Settings] Stored custom provider credential could not be read:', error);
-        apiKey = '';
-      }
-      if (apiKey.trim().length === 0) {
-        const message = 'The saved API key could not be read — re-enter it and save again.';
-        setCustomTestStatus({ state: 'failed', message });
+        console.error(`[Settings] Connection test for ${providerId} could not run:`, error);
+        const message = 'The connection test could not run.';
+        setProviderTestStatus((prev) => ({
+          ...prev,
+          [providerId]: { state: 'failed', message },
+        }));
         toast.error(message);
-        return;
       }
-    } else {
-      // Unreachable while the button honours `canTestCustomConnection`; kept so
-      // a programmatic call cannot probe without a credential.
-      const message = CUSTOM_TEST_DISABLED_HINT;
-      setCustomTestStatus({ state: 'failed', message });
-      toast.error(message);
-      return;
-    }
+    },
+    [providers, providerKeys],
+  );
 
-    try {
-      const { testCustomProviderConnection } = await import('../brain/providers/connectionTest');
-      const result = await testCustomProviderConnection({ baseUrl, apiKey, modelId });
-
-      // The probe never throws — every failure path is a `{ ok: false }` result.
-      const outcome = describeConnectionTestResult(result);
-      setCustomTestStatus(outcome);
-      if (outcome.state === 'ok') {
-        toast.success(outcome.message);
-      } else {
-        toast.error(outcome.message);
-      }
-    } catch (error) {
-      // Only reachable if the module itself fails to load — the probe's own
-      // failure paths are all returned as `{ ok: false }`.
-      console.error('[Settings] Connection test could not run:', error);
-      const message = 'The connection test could not run.';
-      setCustomTestStatus({ state: 'failed', message });
-      toast.error(message);
-    }
-  }, [providers, providerKeys]);
 
   const handleSaveProviders = useCallback(async () => {
     setProvidersSaving(true);
@@ -1611,6 +1622,46 @@ export function Settings() {
                           </div>
                         </div>
                       </div>
+                    ) : provider.id === 'gemini' ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%', maxWidth: '340px' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                          <label htmlFor="gemini-api-key" style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                            API Key
+                          </label>
+                          <div className="api-key-input provider-key-input">
+                            <input
+                              id="gemini-api-key"
+                              type={showProviderKey[provider.id] ? 'text' : 'password'}
+                              className="input-glass"
+                              placeholder="Enter Google Gemini API key..."
+                              value={providerKeys[provider.id] || ''}
+                              onChange={(e) => handleProviderKeyChange(provider.id, e.target.value)}
+                            />
+                            <button
+                              className="btn-icon key-toggle"
+                              onClick={() => handleToggleProviderKeyVisibility(provider.id)}
+                              aria-label={showProviderKey[provider.id] ? 'Hide key' : 'Show key'}
+                            >
+                              {showProviderKey[provider.id] ? <EyeOff size={14} /> : <Eye size={14} />}
+                            </button>
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                          <label htmlFor="gemini-model-id" style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                            Model ID <span style={{ fontWeight: 400, opacity: 0.7 }}>(optional — e.g. gemini-1.5-flash-8b)</span>
+                          </label>
+                          <div className="api-key-input provider-key-input">
+                            <input
+                              id="gemini-model-id"
+                              type="text"
+                              className="input-glass"
+                              placeholder="gemini-2.0-flash"
+                              value={provider.modelId || ''}
+                              onChange={(e) => handleProviderModelChange(provider.id, e.target.value)}
+                            />
+                          </div>
+                        </div>
+                      </div>
                     ) : (
                       <div className="api-key-input provider-key-input">
                         <input
@@ -1628,6 +1679,61 @@ export function Settings() {
                           {showProviderKey[provider.id] ? <EyeOff size={14} /> : <Eye size={14} />}
                         </button>
                       </div>
+                    )}
+
+                  </div>
+                )}
+
+                {/* Per-provider Connection Test */}
+                {provider.id !== 'simulation' && (
+                  <div
+                    style={{
+                      marginTop: '8px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <button
+                      className="btn-secondary"
+                      onClick={() => handleTestProviderConnection(provider.id)}
+                      disabled={
+                        !canTestProviderConnection(provider.id) ||
+                        providerTestStatus[provider.id]?.state === 'testing'
+                      }
+                      aria-busy={providerTestStatus[provider.id]?.state === 'testing'}
+                      aria-label={`Test connection to ${PROVIDER_LABELS[provider.id] ?? provider.id}`}
+                      style={{
+                        padding: '4px 10px',
+                        fontSize: '0.75rem',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                      }}
+                    >
+                      <Play size={11} aria-hidden="true" />
+                      {providerTestStatus[provider.id]?.state === 'testing'
+                        ? 'Testing…'
+                        : 'Test connection'}
+                    </button>
+                    {providerTestStatus[provider.id] && (
+                      <span
+                        role="status"
+                        aria-live="polite"
+                        className={
+                          providerTestStatus[provider.id]?.state === 'ok'
+                            ? 'pill pill-green'
+                            : providerTestStatus[provider.id]?.state === 'failed'
+                              ? 'pill pill-red'
+                              : 'pill pill-yellow'
+                        }
+                        style={{ fontSize: '0.72rem' }}
+                      >
+                        {providerTestStatus[provider.id]?.state === 'testing'
+                          ? 'Testing connection…'
+                          : providerTestStatus[provider.id]?.message}
+                      </span>
                     )}
                   </div>
                 )}
@@ -1664,56 +1770,6 @@ export function Settings() {
           >
             {providersSaving ? 'Saving...' : 'Save Provider Config'}
           </button>
-
-          {/* Connection_Test: a single probe against the current drafts,
-              enabled only once all three fields are present (task 11.5). */}
-          {customEntry && (
-            <>
-              <button
-                className="btn-secondary"
-                onClick={handleTestCustomConnection}
-                disabled={!canTestCustomConnection || customTestStatus?.state === 'testing'}
-                aria-busy={customTestStatus?.state === 'testing'}
-                aria-label={`Test connection to ${CUSTOM_PROVIDER_LABEL}`}
-                title={canTestCustomConnection ? undefined : CUSTOM_TEST_DISABLED_HINT}
-                style={{
-                  padding: '8px 16px',
-                  fontSize: '0.82rem',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                }}
-              >
-                <Play size={13} aria-hidden="true" />
-                {customTestStatus?.state === 'testing' ? 'Testing…' : 'Test connection'}
-              </button>
-
-              {/* Inline status pill. `role="status"` announces the outcome to
-                  assistive technology without stealing focus. The text is the
-                  category guidance plus the probe's already-scrubbed `detail`
-                  (Requirement 3.9). */}
-              <span
-                role="status"
-                aria-live="polite"
-                className={
-                  customTestStatus === null
-                    ? undefined
-                    : customTestStatus.state === 'ok'
-                      ? 'pill pill-green'
-                      : customTestStatus.state === 'failed'
-                        ? 'pill pill-red'
-                        : 'pill pill-yellow'
-                }
-                style={{ fontSize: '0.74rem' }}
-              >
-                {customTestStatus === null
-                  ? ''
-                  : customTestStatus.state === 'testing'
-                    ? 'Testing connection…'
-                    : customTestStatus.message}
-              </span>
-            </>
-          )}
         </div>
       </section>
 

@@ -17,7 +17,8 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { testCustomProviderConnection } from './connectionTest';
+import { testCustomProviderConnection, testProviderConnection } from './connectionTest';
+
 
 const BASE_URL = 'https://gateway.example.com/api/v1';
 const MODEL_ID = 'meta-llama/llama-3.1-8b-instruct';
@@ -231,3 +232,98 @@ describe('testCustomProviderConnection — credential placement (Requirement 3.3
     expect(headerValue(calls[0].init, 'Authorization')).toBeUndefined();
   });
 });
+
+describe('testProviderConnection — multi-provider dispatcher', () => {
+  it('tests Gemini connection with x-goog-api-key header', async () => {
+    const { impl, calls } = makeRecordingFetch(() =>
+      new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'pong' }] } }] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    const result = await testProviderConnection({
+      providerId: 'gemini',
+      apiKey: API_KEY,
+      fetchImpl: impl,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(String(calls[0].input)).toContain('generativelanguage.googleapis.com');
+    expect(headerValue(calls[0].init, 'x-goog-api-key')).toBe(API_KEY);
+  });
+
+  it('rejects Gemini when API key is empty', async () => {
+    const result = await testProviderConnection({
+      providerId: 'gemini',
+      apiKey: '   ',
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.category).toBe('unauthorized');
+    }
+  });
+
+  it('tests OpenAI connection', async () => {
+    const { impl, calls } = makeRecordingFetch(() =>
+      new Response(JSON.stringify({ model: 'gpt-4o-mini', choices: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    const result = await testProviderConnection({
+      providerId: 'openai',
+      apiKey: API_KEY,
+      fetchImpl: impl,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(String(calls[0].input)).toBe('https://api.openai.com/v1/chat/completions');
+    expect(headerValue(calls[0].init, 'Authorization')).toBe(`Bearer ${API_KEY}`);
+  });
+
+  it('tests Anthropic connection with x-api-key and anthropic-version headers', async () => {
+    const { impl, calls } = makeRecordingFetch(() =>
+      new Response(JSON.stringify({ id: 'msg_123', type: 'message', content: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    const result = await testProviderConnection({
+      providerId: 'anthropic',
+      apiKey: API_KEY,
+      fetchImpl: impl,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(String(calls[0].input)).toBe('https://api.anthropic.com/v1/messages');
+    expect(headerValue(calls[0].init, 'x-api-key')).toBe(API_KEY);
+    expect(headerValue(calls[0].init, 'anthropic-version')).toBe('2023-06-01');
+  });
+
+  it('tests Ollama connection via GET /api/tags', async () => {
+    const { impl, calls } = makeRecordingFetch(() =>
+      new Response(JSON.stringify({ models: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    const result = await testProviderConnection({
+      providerId: 'ollama',
+      baseUrl: 'http://localhost:11434',
+      fetchImpl: impl,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(String(calls[0].input)).toBe('http://localhost:11434/api/tags');
+  });
+});
+

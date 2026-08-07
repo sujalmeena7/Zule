@@ -232,6 +232,15 @@ function relaxCSPForElectron(): void {
 
     callback({ responseHeaders: headers });
   });
+
+  // Ensure requests from packaged file:// origin to Firebase Auth present an authorized Origin header
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    { urls: ['https://identitytoolkit.googleapis.com/*', 'https://securetoken.googleapis.com/*'] },
+    (details, callback) => {
+      details.requestHeaders['Origin'] = 'https://zule-ai.firebaseapp.com';
+      callback({ requestHeaders: details.requestHeaders });
+    }
+  );
 }
 
 // ── getDisplayMedia handler ──────────────────────────────────────────────────
