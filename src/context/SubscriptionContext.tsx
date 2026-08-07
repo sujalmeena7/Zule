@@ -30,6 +30,13 @@ import { database } from '../data/database';
 // --- Revalidation interval: 6 hours ---
 const REVALIDATION_MS = 6 * 60 * 60 * 1000;
 
+/**
+ * Deployed backend used by packaged builds. Kept in sync with the origin
+ * allow-list in `api/createRazorpaySubscription.ts` and the expected
+ * renderer origin in `electron/main.ts`.
+ */
+const PRODUCTION_API_URL = 'https://zuleai.vercel.app';
+
 // --- Today's date in YYYY-MM-DD ---
 function todayKey(): string {
   const d = new Date();
@@ -222,8 +229,14 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
       // Call Vercel Serverless Function to create a Razorpay subscription
       const idToken = await user.getIdToken();
 
+      // Resolve the backend base URL. `VITE_VERCEL_API_URL` is inlined at
+      // build time from `.env`, which is gitignored — so a fresh clone or a
+      // CI runner builds without it. Falling back to localhost in that case
+      // shipped a release whose checkout silently failed against a dev
+      // server that users never run, so production defaults to the
+      // deployed API and only dev falls back to localhost.
       const apiUrl = import.meta.env.VITE_VERCEL_API_URL
-        || 'http://localhost:3000';
+        || (import.meta.env.DEV ? 'http://localhost:3000' : PRODUCTION_API_URL);
 
       const response = await fetch(`${apiUrl}/api/createRazorpaySubscription`, {
         method: 'POST',
