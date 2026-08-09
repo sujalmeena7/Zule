@@ -75,6 +75,10 @@ export interface ElectronAPI {
   // External URLs & Window Focus
   openExternal?: (url: string) => Promise<void>;
   focusWindow?: () => Promise<void>;
+  /** Request overlay activation for keyboard input (Windows: installs LL keyboard hook). */
+  requestOverlayFocus?: () => void;
+  /** Signal overlay input blur (Windows: uninstalls LL keyboard hook). */
+  blurOverlay?: () => void;
 
   // Native Screen Capture (Phase 3)
   getDesktopSources: () => Promise<

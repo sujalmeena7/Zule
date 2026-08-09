@@ -112,6 +112,17 @@ const electronAPI = {
   focusWindow: (): Promise<void> =>
     ipcRenderer.invoke('focus-window'),
 
+  /** Request overlay focus for keyboard input (e.g. when an input is tapped).
+   *  On Windows this installs a low-level keyboard hook to forward keystrokes
+   *  without activating the overlay window (no focus loss for the fg app). */
+  requestOverlayFocus: (): void =>
+    ipcRenderer.send('overlay-request-focus'),
+
+  /** Signal that the overlay input has been blurred. Uninstalls the keyboard
+   *  hook so keystrokes flow normally to the foreground application again. */
+  blurOverlay: (): void =>
+    ipcRenderer.send('overlay-blur'),
+
   // ── Secure Storage (OS-backed encryption for provider API keys) ──────────
 
   /** Whether OS-level key encryption (safeStorage) is available on this machine. */
