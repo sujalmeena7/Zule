@@ -47,6 +47,7 @@ import {
 import { getFfi, normalizeHwnd } from './win32/ffi';
 import { createPaintSurface, type PaintSurface } from './win32/layeredPaint';
 import { createInputForwarder, type ForwarderDeps, type DragController } from './win32/inputForwarder';
+import { createKeyboardHook, type KeyboardHook } from './win32/keyboardHook';
 
 // ── Performance Guarantees ──────────────────────────────────────────────────
 // - No main-process timer runs more frequently than 1/s for maintenance (Req 14.1)
@@ -89,6 +90,9 @@ export class OverlayManager {
   // ── Stage B (layered) fields ────────────────────────────────────────────────
   private paintSurface: PaintSurface | null = null;
   private offscreenWindow: BrowserWindowType | null = null;
+
+  // ── Keyboard Hook (zero-focus-loss input) ───────────────────────────────────
+  private keyboardHook: KeyboardHook | null = null;
 
   // Bound handlers for screen event cleanup
   private handleDisplayChange: () => void;
@@ -155,7 +159,7 @@ export class OverlayManager {
 
       // Focus & display behavior
       show: false,
-      focusable: true,
+      focusable: false,
       // Render the page even before the window is shown so the first
       // paint after setContentProtection() is fully composited — avoids
       // the brief flash of unprotected content some users see when
@@ -226,11 +230,15 @@ export class OverlayManager {
     // verification, DWM preview hardening, window style hardening) on top of
     // Electron's setContentProtection. Each layer is independent — a failure
     // in one does not block the others.
+    //
+    // Keep the overlay non-activating so pointer interaction does not transfer
+    // OS focus away from the foreground application. Keyboard entry requires
+    // normal window activation and is intentionally not synthesized here.
     if (isNativeStealthAvailable()) {
       try {
         const result = applyNativeStealth(
           this.window.getNativeWindowHandle(),
-          { allowActivation: true },
+          { allowActivation: false },
         );
         if (!result.ok) {
           console.warn('[OverlayManager] Native stealth: no layers applied');
@@ -287,6 +295,35 @@ export class OverlayManager {
       this.window?.showInactive();
     });
 
+    // ── Prevent focus steal on click (Windows) ────────────────────────────────
+    // The overlay is created with focusable: false. Electron tells Chromium not
+    // to activate this window on any interaction. Combined with WS_EX_NOACTIVATE
+    // from nativeStealth, the window never becomes the foreground window.
+    // Keyboard input is handled by a WH_KEYBOARD_LL hook (see below).
+
+    // ── Keyboard Hook IPC (zero-focus-loss typing) ────────────────────────────
+    // The renderer signals when an input element gains/loses logical focus.
+    // On focus: install a WH_KEYBOARD_LL hook that intercepts all keystrokes
+    //           and forwards them to the overlay's webContents.
+    // On blur:  uninstall the hook so keystrokes flow normally to the fg app.
+    if (isWin) {
+      const { ipcMain } = require('electron') as typeof import('electron');
+
+      ipcMain.on('overlay-request-focus', () => {
+        if (!this.window || this.window.isDestroyed()) return;
+        if (!this.keyboardHook) {
+          this.keyboardHook = createKeyboardHook();
+        }
+        this.keyboardHook.install(this.window);
+      });
+
+      ipcMain.on('overlay-blur', () => {
+        if (this.keyboardHook) {
+          this.keyboardHook.uninstall();
+        }
+      });
+    }
+
     // ── Window close cleanup ──────────────────────────────────────────────────
 
     this.window.on('closed', () => {
@@ -333,6 +370,11 @@ export class OverlayManager {
     // Ensure stealth host teardown ordering is respected on app quit:
     // release() → destroy() host, before Electron tears down the BrowserWindow.
     app.on('before-quit', () => {
+      // Uninstall keyboard hook before anything else
+      if (this.keyboardHook) {
+        this.keyboardHook.uninstall();
+        this.keyboardHook = null;
+      }
       if (this.reparenter) {
         this.reparenter.release();
         this.reparenter = null;
@@ -369,6 +411,12 @@ export class OverlayManager {
     screen.removeListener('display-added', this.handleDisplayChange);
     screen.removeListener('display-removed', this.handleDisplayRemoved);
     screen.removeListener('display-metrics-changed', this.handleDisplayMetricsChanged);
+
+    // ── Keyboard hook teardown ────────────────────────────────────────────────
+    if (this.keyboardHook) {
+      this.keyboardHook.uninstall();
+      this.keyboardHook = null;
+    }
 
     // ── Stealth Host teardown (Req 6.3) ─────────────────────────────────────
     // Release child first (if reparented)
@@ -618,12 +666,12 @@ export class OverlayManager {
             }
           }
         } else {
-          // Layer 0 remains a normal interactive top-level BrowserWindow.
-          // Preserve activation so pointer clicks can focus Chromium inputs.
+          // Keep the Layer 0 top-level BrowserWindow non-activating so pointer
+          // interaction does not transfer OS focus from the foreground app.
           if (enabled) {
             applyNativeStealth(
               this.window.getNativeWindowHandle(),
-              { allowActivation: true },
+              { allowActivation: false },
             );
           } else {
             removeNativeStealth(this.window.getNativeWindowHandle());
@@ -665,12 +713,12 @@ export class OverlayManager {
       action: () => void;
     }> = [
       {
-        accelerator: `${prefix}+Shift+H`,
+        accelerator: `${prefix}+Shift+F6`,
         shortcutId: 'toggle-overlay',
         action: () => this.toggle(),
       },
       {
-        accelerator: `${prefix}+Shift+\\`,
+        accelerator: `${prefix}+Shift+F7`,
         shortcutId: 'panic-hide',
         action: () => this.hide(),
       },
@@ -1182,6 +1230,8 @@ export class OverlayManager {
     // Re-apply native stealth layers to the current top-level owner when
     // content protection is active. In Stage A the Chromium HWND is a child;
     // applying top-level-only APIs to it fails with E_HANDLE.
+    // Layer 0: keep WS_EX_NOACTIVATE so clicking the overlay does not transfer
+    // OS focus away from the foreground fullscreen application.
     if (this.state.contentProtection && isNativeStealthAvailable()) {
       try {
         const hostState = this.stealthHost?.getState();
@@ -1190,7 +1240,7 @@ export class OverlayManager {
         } else {
           applyNativeStealth(
             this.window.getNativeWindowHandle(),
-            { allowActivation: true },
+            { allowActivation: false },
           );
         }
       } catch (nErr: unknown) {

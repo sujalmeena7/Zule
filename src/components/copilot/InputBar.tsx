@@ -230,6 +230,27 @@ export function InputBar({
           placeholder="Ask about your screen or conversation, or  Ctrl ↵  for Assist"
           value={inputText}
           onChange={(e) => onInputChange(e.target.value)}
+          onMouseDown={() => {
+            // On Windows, the overlay is WS_EX_NOACTIVATE — clicking the input
+            // does NOT activate the window, so the DOM 'focus' event may not
+            // fire. Install the keyboard hook on mousedown to start capturing
+            // keystrokes immediately. The foreground app never loses focus.
+            if (typeof window !== 'undefined' && window.electronAPI?.requestOverlayFocus) {
+              window.electronAPI.requestOverlayFocus();
+            }
+          }}
+          onFocus={() => {
+            // Fallback for programmatic focus (e.g. Tab key, autofocus)
+            if (typeof window !== 'undefined' && window.electronAPI?.requestOverlayFocus) {
+              window.electronAPI.requestOverlayFocus();
+            }
+          }}
+          onBlur={() => {
+            // Uninstall the keyboard hook so keystrokes flow to the fg app.
+            if (typeof window !== 'undefined' && window.electronAPI?.blurOverlay) {
+              window.electronAPI.blurOverlay();
+            }
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
               onSubmit();
