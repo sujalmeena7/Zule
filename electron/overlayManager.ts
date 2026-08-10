@@ -718,12 +718,12 @@ export class OverlayManager {
       action: () => void;
     }> = [
       {
-        accelerator: `${prefix}+\``,
+        accelerator: `${prefix}+.`,
         shortcutId: 'toggle-overlay',
         action: () => this.toggle(),
       },
       {
-        accelerator: `${prefix}+Shift+\``,
+        accelerator: `${prefix}+Shift+.`,
         shortcutId: 'panic-hide',
         action: () => this.hide(),
       },
