@@ -61,19 +61,11 @@ win:
       arch:
         - x64
   icon: public/favicon.ico
-
-  # ── PE VERSIONINFO obfuscation ───────────────────────────────────────────────
-  # Process scanners (Honorlock, ExamSoft, Safe Exam Browser) read the
-  # VERSIONINFO resource embedded in the .exe to identify apps even when the
-  # executable filename is generic. These fields override the defaults that
-  # electron-builder derives from `productName`.
-  #
-  # Rule: use bland, Windows-utility-style descriptions. DO NOT impersonate
-  # Microsoft or system processes — that triggers AV heuristics.
   legalTrademarks: ""
-  fileDescription: Desktop Helper Service
-  internalName: DesktopHelper
-  originalFilename: DesktopHelper.exe
+  forceCodeSigning: false
+
+
+
 
 nsis:
   oneClick: false

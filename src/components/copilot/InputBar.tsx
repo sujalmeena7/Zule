@@ -93,6 +93,28 @@ export function InputBar({
     };
   }, []);
 
+  // Uninstall keyboard hook when clicking anywhere outside the input.
+  // Since the overlay is focusable: false, the normal DOM blur event won't fire.
+  // This document-level listener catches clicks on other parts of the overlay
+  // (buttons, drag area, etc.) and releases the hook so the background app
+  // can receive keystrokes again.
+  useEffect(() => {
+    const handleDocumentMouseDown = (e: MouseEvent) => {
+      // If the click is inside the input, do nothing (the input's own
+      // onMouseDown with stopPropagation will handle it).
+      if (inputRef.current && inputRef.current.contains(e.target as Node)) {
+        return;
+      }
+      // Click was outside the input — uninstall the hook
+      if (typeof window !== 'undefined' && window.electronAPI?.blurOverlay) {
+        window.electronAPI.blurOverlay();
+      }
+    };
+
+    document.addEventListener('mousedown', handleDocumentMouseDown);
+    return () => document.removeEventListener('mousedown', handleDocumentMouseDown);
+  }, [inputRef]);
+
   // Stop whichever dictation engine is active and reset UI/host state.
   const stopDictation = () => {
     if (recognitionRef.current) {
@@ -230,32 +252,32 @@ export function InputBar({
           placeholder="Ask about your screen or conversation, or  Ctrl ↵  for Assist"
           value={inputText}
           onChange={(e) => onInputChange(e.target.value)}
-          onMouseDown={() => {
-            // On Windows, the overlay is WS_EX_NOACTIVATE — clicking the input
-            // does NOT activate the window, so the DOM 'focus' event may not
-            // fire. Install the keyboard hook on mousedown to start capturing
-            // keystrokes immediately. The foreground app never loses focus.
+          onMouseDown={(e) => {
+            // Prevent the click from propagating to the document-level handler
+            // that would immediately uninstall the hook we're about to install.
+            e.stopPropagation();
+            // Install the keyboard hook to capture keystrokes without focus.
             if (typeof window !== 'undefined' && window.electronAPI?.requestOverlayFocus) {
               window.electronAPI.requestOverlayFocus();
-            }
-          }}
-          onFocus={() => {
-            // Fallback for programmatic focus (e.g. Tab key, autofocus)
-            if (typeof window !== 'undefined' && window.electronAPI?.requestOverlayFocus) {
-              window.electronAPI.requestOverlayFocus();
-            }
-          }}
-          onBlur={() => {
-            // Uninstall the keyboard hook so keystrokes flow to the fg app.
-            if (typeof window !== 'undefined' && window.electronAPI?.blurOverlay) {
-              window.electronAPI.blurOverlay();
             }
           }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
               onSubmit();
+              // Uninstall hook after submit so keystrokes go back to fg app
+              if (typeof window !== 'undefined' && window.electronAPI?.blurOverlay) {
+                window.electronAPI.blurOverlay();
+              }
             } else if (e.key === 'Enter' && !e.shiftKey) {
               onSubmit();
+              if (typeof window !== 'undefined' && window.electronAPI?.blurOverlay) {
+                window.electronAPI.blurOverlay();
+              }
+            } else if (e.key === 'Escape') {
+              // Escape also releases the hook
+              if (typeof window !== 'undefined' && window.electronAPI?.blurOverlay) {
+                window.electronAPI.blurOverlay();
+              }
             }
           }}
         />

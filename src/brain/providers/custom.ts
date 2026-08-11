@@ -79,7 +79,7 @@ export const DEFAULT_MAX_OUTPUT_TOKENS = 2048;
  */
 const DEFAULT_CAPABILITIES: Capabilities = {
   streaming: true,
-  imageInput: false,
+  imageInput: true,
   toolUse: false,
   maxInputTokens: 32_000,
   pricePerMTokens: { input: 0, output: 0 },

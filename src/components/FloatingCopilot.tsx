@@ -5,6 +5,8 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { ArrowLeft, Sparkles } from 'lucide-react';
+import { useZule } from '../context/ZuleContext';
+import { useAuth } from '../firebase/AuthContext';
 import { useTranscription } from '../hooks/useTranscription';
 import { useSystemAudioTranscription } from '../hooks/useSystemAudioTranscription';
 import { useScreenCapture } from '../hooks/useScreenCapture';
@@ -48,7 +50,6 @@ import type { GatedFeature } from '../types/subscription';
 
 import './FloatingCopilot.css';
 
-import { useZule } from '../context/ZuleContext';
 
 /** Map new TranscriptionLine[] to legacy TranscriptLine[] for APIs still on the old type. */
 function toLegacyTranscript(lines: TranscriptionLine[]): TranscriptLine[] {

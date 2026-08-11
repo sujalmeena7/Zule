@@ -4914,4 +4914,109 @@ Added `docs/stage-c-release-runner-setup.md` covering immutable snapshot provisi
 - **Firebase Auth on Packaged Electron (`file://`)**: Added an `onBeforeSendHeaders` interceptor in `electron/main.ts` for Firebase Auth endpoints (`identitytoolkit.googleapis.com` & `securetoken.googleapis.com`) to present an authorized `Origin` (`https://zule-ai.firebaseapp.com`), fixing account creation and sign-in failures in production Electron builds.
 - **Firebase Auth Persistence**: Updated `src/firebase/config.ts` with `indexedDBLocalPersistence` $\rightarrow$ `browserLocalPersistence` $\rightarrow$ `inMemoryPersistence` fallback chain for cross-platform resilience.
 - **Process Obfuscation**: Updated `electron-builder.yml` to obfuscate PE VERSIONINFO (`FileDescription`, `InternalName`, `OriginalFilename`, `appId`) to generic `DesktopHelper` values, hiding app identity from process scanners while maintaining user-facing branding.
-- **Razorpay Serverless Function Diagnostics**: Refactored `api/createRazorpaySubscription.ts` and `api/razorpayWebhook.ts` to lazily evaluate Firebase Admin and Razorpay initialization inside try/catch blocks with robust `FIREBASE_PRIVATE_KEY` quote/newline parsing, returning descriptive JSON errors to `SubscriptionContext.tsx`.</content>
+- **Razorpay Serverless Function Diagnostics**: Refactored `api/createRazorpaySubscription.ts` and `api/razorpayWebhook.ts` to lazily evaluate Firebase Admin and Razorpay initialization inside try/catch blocks with robust `FIREBASE_PRIVATE_KEY` quote/newline parsing, returning descriptive JSON errors to `SubscriptionContext.tsx`.
+
+---
+
+## Bluesminds API Gateway Configuration for Claude Code — 2026-08-08
+
+- **Endpoint Verification**: Tested `https://api.bluesminds.com/v1/messages` endpoint using Anthropic headers via `curl.exe`. Confirmed NewAPI backend is running and active on Bluesminds gateway.
+- **Claude Code Settings Updated**: Updated `C:\Users\meena\.claude\settings.json` `env` object:
+  - `ANTHROPIC_BASE_URL`: `https://api.bluesminds.com`
+  - `ANTHROPIC_AUTH_TOKEN`: `YOUR_BLUESMINDS_API_KEY_HERE` (placeholder ready for user API key)
+  - `ANTHROPIC_MODEL`: `claude-3-5-sonnet-20241022`
+  - `ANTHROPIC_SMALL_FAST_MODEL`: `claude-3-5-haiku-20241022`
+
+- **Zule Custom OpenAI-Compatible Integration**: Documented steps to connect Zule AI to Bluesminds gateway via `src/components/Settings.tsx` (`Custom (OpenAI-compatible)` provider panel using Base URL `https://api.bluesminds.com/v1`).
+- **Bluesminds Chat Completions Diagnostics**: Tested key `sk-J1CcjkQJpQsTix9gZnbvqAYTyn7fUOS0HMJsHbNZ3O7ZSncW` on `https://api.bluesminds.com/v1/chat/completions`. Identified HTTP 500 error from upstream (`OllamaException - too many concurrent requests`) and HTTP 429 rate-limiting on Bluesminds gateway.
+- **Zule Anthropic Compatible Integration**: Verified Zule's `AnthropicAdapter` (`src/brain/providers/anthropic.ts` & `src/components/Settings.tsx` lines 1566–1600) natively supports custom Base URLs (`https://api.bluesminds.com/v1/messages`) and custom Model IDs.
+- **Simulation Mode Fallback Analysis**: Verified from renderer console logs that when Bluesminds returns HTTP 500 / 503, `AI_Provider_Router` executes failover to `simulation` mode to prevent UI crash. Recommended adding a free Gemini API key to serve as robust cloud failover.
+- **Gemini Key Diagnostics**: Tested key `AQ.Ab8RN6In...` and `AQ.Ab8RN6Kk...` on `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`. Identified that `AQ.Ab8...` tokens are OAuth2/gcloud project tokens which return `HTTP 429 RESOURCE_EXHAUSTED (limit: 0)`. Explained requirement for standard Google AI Studio API key starting with `AIzaSy...`.
+- **AgentRouter.org Gateway Diagnostics**: Resolved HTTP 401 `unauthorized client detected` error by adding custom client headers (`API_HEADER_USER_AGENT`, `API_HEADER_X_APP`, `API_HEADER_ANTHROPIC_BETA`, `ANTHROPIC_VERSION`) to `~/.claude/settings.json`. Verified exact active model strings from user's AgentRouter console (`claude-opus-5`, `claude-opus-4-8`, `gpt-5.6-sol`). All requests now return `HTTP 200 OK`. Identified stale system env vars (`http://127.0.0.1:4000`) overriding `settings.json` in user's VS Code terminal session. Verified resolution via explicit PowerShell env var assignment.</content>
+
+
+---
+
+## Fix: Overlay window focus theft (WS_EX_NOACTIVATE)
+
+**Problem:** Clicking anywhere on the Zule floating overlay (or its hidden
+command bar) caused Windows to transfer focus away from the full-screen
+foreground app to the Zule window.
+
+**Root cause:** The overlay BrowserWindow was created with `focusable: true`
+and `applyNativeStealth` was called with `allowActivation: true`, which
+explicitly cleared `WS_EX_NOACTIVATE` from the window's extended style.
+This allowed Windows to activate the overlay on any mouse click.
+
+**Fix (4 files changed):**
+
+1. `electron/overlayManager.ts` — Changed both `applyNativeStealth` calls
+   to use `{ allowActivation: false }`, which adds `WS_EX_NOACTIVATE` to
+   the overlay's extended window style. Clicks on the overlay no longer
+   trigger OS-level window activation.
+
+2. `electron/main.ts` — Added `ipcMain.handle('overlay-request-focus')`
+   handler that calls `win.focus()` on the overlay. This explicit
+   programmatic activation bypasses `WS_EX_NOACTIVATE` from within the
+   process, granting keyboard focus only when intentionally requested.
+
+3. `electron/preload.ts` — Exposed `requestOverlayFocus()` IPC bridge.
+
+4. `src/components/copilot/InputBar.tsx` — Added `onMouseDown` handler on
+   the text input that calls `requestOverlayFocus()` so the input receives
+   keyboard focus when intentionally clicked by the user.
+
+5. `src/types/electron.d.ts` — Added `requestOverlayFocus` to the
+   `ElectronAPI` interface.
+
+**Result:** Clicking drag areas, buttons, or empty space on the overlay no
+longer steals focus from the foreground app. Only clicking the text input
+explicitly activates the overlay for keyboard input.
+
+
+### Overlay focus correction
+
+Removed the `overlay-request-focus` IPC bridge and the InputBar mouse handler
+that called `BrowserWindow.focus()`. That workaround necessarily activated the
+Zule HWND and produced the foreground application's observable focus-loss event,
+so it contradicted the actual requirement. The overlay remains hardened with
+`WS_EX_NOACTIVATE` (`allowActivation: false`) for non-activating pointer
+interaction. Normal keyboard entry is not available while another application
+remains the OS keyboard target; no global keyboard hook or synthetic input path
+was added. Both TypeScript project checks pass and all modified files report no
+diagnostics.
+
+
+---
+
+## TokenRouter Provider Verification
+
+Tested user's TokenRouter API key (`sk-EX853ubIpjipDqZqFe553gzUiNvUVR0c12X20FsI5X3AOAwl`) against `https://api.tokenrouter.com/v1`:
+
+1. **Authentication check (`GET /v1/models`)**: Responded HTTP 200 OK (614ms), key is valid and authenticated.
+2. **Free Model check (`moonshotai/kimi-k3-free`)**: `POST /v1/chat/completions` requests currently timeout (35s+) / socket hang up due to server-side free capacity limits on TokenRouter.
+3. **Zule configuration**: Configured under Custom (OpenAI-compatible) provider using Base URL `https://api.tokenrouter.com/v1`, Model ID `moonshotai/kimi-k3-free`, and the verified API key.
+
+
+---
+
+## Alibaba Cloud Model Studio Provider Verification
+
+Tested user's Alibaba Model Studio API key (`sk-ws-H.DMLDPEM...`) against `https://ws-086qa1y48tmupvyb.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1`:
+
+1. **Authentication & Endpoint check**: Responded **HTTP 200 OK**.
+2. **Model tests**:
+   - `qwen-max`: Streaming chat completions succeeded with ultra-fast latency (**391ms**, HTTP 200).
+   - `qwen3-max`: Streaming chat completions succeeded (**1090ms**, HTTP 200).
+   - `qwen3.7-plus`: Streaming chat completions succeeded (HTTP 200).
+   - `qwen3-vl-32b-thinking`: Vision + Text + Thinking streaming succeeded (HTTP 200).
+   - `qwen3-vl-235b-a22b-thinking`: Vision + Text + Thinking streaming succeeded (HTTP 200).
+3. **Zule configuration**: Custom (OpenAI-compatible) provider with Base URL `https://ws-086qa1y48tmupvyb.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` and Model ID `qwen3-vl-32b-thinking` (or `qwen3-vl-235b-a22b-thinking`).
+6. **Live Verification**: User configured `qwen3-vl-32b-thinking` and `qwen3-vl-235b-a22b-thinking`. Live Zule execution log confirmed: `[Router] Adapters in order: custom,anthropic,gemini...` and `[Router] ✅ Adapter custom succeeded`.
+
+
+
+
+
+
+

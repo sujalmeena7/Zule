@@ -44,12 +44,12 @@ export function useKeyboardShortcuts(shortcuts: ShortcutConfig[]): void {
 
 // Default shortcut definitions (actions are bound in the component)
 export const SHORTCUT_DEFINITIONS = [
-  { key: 'F6', ctrl: true, shift: true, description: 'Toggle Hide/Show overlay' },
+  { key: '.', ctrl: true, description: 'Toggle Hide/Show overlay' },
   { key: 'Enter', ctrl: true, description: 'Submit input to AI' },
   { key: 'm', ctrl: true, shift: true, description: 'Toggle microphone' },
   { key: 's', ctrl: true, shift: true, description: 'Toggle screen capture' },
   { key: 'Escape', description: 'Collapse overlay' },
-  { key: 'F7', ctrl: true, shift: true, description: 'Panic hide — hide overlay, mute mic, stop capture, pause AI' },
+  { key: '.', ctrl: true, shift: true, description: 'Panic hide — hide overlay, mute mic, stop capture, pause AI' },
   { key: 'ArrowUp', ctrl: true, alt: true, description: 'Nudge overlay up' },
   { key: 'ArrowDown', ctrl: true, alt: true, description: 'Nudge overlay down' },
   { key: 'ArrowLeft', ctrl: true, alt: true, description: 'Nudge overlay left' },

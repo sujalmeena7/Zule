@@ -471,6 +471,11 @@ export class OverlayManager {
   hide(): void {
     if (!this.window) return;
 
+    // Uninstall keyboard hook so keystrokes flow to the foreground app
+    if (this.keyboardHook) {
+      this.keyboardHook.uninstall();
+    }
+
     if (this.stealthHost && this.state.hostStrategy !== 'none') {
       this.stealthHost.hide();
     }
@@ -713,12 +718,12 @@ export class OverlayManager {
       action: () => void;
     }> = [
       {
-        accelerator: `${prefix}+Shift+F6`,
+        accelerator: `${prefix}+.`,
         shortcutId: 'toggle-overlay',
         action: () => this.toggle(),
       },
       {
-        accelerator: `${prefix}+Shift+F7`,
+        accelerator: `${prefix}+Shift+.`,
         shortcutId: 'panic-hide',
         action: () => this.hide(),
       },

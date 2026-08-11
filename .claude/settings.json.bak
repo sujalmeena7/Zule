@@ -1,0 +1,23 @@
+{
+  "apiKeyHelper": "echo 'fe_oa_eae7f28c437a8ea88798fde9ce69d2c97eea79eae1237890'",
+  "env": {
+    "ANTHROPIC_API_KEY": "fe_oa_eae7f28c437a8ea88798fde9ce69d2c97eea79eae1237890",
+    "ANTHROPIC_BASE_URL": "https://cc.freemodel.dev",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(grep -iE \"env|secret|key|credential|\\\\.pem|\\\\.json$\")",
+      "Bash(npm audit *)",
+      "Bash(grep -iE \"\\\\.mp4$|\\\\.exe$|test_output|\\\\.log$|implementation_plan\")",
+      "Bash(npx firebase *)",
+      "Bash(npm view *)",
+      "Bash(npm ls *)",
+      "Bash(node -e ' *)",
+      "Bash(npm run *)",
+      "Read(//tmp/**)",
+      "Bash(npm test *)"
+    ],
+    "deny": []
+  }
+}
