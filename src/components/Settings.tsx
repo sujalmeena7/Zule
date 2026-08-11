@@ -351,7 +351,7 @@ export function Settings() {
   // masked placeholder, and a blank save keeps the stored cipher
   // (Requirements 1.10, 3.1).
   const [hasStoredKey, setHasStoredKey] = useState<Record<string, boolean>>({});
-  // Result of the most recent Connection_Test per provider. Holds presentation
+  // Result of the most recent Connection_Test (task 11.5). Holds presentation
   // text only — the probe's `detail` is already scrubbed and the decrypted key
   // never enters state (Requirements 3.3, 3.9).
   const [providerTestStatus, setProviderTestStatus] =
@@ -639,7 +639,6 @@ export function Settings() {
     );
   }, []);
 
-
   const handleToggleProviderKeyVisibility = useCallback((id: string) => {
     setShowProviderKey((prev) => ({ ...prev, [id]: !prev[id] }));
   }, []);
@@ -731,10 +730,11 @@ export function Settings() {
           [providerId]: outcome,
         }));
 
+        const label = PROVIDER_LABELS[providerId as ProviderConfig['id']] ?? providerId;
         if (outcome.state === 'ok') {
-          toast.success(`${PROVIDER_LABELS[providerId] ?? providerId}: ${outcome.message}`);
+          toast.success(`${label}: ${outcome.message}`);
         } else {
-          toast.error(`${PROVIDER_LABELS[providerId] ?? providerId}: ${outcome.message}`);
+          toast.error(`${label}: ${outcome.message}`);
         }
       } catch (error) {
         console.error(`[Settings] Connection test for ${providerId} could not run:`, error);
@@ -1251,7 +1251,7 @@ export function Settings() {
 
   const handleSaveCustomMode = async () => {
     if (!newModeLabel.trim() || !newModePrompt.trim()) return;
-    
+
     if (customModes.length >= limits.customModes) {
       setUpgradeModal({ reason: 'feature-locked', feature: 'copilot.custom-modes' });
       return;
@@ -1367,393 +1367,352 @@ export function Settings() {
               provider.id === CUSTOM_PROVIDER_ID && provider.acknowledgedEgressAt == null;
 
             return (
-            <div key={provider.id} className={`provider-card ${provider.enabled ? '' : 'provider-disabled'}`}>
-              <div className="provider-priority">
-                <span className="priority-number">{index + 1}</span>
-                <div className="priority-arrows">
-                  <button
-                    className="btn-icon priority-arrow"
-                    onClick={() => handleMoveProvider(index, 'up')}
-                    disabled={index === 0}
-                    aria-label={`Move ${PROVIDER_LABELS[provider.id]} up`}
-                  >
-                    <ArrowUp size={12} />
-                  </button>
-                  <button
-                    className="btn-icon priority-arrow"
-                    onClick={() => handleMoveProvider(index, 'down')}
-                    disabled={index === providers.length - 1}
-                    aria-label={`Move ${PROVIDER_LABELS[provider.id]} down`}
-                  >
-                    <ArrowDown size={12} />
-                  </button>
+              <div key={provider.id} className={`provider-card ${provider.enabled ? '' : 'provider-disabled'}`}>
+                <div className="provider-priority">
+                  <span className="priority-number">{index + 1}</span>
+                  <div className="priority-arrows">
+                    <button
+                      className="btn-icon priority-arrow"
+                      onClick={() => handleMoveProvider(index, 'up')}
+                      disabled={index === 0}
+                      aria-label={`Move ${PROVIDER_LABELS[provider.id]} up`}
+                    >
+                      <ArrowUp size={12} />
+                    </button>
+                    <button
+                      className="btn-icon priority-arrow"
+                      onClick={() => handleMoveProvider(index, 'down')}
+                      disabled={index === providers.length - 1}
+                      aria-label={`Move ${PROVIDER_LABELS[provider.id]} down`}
+                    >
+                      <ArrowDown size={12} />
+                    </button>
+                  </div>
                 </div>
-              </div>
 
-              <div className="provider-info">
-                <div className="provider-header">
-                  <span className="provider-name">{PROVIDER_LABELS[provider.id]}</span>
-                  <span className={`pill ${provider.enabled ? 'pill-green' : 'pill-yellow'}`}>
-                    {provider.enabled ? 'Enabled' : 'Disabled'}
-                  </span>
-                </div>
-                <span className="provider-desc">{PROVIDER_DESCRIPTIONS[provider.id]}</span>
+                <div className="provider-info">
+                  <div className="provider-header">
+                    <span className="provider-name">{PROVIDER_LABELS[provider.id]}</span>
+                    <span className={`pill ${provider.enabled ? 'pill-green' : 'pill-yellow'}`}>
+                      {provider.enabled ? 'Enabled' : 'Disabled'}
+                    </span>
+                  </div>
+                  <span className="provider-desc">{PROVIDER_DESCRIPTIONS[provider.id]}</span>
 
-                {/* API Key input — not shown for simulation */}
-                {provider.id !== 'simulation' && (
-                  <div className="provider-key-row">
-                    {provider.id === CUSTOM_PROVIDER_ID ? (
-                      /* Custom (OpenAI-compatible): three separate controls
-                         (Requirement 1.2). Each label is associated with its
-                         input via htmlFor/id, and the Base_URL control binds
-                         aria-invalid plus aria-describedby to the inline
-                         validation message (Requirement 1.8). */
-                      <div
-                        style={{
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: '10px',
-                          width: '100%',
-                          maxWidth: '340px',
-                        }}
-                      >
-                        {/* Persistent data-egress disclosure plus the
+                  {/* API Key input — not shown for simulation */}
+                  {provider.id !== 'simulation' && (
+                    <div className="provider-key-row">
+                      {provider.id === CUSTOM_PROVIDER_ID ? (
+                        /* Custom (OpenAI-compatible): three separate controls
+                           (Requirement 1.2). Each label is associated with its
+                           input via htmlFor/id, and the Base_URL control binds
+                           aria-invalid plus aria-describedby to the inline
+                           validation message (Requirement 1.8). */
+                        <div
+                          style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '10px',
+                            width: '100%',
+                            maxWidth: '340px',
+                          }}
+                        >
+                          {/* Persistent data-egress disclosure plus the
                             acknowledgement that unlocks the enable toggle
                             (Requirement 1.4). It is never dismissible: the
                             endpoint can change at any time. */}
-                        <div style={CUSTOM_EGRESS_NOTICE_STYLE}>
-                          <p id={CUSTOM_EGRESS_NOTICE_ID} style={{ margin: 0 }}>
-                            <ShieldCheck
-                              size={13}
-                              style={{ verticalAlign: '-2px', marginRight: '5px' }}
-                              aria-hidden="true"
-                            />
-                            {CUSTOM_EGRESS_NOTICE_TEXT}
-                          </p>
-                          <span
-                            style={{
-                              display: 'flex',
-                              alignItems: 'flex-start',
-                              gap: '7px',
-                            }}
-                          >
-                            <input
-                              id={CUSTOM_EGRESS_ACK_ID}
-                              type="checkbox"
-                              checked={provider.acknowledgedEgressAt != null}
-                              onChange={(e) => handleCustomEgressAckChange(e.target.checked)}
-                              aria-describedby={CUSTOM_EGRESS_NOTICE_ID}
-                              style={{ marginTop: '2px', flex: '0 0 auto' }}
-                            />
-                            <label
-                              htmlFor={CUSTOM_EGRESS_ACK_ID}
-                              style={{ fontSize: '0.74rem', fontWeight: 600, cursor: 'pointer' }}
+                          <div style={CUSTOM_EGRESS_NOTICE_STYLE}>
+                            <p id={CUSTOM_EGRESS_NOTICE_ID} style={{ margin: 0 }}>
+                              <ShieldCheck
+                                size={13}
+                                style={{ verticalAlign: '-2px', marginRight: '5px' }}
+                                aria-hidden="true"
+                              />
+                              {CUSTOM_EGRESS_NOTICE_TEXT}
+                            </p>
+                            <span
+                              style={{
+                                display: 'flex',
+                                alignItems: 'flex-start',
+                                gap: '7px',
+                              }}
                             >
-                              {CUSTOM_EGRESS_ACK_LABEL}
+                              <input
+                                id={CUSTOM_EGRESS_ACK_ID}
+                                type="checkbox"
+                                checked={provider.acknowledgedEgressAt != null}
+                                onChange={(e) => handleCustomEgressAckChange(e.target.checked)}
+                                aria-describedby={CUSTOM_EGRESS_NOTICE_ID}
+                                style={{ marginTop: '2px', flex: '0 0 auto' }}
+                              />
+                              <label
+                                htmlFor={CUSTOM_EGRESS_ACK_ID}
+                                style={{ fontSize: '0.74rem', fontWeight: 600, cursor: 'pointer' }}
+                              >
+                                {CUSTOM_EGRESS_ACK_LABEL}
+                              </label>
+                            </span>
+                          </div>
+
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            <label htmlFor="custom-provider-base-url" style={CUSTOM_FIELD_LABEL_STYLE}>
+                              Base URL
                             </label>
-                          </span>
-                        </div>
-
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                          <label htmlFor="custom-provider-base-url" style={CUSTOM_FIELD_LABEL_STYLE}>
-                            Base URL
-                          </label>
-                          <div className="api-key-input provider-key-input">
-                            <input
-                              id="custom-provider-base-url"
-                              type="text"
-                              maxLength={MAX_BASE_URL_LENGTH}
-                              className="input-glass"
-                              placeholder="https://openrouter.ai/api/v1"
-                              value={provider.baseUrl || ''}
-                              onChange={(e) => handleCustomBaseUrlChange(e.target.value)}
-                              aria-invalid={customBaseUrlError !== null}
-                              aria-describedby={
-                                customBaseUrlError !== null ? 'custom-provider-base-url-error' : undefined
-                              }
-                            />
+                            <div className="api-key-input provider-key-input">
+                              <input
+                                id="custom-provider-base-url"
+                                type="text"
+                                maxLength={MAX_BASE_URL_LENGTH}
+                                className="input-glass"
+                                placeholder="https://openrouter.ai/api/v1"
+                                value={provider.baseUrl || ''}
+                                onChange={(e) => handleCustomBaseUrlChange(e.target.value)}
+                                aria-invalid={customBaseUrlError !== null}
+                                aria-describedby={
+                                  customBaseUrlError !== null ? 'custom-provider-base-url-error' : undefined
+                                }
+                              />
+                            </div>
+                            {customBaseUrlError !== null && (
+                              <span
+                                id="custom-provider-base-url-error"
+                                role="alert"
+                                style={{ fontSize: '0.72rem', color: 'var(--accent-red)' }}
+                              >
+                                {customBaseUrlError}
+                              </span>
+                            )}
                           </div>
-                          {customBaseUrlError !== null && (
-                            <span
-                              id="custom-provider-base-url-error"
-                              role="alert"
-                              style={{ fontSize: '0.72rem', color: 'var(--accent-red)' }}
-                            >
-                              {customBaseUrlError}
-                            </span>
-                          )}
-                        </div>
 
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                          <label htmlFor="custom-provider-api-key" style={CUSTOM_FIELD_LABEL_STYLE}>
-                            API key
-                          </label>
-                          <div className="api-key-input provider-key-input">
-                            <input
-                              id="custom-provider-api-key"
-                              type={showProviderKey[provider.id] ? 'text' : 'password'}
-                              maxLength={MAX_API_KEY_LENGTH}
-                              className="input-glass"
-                              placeholder={
-                                hasStoredKey[CUSTOM_PROVIDER_ID]
-                                  ? CUSTOM_KEY_SAVED_PLACEHOLDER
-                                  : 'Enter API key...'
-                              }
-                              value={providerKeys[provider.id] || ''}
-                              onChange={(e) => handleCustomApiKeyChange(e.target.value)}
-                              aria-invalid={customApiKeyError !== null}
-                              aria-describedby={
-                                customApiKeyError !== null ? 'custom-provider-api-key-error' : undefined
-                              }
-                            />
-                            <button
-                              className="btn-icon key-toggle"
-                              onClick={() => handleToggleProviderKeyVisibility(provider.id)}
-                              aria-label={showProviderKey[provider.id] ? 'Hide key' : 'Show key'}
-                            >
-                              {showProviderKey[provider.id] ? <EyeOff size={14} /> : <Eye size={14} />}
-                            </button>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            <label htmlFor="custom-provider-api-key" style={CUSTOM_FIELD_LABEL_STYLE}>
+                              API key
+                            </label>
+                            <div className="api-key-input provider-key-input">
+                              <input
+                                id="custom-provider-api-key"
+                                type={showProviderKey[provider.id] ? 'text' : 'password'}
+                                maxLength={MAX_API_KEY_LENGTH}
+                                className="input-glass"
+                                placeholder={
+                                  hasStoredKey[CUSTOM_PROVIDER_ID]
+                                    ? CUSTOM_KEY_SAVED_PLACEHOLDER
+                                    : 'Enter API key...'
+                                }
+                                value={providerKeys[provider.id] || ''}
+                                onChange={(e) => handleCustomApiKeyChange(e.target.value)}
+                                aria-invalid={customApiKeyError !== null}
+                                aria-describedby={
+                                  customApiKeyError !== null ? 'custom-provider-api-key-error' : undefined
+                                }
+                              />
+                              <button
+                                className="btn-icon key-toggle"
+                                onClick={() => handleToggleProviderKeyVisibility(provider.id)}
+                                aria-label={showProviderKey[provider.id] ? 'Hide key' : 'Show key'}
+                              >
+                                {showProviderKey[provider.id] ? <EyeOff size={14} /> : <Eye size={14} />}
+                              </button>
+                            </div>
+                            {customApiKeyError !== null && (
+                              <span
+                                id="custom-provider-api-key-error"
+                                role="alert"
+                                style={{ fontSize: '0.72rem', color: 'var(--accent-red)' }}
+                              >
+                                {customApiKeyError}
+                              </span>
+                            )}
                           </div>
-                          {customApiKeyError !== null && (
-                            <span
-                              id="custom-provider-api-key-error"
-                              role="alert"
-                              style={{ fontSize: '0.72rem', color: 'var(--accent-red)' }}
-                            >
-                              {customApiKeyError}
-                            </span>
-                          )}
-                        </div>
 
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                          <label htmlFor="custom-provider-model-id" style={CUSTOM_FIELD_LABEL_STYLE}>
-                            Model ID
-                          </label>
-                          <div className="api-key-input provider-key-input">
-                            <input
-                              id="custom-provider-model-id"
-                              type="text"
-                              maxLength={MAX_MODEL_ID_LENGTH}
-                              className="input-glass"
-                              placeholder="meta-llama/llama-3.1-8b-instruct"
-                              value={provider.modelId || ''}
-                              onChange={(e) => handleCustomModelIdChange(e.target.value)}
-                            />
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            <label htmlFor="custom-provider-model-id" style={CUSTOM_FIELD_LABEL_STYLE}>
+                              Model ID
+                            </label>
+                            <div className="api-key-input provider-key-input">
+                              <input
+                                id="custom-provider-model-id"
+                                type="text"
+                                maxLength={MAX_MODEL_ID_LENGTH}
+                                className="input-glass"
+                                placeholder="meta-llama/llama-3.1-8b-instruct"
+                                value={provider.modelId || ''}
+                                onChange={(e) => handleCustomModelIdChange(e.target.value)}
+                              />
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ) : provider.id === 'ollama' ? (
-                      <div style={{ display: 'flex', gap: '10px', width: '100%', flexWrap: 'wrap' }}>
-                        <div className="api-key-input provider-key-input" style={{ flex: '1 1 200px' }}>
-                          <input
-                            type="text"
-                            className="input-glass"
-                            placeholder="Base URL (e.g. http://localhost:11434)"
-                            value={provider.baseUrl || ''}
-                            onChange={(e) => handleProviderUrlChange(provider.id, e.target.value)}
-                          />
-                        </div>
-                        <div className="api-key-input provider-key-input" style={{ flex: '1 1 200px' }}>
-                          <input
-                            type="text"
-                            className="input-glass"
-                            placeholder="Model ID (e.g. llama3.1:8b)"
-                            value={providerKeys[provider.id] || ''}
-                            onChange={(e) => handleProviderKeyChange(provider.id, e.target.value)}
-                          />
-                        </div>
-                      </div>
-                    ) : provider.id === 'anthropic' ? (
-                      /* Anthropic Claude: supports a configurable base URL and model
-                         so users can point at Anthropic-compatible gateways (e.g.
-                         api.lumosel.vip). Base URL and Model ID are optional — omitting
-                         them uses the defaults (api.anthropic.com, claude-3-5-sonnet). */
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%', maxWidth: '340px' }}>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                          <label htmlFor="anthropic-base-url" style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                            Base URL <span style={{ fontWeight: 400, opacity: 0.7 }}>(optional — leave blank for api.anthropic.com)</span>
-                          </label>
-                          <div className="api-key-input provider-key-input">
+                      ) : provider.id === 'ollama' ? (
+                        <div style={{ display: 'flex', gap: '10px', width: '100%', flexWrap: 'wrap' }}>
+                          <div className="api-key-input provider-key-input" style={{ flex: '1 1 200px' }}>
                             <input
-                              id="anthropic-base-url"
                               type="text"
                               className="input-glass"
-                              placeholder="https://api.anthropic.com/v1/messages"
+                              placeholder="Base URL (e.g. http://localhost:11434)"
                               value={provider.baseUrl || ''}
                               onChange={(e) => handleProviderUrlChange(provider.id, e.target.value)}
                             />
                           </div>
-                        </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                          <label htmlFor="anthropic-api-key" style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                            API Key
-                          </label>
-                          <div className="api-key-input provider-key-input">
+                          <div className="api-key-input provider-key-input" style={{ flex: '1 1 200px' }}>
                             <input
-                              id="anthropic-api-key"
-                              type={showProviderKey[provider.id] ? 'text' : 'password'}
+                              type="text"
                               className="input-glass"
-                              placeholder="Enter Anthropic API key..."
+                              placeholder="Model ID (e.g. llama3.1:8b)"
                               value={providerKeys[provider.id] || ''}
                               onChange={(e) => handleProviderKeyChange(provider.id, e.target.value)}
                             />
-                            <button
-                              className="btn-icon key-toggle"
-                              onClick={() => handleToggleProviderKeyVisibility(provider.id)}
-                              aria-label={showProviderKey[provider.id] ? 'Hide key' : 'Show key'}
-                            >
-                              {showProviderKey[provider.id] ? <EyeOff size={14} /> : <Eye size={14} />}
-                            </button>
                           </div>
                         </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                          <label htmlFor="anthropic-model-id" style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                            Model ID <span style={{ fontWeight: 400, opacity: 0.7 }}>(optional — default: claude-3-5-sonnet)</span>
-                          </label>
-                          <div className="api-key-input provider-key-input">
-                            <input
-                              id="anthropic-model-id"
-                              type="text"
-                              className="input-glass"
-                              placeholder="claude-sonnet-4-20250514"
-                              value={provider.modelId || ''}
-                              onChange={(e) => handleProviderModelChange(provider.id, e.target.value)}
-                            />
+                      ) : provider.id === 'anthropic' ? (
+                        /* Anthropic Claude: supports a configurable base URL and model
+                           so users can point at Anthropic-compatible gateways (e.g.
+                           api.lumosel.vip). Base URL and Model ID are optional — omitting
+                           them uses the defaults (api.anthropic.com, claude-3-5-sonnet). */
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%', maxWidth: '340px' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            <label htmlFor="anthropic-base-url" style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                              Base URL <span style={{ fontWeight: 400, opacity: 0.7 }}>(optional — leave blank for api.anthropic.com)</span>
+                            </label>
+                            <div className="api-key-input provider-key-input">
+                              <input
+                                id="anthropic-base-url"
+                                type="text"
+                                className="input-glass"
+                                placeholder="https://api.anthropic.com/v1/messages"
+                                value={provider.baseUrl || ''}
+                                onChange={(e) => handleProviderUrlChange(provider.id, e.target.value)}
+                              />
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            <label htmlFor="anthropic-api-key" style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                              API Key
+                            </label>
+                            <div className="api-key-input provider-key-input">
+                              <input
+                                id="anthropic-api-key"
+                                type={showProviderKey[provider.id] ? 'text' : 'password'}
+                                className="input-glass"
+                                placeholder="Enter Anthropic API key..."
+                                value={providerKeys[provider.id] || ''}
+                                onChange={(e) => handleProviderKeyChange(provider.id, e.target.value)}
+                              />
+                              <button
+                                className="btn-icon key-toggle"
+                                onClick={() => handleToggleProviderKeyVisibility(provider.id)}
+                                aria-label={showProviderKey[provider.id] ? 'Hide key' : 'Show key'}
+                              >
+                                {showProviderKey[provider.id] ? <EyeOff size={14} /> : <Eye size={14} />}
+                              </button>
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            <label htmlFor="anthropic-model-id" style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                              Model ID <span style={{ fontWeight: 400, opacity: 0.7 }}>(optional — default: claude-3-5-sonnet)</span>
+                            </label>
+                            <div className="api-key-input provider-key-input">
+                              <input
+                                id="anthropic-model-id"
+                                type="text"
+                                className="input-glass"
+                                placeholder="claude-sonnet-4-20250514"
+                                value={provider.modelId || ''}
+                                onChange={(e) => handleProviderModelChange(provider.id, e.target.value)}
+                              />
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ) : provider.id === 'gemini' ? (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%', maxWidth: '340px' }}>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                          <label htmlFor="gemini-api-key" style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                            API Key
-                          </label>
-                          <div className="api-key-input provider-key-input">
-                            <input
-                              id="gemini-api-key"
-                              type={showProviderKey[provider.id] ? 'text' : 'password'}
-                              className="input-glass"
-                              placeholder="Enter Google Gemini API key..."
-                              value={providerKeys[provider.id] || ''}
-                              onChange={(e) => handleProviderKeyChange(provider.id, e.target.value)}
-                            />
-                            <button
-                              className="btn-icon key-toggle"
-                              onClick={() => handleToggleProviderKeyVisibility(provider.id)}
-                              aria-label={showProviderKey[provider.id] ? 'Hide key' : 'Show key'}
-                            >
-                              {showProviderKey[provider.id] ? <EyeOff size={14} /> : <Eye size={14} />}
-                            </button>
-                          </div>
+                      ) : (
+                        <div className="api-key-input provider-key-input">
+                          <input
+                            type={showProviderKey[provider.id] ? 'text' : 'password'}
+                            className="input-glass"
+                            placeholder={`Enter ${PROVIDER_LABELS[provider.id]} API key...`}
+                            value={providerKeys[provider.id] || ''}
+                            onChange={(e) => handleProviderKeyChange(provider.id, e.target.value)}
+                          />
+                          <button
+                            className="btn-icon key-toggle"
+                            onClick={() => handleToggleProviderKeyVisibility(provider.id)}
+                            aria-label={showProviderKey[provider.id] ? 'Hide key' : 'Show key'}
+                          >
+                            {showProviderKey[provider.id] ? <EyeOff size={14} /> : <Eye size={14} />}
+                          </button>
                         </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                          <label htmlFor="gemini-model-id" style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                            Model ID <span style={{ fontWeight: 400, opacity: 0.7 }}>(optional — e.g. gemini-1.5-flash-8b)</span>
-                          </label>
-                          <div className="api-key-input provider-key-input">
-                            <input
-                              id="gemini-model-id"
-                              type="text"
-                              className="input-glass"
-                              placeholder="gemini-2.0-flash"
-                              value={provider.modelId || ''}
-                              onChange={(e) => handleProviderModelChange(provider.id, e.target.value)}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="api-key-input provider-key-input">
-                        <input
-                          type={showProviderKey[provider.id] ? 'text' : 'password'}
-                          className="input-glass"
-                          placeholder={`Enter ${PROVIDER_LABELS[provider.id]} API key...`}
-                          value={providerKeys[provider.id] || ''}
-                          onChange={(e) => handleProviderKeyChange(provider.id, e.target.value)}
-                        />
-                        <button
-                          className="btn-icon key-toggle"
-                          onClick={() => handleToggleProviderKeyVisibility(provider.id)}
-                          aria-label={showProviderKey[provider.id] ? 'Hide key' : 'Show key'}
+                      )}
+
+                      {/* Per-provider Connection Test */}
+                      {provider.id !== 'simulation' && (
+                        <div
+                          style={{
+                            marginTop: '8px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px',
+                            flexWrap: 'wrap',
+                          }}
                         >
-                          {showProviderKey[provider.id] ? <EyeOff size={14} /> : <Eye size={14} />}
-                        </button>
-                      </div>
-                    )}
+                          <button
+                            className="btn-secondary"
+                            onClick={() => handleTestProviderConnection(provider.id)}
+                            disabled={
+                              !canTestProviderConnection(provider.id) ||
+                              providerTestStatus[provider.id]?.state === 'testing'
+                            }
+                            aria-busy={providerTestStatus[provider.id]?.state === 'testing'}
+                            aria-label={`Test connection to ${PROVIDER_LABELS[provider.id] ?? provider.id}`}
+                            style={{
+                              padding: '4px 10px',
+                              fontSize: '0.75rem',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                            }}
+                          >
+                            <Play size={11} aria-hidden="true" />
+                            {providerTestStatus[provider.id]?.state === 'testing'
+                              ? 'Testing…'
+                              : 'Test connection'}
+                          </button>
+                          {providerTestStatus[provider.id] && (
+                            <span
+                              role="status"
+                              aria-live="polite"
+                              className={
+                                providerTestStatus[provider.id]?.state === 'ok'
+                                  ? 'pill pill-green'
+                                  : providerTestStatus[provider.id]?.state === 'failed'
+                                    ? 'pill pill-red'
+                                    : 'pill pill-yellow'
+                              }
+                              style={{ fontSize: '0.72rem' }}
+                            >
+                              {providerTestStatus[provider.id]?.state === 'testing'
+                                ? 'Testing connection…'
+                                : (providerTestStatus[provider.id] as { message?: string } | undefined)?.message}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
 
-                  </div>
-                )}
-
-                {/* Per-provider Connection Test */}
-                {provider.id !== 'simulation' && (
-                  <div
-                    style={{
-                      marginTop: '8px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      flexWrap: 'wrap',
-                    }}
-                  >
-                    <button
-                      className="btn-secondary"
-                      onClick={() => handleTestProviderConnection(provider.id)}
-                      disabled={
-                        !canTestProviderConnection(provider.id) ||
-                        providerTestStatus[provider.id]?.state === 'testing'
-                      }
-                      aria-busy={providerTestStatus[provider.id]?.state === 'testing'}
-                      aria-label={`Test connection to ${PROVIDER_LABELS[provider.id] ?? provider.id}`}
-                      style={{
-                        padding: '4px 10px',
-                        fontSize: '0.75rem',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                      }}
-                    >
-                      <Play size={11} aria-hidden="true" />
-                      {providerTestStatus[provider.id]?.state === 'testing'
-                        ? 'Testing…'
-                        : 'Test connection'}
-                    </button>
-                    {providerTestStatus[provider.id] && (
-                      <span
-                        role="status"
-                        aria-live="polite"
-                        className={
-                          providerTestStatus[provider.id]?.state === 'ok'
-                            ? 'pill pill-green'
-                            : providerTestStatus[provider.id]?.state === 'failed'
-                              ? 'pill pill-red'
-                              : 'pill pill-yellow'
-                        }
-                        style={{ fontSize: '0.72rem' }}
-                      >
-                        {providerTestStatus[provider.id]?.state === 'testing'
-                          ? 'Testing connection…'
-                          : providerTestStatus[provider.id]?.message}
-                      </span>
-                    )}
-                  </div>
-                )}
+                <button
+                  className={`btn-icon provider-toggle ${provider.enabled ? 'provider-toggle-on' : ''}`}
+                  onClick={() => handleToggleProvider(provider.id)}
+                  disabled={egressGated}
+                  title={egressGated ? CUSTOM_EGRESS_TOGGLE_HINT : undefined}
+                  aria-describedby={egressGated ? CUSTOM_EGRESS_NOTICE_ID : undefined}
+                  aria-label={
+                    egressGated
+                      ? `Enable ${PROVIDER_LABELS[provider.id]} — ${CUSTOM_EGRESS_TOGGLE_HINT}`
+                      : `${provider.enabled ? 'Disable' : 'Enable'} ${PROVIDER_LABELS[provider.id]}`
+                  }
+                >
+                  <Power size={16} />
+                </button>
               </div>
-
-              <button
-                className={`btn-icon provider-toggle ${provider.enabled ? 'provider-toggle-on' : ''}`}
-                onClick={() => handleToggleProvider(provider.id)}
-                disabled={egressGated}
-                title={egressGated ? CUSTOM_EGRESS_TOGGLE_HINT : undefined}
-                aria-describedby={egressGated ? CUSTOM_EGRESS_NOTICE_ID : undefined}
-                aria-label={
-                  egressGated
-                    ? `Enable ${PROVIDER_LABELS[provider.id]} — ${CUSTOM_EGRESS_TOGGLE_HINT}`
-                    : `${provider.enabled ? 'Disable' : 'Enable'} ${PROVIDER_LABELS[provider.id]}`
-                }
-              >
-                <Power size={16} />
-              </button>
-            </div>
             );
           })}
         </div>
@@ -1810,14 +1769,14 @@ export function Settings() {
               <option value="sales-script">Sales Script</option>
               <option value="custom">Custom Document</option>
             </select>
-            
+
             <div className="file-upload-wrapper" style={{ marginTop: '10px', marginBottom: '10px' }}>
-              <input 
-                type="file" 
-                id="doc-upload" 
-                accept=".pdf,.docx,.txt,.md,.json" 
-                onChange={handleFileUpload} 
-                style={{ display: 'none' }} 
+              <input
+                type="file"
+                id="doc-upload"
+                accept=".pdf,.docx,.txt,.md,.json"
+                onChange={handleFileUpload}
+                style={{ display: 'none' }}
               />
               <label htmlFor="doc-upload" className="btn-secondary" style={{ width: '100%', justifyContent: 'center', borderStyle: 'dashed' }}>
                 <Upload size={16} />
@@ -1834,9 +1793,9 @@ export function Settings() {
             />
             <div className="form-actions">
               <button className="btn-secondary" onClick={() => setShowAddDoc(false)}>Cancel</button>
-              <button 
-                className="btn-primary" 
-                onClick={() => handleAddDocument(newDocContent, newDocTitle)} 
+              <button
+                className="btn-primary"
+                onClick={() => handleAddDocument(newDocContent, newDocTitle)}
                 disabled={isUploading || !newDocContent.trim()}
               >
                 {isUploading ? <><Database size={14} className="animate-spin" /> Processing...</> : 'Save Document'}
@@ -1922,8 +1881,8 @@ export function Settings() {
             />
             <div style={{ marginTop: '15px', display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
               <button className="btn-secondary" onClick={() => setShowAddMode(false)}>Cancel</button>
-              <button 
-                className="btn-primary" 
+              <button
+                className="btn-primary"
                 onClick={handleSaveCustomMode}
                 disabled={!newModeLabel.trim() || !newModePrompt.trim()}
               >
