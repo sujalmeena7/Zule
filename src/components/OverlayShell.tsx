@@ -23,7 +23,6 @@ import { ZuleProvider } from '../context/ZuleContext';
 import { AuthProvider } from '../firebase/AuthContext';
 import { SubscriptionProvider } from '../context/SubscriptionContext';
 import { MotionConfig } from 'framer-motion';
-import { Toaster } from 'react-hot-toast';
 import { useZoneDetector } from '../overlay/useZoneDetector';
 import { useFocusTrap } from '../overlay/focusTrap';
 
@@ -118,17 +117,9 @@ export function OverlayShell() {
                 <FloatingCopilot />
               </ErrorBoundary>
             </div>
-            <Toaster
-              position="bottom-right"
-              toastOptions={{
-                style: {
-                  background: '#1e293b',
-                  color: '#f8fafc',
-                  border: '1px solid rgba(255, 255, 255, 0.1)',
-                  backdropFilter: 'blur(10px)',
-                },
-              }}
-            />
+            {/* Toasts are suppressed in the overlay — errors are logged to
+                console only. The overlay must never show transient UI that
+                could distract the user during a live session. */}
           </MotionConfig>
         </ZuleProvider>
       </SubscriptionProvider>
