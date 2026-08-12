@@ -108,12 +108,19 @@ export function describeZuleError(e: ZuleError): ToastSpec {
 
     // OCR_Worker ---------------------------------------------------------
     case 'ocr.worker-failed':
+      // Transient OCR errors are silently swallowed — the worker auto-restarts
+      // and the user doesn't need to know. Only surface it if OCR is fully
+      // disabled (3+ consecutive failures).
+      if (e.consecutiveFailures >= 3) {
+        return {
+          message: 'Screen text recognition failed repeatedly and has been disabled for this session.',
+          severity: 'alert',
+        };
+      }
       return {
-        message:
-          e.consecutiveFailures >= 3
-            ? 'Screen text recognition failed repeatedly and has been disabled for this session.'
-            : 'Screen text recognition hit a transient error and is restarting.',
+        message: '',
         severity: 'status',
+        silent: true,
       };
 
     // Vector_Index -------------------------------------------------------

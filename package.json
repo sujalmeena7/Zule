@@ -3,7 +3,7 @@
   "description": "Desktop Helper Service",
   "author": "Desktop Helper",
   "private": true,
-  "version": "1.5.1",
+  "version": "1.5.2",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
