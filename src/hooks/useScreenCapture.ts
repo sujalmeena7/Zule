@@ -17,7 +17,7 @@ import { pushToRingBuffer } from '../utils/ringBuffer';
 import { useZuleError } from './useZuleError';
 
 /** Maximum longest edge in pixels before passing to OCR. */
-const MAX_LONGEST_EDGE = 1280;
+const MAX_LONGEST_EDGE = 1920;
 
 /** Default Hamming distance threshold for skipping OCR (bits). */
 const DEFAULT_HASH_THRESHOLD = 5;
@@ -29,10 +29,10 @@ export const FRAME_READY_TIMEOUT_MS = 2000;
 const OCR_RING_BUFFER_MAX = 5;
 
 /** Default maximum byte length for keyframe JPEG output. */
-const DEFAULT_MAX_KEYFRAME_BYTES = 200_000;
+const DEFAULT_MAX_KEYFRAME_BYTES = 500_000;
 
 /** Default initial JPEG quality for async keyframe encoding. */
-const DEFAULT_INITIAL_QUALITY = 0.7;
+const DEFAULT_INITIAL_QUALITY = 0.85;
 
 /** A single OCR result stored in the ring buffer. */
 export interface OcrEntry {
