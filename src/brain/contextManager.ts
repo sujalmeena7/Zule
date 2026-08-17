@@ -230,7 +230,7 @@ export async function buildContextWindow(
     : '';
 
   const screenContext = screenText
-    ? `\n--- SCREEN CONTENT ---\n${screenText.slice(0, 1000)}\n--- END SCREEN ---`
+    ? `\n--- SCREEN CONTENT ---\n${screenText.slice(0, 4000)}\n--- END SCREEN ---`
     : '';
 
   const recentTranscript = transcript
