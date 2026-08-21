@@ -123,6 +123,25 @@ const electronAPI = {
   blurOverlay: (): void =>
     ipcRenderer.send('overlay-blur'),
 
+  /** Listen for keystrokes forwarded from the low-level keyboard hook.
+   *  Returns an unsubscribe function. */
+  onOverlayKey: (callback: (key: { type: string; char?: string }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, key: { type: string; char?: string }) =>
+      callback(key);
+    ipcRenderer.on('overlay-key', handler);
+    return () => ipcRenderer.removeListener('overlay-key', handler);
+  },
+
+  /** Capture the desktop using BitBlt (bypasses display affinity protection).
+   *  Returns base64 JPEG or null if unavailable. */
+  captureDesktopBitBlt: (): Promise<{ ok: boolean; base64?: string; reason?: string }> =>
+    ipcRenderer.invoke('capture-desktop-bitblt'),
+
+  /** Extract text from the foreground window using Windows UI Automation
+   *  (accessibility API). Bypasses display affinity — reads the UI tree directly. */
+  extractForegroundText: (): Promise<{ ok: boolean; text?: string; reason?: string }> =>
+    ipcRenderer.invoke('extract-foreground-text'),
+
   // ── Secure Storage (OS-backed encryption for provider API keys) ──────────
 
   /** Whether OS-level key encryption (safeStorage) is available on this machine. */

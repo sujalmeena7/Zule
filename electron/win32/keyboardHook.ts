@@ -71,6 +71,38 @@ let ctrlDown = false;
 let shiftDown = false;
 let altDown = false;
 
+// Auto-uninstall timer: if no keystroke is captured for 30s, assume the user
+// clicked away from the input and the blur event didn't fire.
+let idleTimer: ReturnType<typeof setTimeout> | null = null;
+const IDLE_TIMEOUT_MS = 30_000;
+
+function resetIdleTimer(): void {
+  if (idleTimer) clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    if (installed) {
+      console.log('[KeyboardHook] Auto-uninstalling after idle timeout');
+      // Can't call uninstall() directly (circular ref), so just unhook
+      if (hookHandle && user32Lib) {
+        try {
+          const unhookFn = user32Lib.func('bool UnhookWindowsHookEx(void *hhk)');
+          unhookFn(hookHandle);
+        } catch { /* best effort */ }
+      }
+      hookHandle = null;
+      targetWindow = null;
+      callNextHookExFn = null;
+      if (callbackRef && koffi) {
+        try { koffi.unregister(callbackRef); } catch { /* best effort */ }
+        callbackRef = null;
+      }
+      installed = false;
+      ctrlDown = false;
+      shiftDown = false;
+      altDown = false;
+    }
+  }, IDLE_TIMEOUT_MS);
+}
+
 // ── Lazy FFI Loading ─────────────────────────────────────────────────────────
 
 function ensureKoffi(): boolean {
@@ -200,53 +232,51 @@ function hookCallback(nCode: number, wParam: bigint | number, lParam: any): bigi
     return callNext();
   }
 
+  // Never intercept Ctrl+<key> shortcuts (Ctrl+C, Ctrl+V, Ctrl+A, Ctrl+X, etc.)
+  // These must always reach the foreground app. The overlay input only needs
+  // printable characters, backspace, enter, and arrow keys.
+  if (ctrlDown && !isUp) {
+    return callNext();
+  }
+
   // Update modifier tracking
   updateModifiers(vk, isUp);
 
-  // Forward to Electron's webContents
+  // Forward to Electron's webContents via IPC (not sendInputEvent).
+  // sendInputEvent requires DOM focus on the target element, which doesn't
+  // exist when the window is focusable: false. Instead, we send the keystroke
+  // as an IPC message that the renderer handles by updating React state directly.
   const keyCode = vkToKeyCode(vk);
   if (!keyCode) {
     return callNext();
   }
 
   try {
-    const modifiers = getModifiers();
-    const eventType = isUp ? 'keyUp' : 'keyDown';
-
-    targetWindow.webContents.sendInputEvent({
-      type: eventType,
-      keyCode,
-      modifiers,
-    } as Electron.KeyboardInputEvent);
-
-    // For key-down of printable characters, also send a 'char' event
-    // so Chromium's input handling processes it as text input.
-    if (!isUp && !ctrlDown && !altDown) {
-      let charValue = '';
-
-      // Single printable characters
-      if (keyCode.length === 1) {
-        charValue = shiftDown ? keyCode.toUpperCase() : keyCode;
+    if (!isUp) {
+      // Key down: determine what to send
+      if (keyCode === 'Backspace') {
+        targetWindow.webContents.send('overlay-key', { type: 'backspace' });
+      } else if (keyCode === 'Return') {
+        targetWindow.webContents.send('overlay-key', { type: 'submit' });
+      } else if (keyCode === 'Escape') {
+        targetWindow.webContents.send('overlay-key', { type: 'escape' });
+      } else if (keyCode.length === 1) {
+        // Printable character
+        const char = shiftDown ? keyCode.toUpperCase() : keyCode;
+        targetWindow.webContents.send('overlay-key', { type: 'char', char });
       } else if (keyCode === ' ') {
-        charValue = ' ';
+        targetWindow.webContents.send('overlay-key', { type: 'char', char: ' ' });
       }
-
-      if (charValue) {
-        targetWindow.webContents.sendInputEvent({
-          type: 'char',
-          keyCode: charValue,
-          modifiers,
-        } as Electron.KeyboardInputEvent);
-      }
+      // Ignore non-printable keys (arrows, F-keys, etc.) for text input
     }
   } catch (err: unknown) {
-    // Don't crash the hook on send errors
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`[KeyboardHook] sendInputEvent failed: ${msg}`);
+    console.warn(`[KeyboardHook] IPC send failed: ${msg}`);
     return callNext();
   }
 
   // Return 1 to consume the keystroke (prevent it from reaching the foreground app)
+  resetIdleTimer();
   return BigInt(1);
 }
 
@@ -318,6 +348,7 @@ export function createKeyboardHook(): KeyboardHook {
         ctrlDown = false;
         shiftDown = false;
         altDown = false;
+        resetIdleTimer();
         console.log('[KeyboardHook] Low-level keyboard hook installed');
         return true;
       } catch (err: unknown) {
@@ -329,6 +360,12 @@ export function createKeyboardHook(): KeyboardHook {
 
     uninstall(): void {
       if (!installed) return;
+
+      // Clear idle auto-uninstall timer
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
 
       try {
         if (hookHandle && user32Lib) {

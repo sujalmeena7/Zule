@@ -773,6 +773,83 @@ function registerIpcHandlers(): void {
     }));
   });
 
+  // ── BitBlt Desktop Capture (bypasses SetWindowDisplayAffinity) ──────────────
+  // Uses GetDC(NULL) + BitBlt which reads the composited framebuffer directly,
+  // ignoring WDA_EXCLUDEFROMCAPTURE. Falls back gracefully if FFI unavailable.
+  ipcMain.handle('capture-desktop-bitblt', async () => {
+    try {
+      const { captureDesktopAsBase64 } = await import('./win32/desktopCapture');
+      const overlayWin = overlayManager?.getWindow?.() ?? null;
+      const base64 = captureDesktopAsBase64(overlayWin);
+      return base64 ? { ok: true, base64 } : { ok: false, reason: 'capture-failed' };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, reason: msg };
+    }
+  });
+
+  // ── UI Automation Text Extraction (bypasses display affinity) ───────────────
+  // Uses Windows Accessibility API to read text directly from the foreground
+  // window's UI tree. Display affinity only blocks pixel capture, not
+  // programmatic access to UI elements. This is the same API screen readers use.
+  ipcMain.handle('extract-foreground-text', async () => {
+    if (process.platform !== 'win32') {
+      return { ok: false, reason: 'not-windows' };
+    }
+    try {
+      const { execFile } = await import('node:child_process');
+      const { promisify } = await import('node:util');
+      const execFileAsync = promisify(execFile);
+
+      const psScript = `
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class Win32FG {
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+}
+"@
+$hwnd = [Win32FG]::GetForegroundWindow()
+if ($hwnd -eq [IntPtr]::Zero) { Write-Output ""; exit }
+try {
+    $element = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+    if ($null -eq $element) { Write-Output ""; exit }
+    $condition = [System.Windows.Automation.Condition]::TrueCondition
+    $elements = $element.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
+    $texts = @()
+    foreach ($el in $elements) {
+        try {
+            $tp = $el.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern)
+            if ($null -ne $tp) { $t = $tp.DocumentRange.GetText(-1); if ($t -and $t.Trim().Length -gt 0) { $texts += $t.Trim() }; continue }
+        } catch {}
+        try {
+            $vp = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+            if ($null -ne $vp) { $v = $vp.Current.Value; if ($v -and $v.Trim().Length -gt 0) { $texts += $v.Trim() }; continue }
+        } catch {}
+        try { $n = $el.Current.Name; if ($n -and $n.Trim().Length -gt 0 -and $n.Length -lt 2000) { $texts += $n.Trim() } } catch {}
+    }
+    ($texts | Select-Object -Unique) -join [char]10
+} catch { Write-Output "" }
+`;
+
+      const { stdout } = await execFileAsync(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', psScript],
+        { timeout: 8000, maxBuffer: 1024 * 1024, windowsHide: true },
+      );
+
+      const text = stdout.trim();
+      return text.length > 0 ? { ok: true, text } : { ok: false, reason: 'no-text' };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[UIAutomation] Failed: ${msg}`);
+      return { ok: false, reason: msg };
+    }
+  });
+
   // ── Local Whisper transcription (runs natively in the main process) ────────
   // The renderer captures system-audio PCM and ships chunks here; onnxruntime
   // -node transcribes them. See electron/whisperService.ts for why inference is

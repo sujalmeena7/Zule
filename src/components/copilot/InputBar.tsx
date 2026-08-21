@@ -115,6 +115,36 @@ export function InputBar({
     return () => document.removeEventListener('mousedown', handleDocumentMouseDown);
   }, [inputRef]);
 
+  // Listen for IPC-based keystrokes from the low-level keyboard hook.
+  // Since the window is focusable: false, sendInputEvent doesn't work.
+  // Instead the hook sends keystrokes via IPC and we update React state directly.
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.electronAPI?.onOverlayKey) return;
+
+    const cleanup = window.electronAPI.onOverlayKey((key) => {
+      switch (key.type) {
+        case 'char':
+          if (key.char) {
+            onInputChange(inputTextRef.current + key.char);
+          }
+          break;
+        case 'backspace':
+          onInputChange(inputTextRef.current.slice(0, -1));
+          break;
+        case 'submit':
+          onSubmit();
+          // Uninstall hook after submit
+          window.electronAPI?.blurOverlay?.();
+          break;
+        case 'escape':
+          window.electronAPI?.blurOverlay?.();
+          break;
+      }
+    });
+
+    return cleanup;
+  }, [onInputChange, onSubmit]);
+
   // Stop whichever dictation engine is active and reset UI/host state.
   const stopDictation = () => {
     if (recognitionRef.current) {
@@ -140,9 +170,11 @@ export function InputBar({
 
     try {
       await bridge.whisperPreload?.({});
-    } catch {
-      notifyError({ kind: 'transcription.audio-capture' });
-      return false;
+    } catch (preloadErr: unknown) {
+      // Model download failed — log to console (toasts suppressed in overlay).
+      // Return true so we don't fall through to Web Speech which also fails.
+      console.warn('[InputBar] Whisper preload failed:', preloadErr);
+      return true;
     }
 
     const provider = new WhisperProvider({
@@ -189,7 +221,14 @@ export function InputBar({
     // Prefer local Whisper when the Electron bridge is present.
     if (await startWhisperDictation()) return;
 
-    // Browser fallback: Web Speech API.
+    // In Electron, Web Speech API never works (no Google cloud endpoint).
+    // Don't even attempt it — just log and return.
+    if (typeof window !== 'undefined' && window.electronAPI) {
+      console.warn('[InputBar] Whisper unavailable and Web Speech disabled in Electron');
+      return;
+    }
+
+    // Browser fallback: Web Speech API (web mode only).
     try {
       // @ts-ignore - SpeechRecognition is not fully typed
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;

@@ -79,6 +79,12 @@ export interface ElectronAPI {
   requestOverlayFocus?: () => void;
   /** Signal overlay input blur (Windows: uninstalls LL keyboard hook). */
   blurOverlay?: () => void;
+  /** Listen for keystrokes from the low-level keyboard hook (IPC-based input). */
+  onOverlayKey?: (callback: (key: { type: string; char?: string }) => void) => () => void;
+  /** Capture screen using BitBlt (bypasses display affinity / capture protection). */
+  captureDesktopBitBlt?: () => Promise<{ ok: boolean; base64?: string; reason?: string }>;
+  /** Extract text from foreground window via accessibility API (bypasses display affinity). */
+  extractForegroundText?: () => Promise<{ ok: boolean; text?: string; reason?: string }>;
 
   // Native Screen Capture (Phase 3)
   getDesktopSources: () => Promise<
