@@ -550,29 +550,59 @@ export function FloatingCopilot() {
 
       if (screenArmed) {
         if (isVisionAdapter) {
-          // Vision adapter: attempt to obtain keyframe. If successful, OCR is
-          // redundant — the model reads the image directly (Req 2.1).
-          try {
-            const keyframeResult = await getKeyframeAsyncRef.current();
-            if (keyframeResult) {
-              // Keyframe obtained — skip OCR (Req 2.1)
-              keyframeForContext = { mimeType: 'image/jpeg', base64: keyframeResult.base64 };
-              ocrSkippedForVision = true;
-              // Clear screen text so it's not redundantly sent alongside the image
-              currentScreenText = '';
-              // Emit telemetry for OCR skip (Req 9.3)
-              telemetry.emit({ kind: 'screen.ocrSkipped', reason: 'vision-adapter' });
-            } else {
-              // Keyframe encoding returned null — fall back to OCR (Req 2.3)
+          // Priority 1: UI Automation text extraction (bypasses display affinity completely).
+          // This reads the foreground window's accessibility tree directly — works even
+          // when the window has WDA_EXCLUDEFROMCAPTURE. Try this FIRST.
+          if (typeof window !== 'undefined' && window.electronAPI?.extractForegroundText) {
+            try {
+              const uia = await window.electronAPI.extractForegroundText();
+              if (uia.ok && uia.text && uia.text.length > 20) {
+                // Got meaningful text from the UI tree — use it as screen context
+                currentScreenText = uia.text;
+                screenTextRef.current = uia.text;
+                ocrSkippedForVision = true;
+                console.log(`[FloatingCopilot] UI Automation extracted ${uia.text.length} chars from foreground window`);
+              }
+            } catch { /* ignore, fall through to image capture */ }
+          }
+
+          // Priority 2: Native BitBlt capture (only if UI Automation didn't get text)
+          if (!currentScreenText) {
+            const useNativeCapture = typeof window !== 'undefined' && window.electronAPI?.captureDesktopBitBlt;
+            if (useNativeCapture) {
+              try {
+                const bitblt = await window.electronAPI!.captureDesktopBitBlt();
+                if (bitblt.ok && bitblt.base64) {
+                  keyframeForContext = { mimeType: 'image/jpeg', base64: bitblt.base64 };
+                  ocrSkippedForVision = true;
+                  currentScreenText = '';
+                  console.log('[FloatingCopilot] Using BitBlt native capture');
+                }
+              } catch (err) {
+                console.warn('[FloatingCopilot] BitBlt capture failed:', err);
+              }
+            }
+          }
+
+          // Priority 3: Standard getKeyframeAsync (web mode or if above methods fail)
+          if (!keyframeForContext && !currentScreenText) {
+            try {
+              const keyframeResult = await getKeyframeAsyncRef.current();
+              if (keyframeResult) {
+                keyframeForContext = { mimeType: 'image/jpeg', base64: keyframeResult.base64 };
+                ocrSkippedForVision = true;
+                currentScreenText = '';
+                telemetry.emit({ kind: 'screen.ocrSkipped', reason: 'vision-adapter' });
+              } else {
+                void captureTextNowRef.current().then((fresh) => {
+                  if (fresh) screenTextRef.current = fresh;
+                });
+              }
+            } catch {
               void captureTextNowRef.current().then((fresh) => {
                 if (fresh) screenTextRef.current = fresh;
               });
             }
-          } catch {
-            // Keyframe encoding threw — fall back to OCR (Req 2.3)
-            void captureTextNowRef.current().then((fresh) => {
-              if (fresh) screenTextRef.current = fresh;
-            });
           }
         } else {
           // Text_Only_Adapter: always obtain Screen_Text via OCR (Req 2.2, 2.4).
