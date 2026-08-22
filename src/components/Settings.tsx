@@ -1725,7 +1725,6 @@ export function Settings() {
             className="btn-primary"
             onClick={handleSaveProviders}
             disabled={providersSaving}
-            style={{ padding: '8px 20px', fontSize: '0.82rem' }}
           >
             {providersSaving ? 'Saving...' : 'Save Provider Config'}
           </button>
@@ -2401,7 +2400,6 @@ export function Settings() {
               checkForUpdate();
             }}
             disabled={updateState.status === 'checking' || updateState.status === 'downloading'}
-            style={{ padding: '8px 20px', fontSize: '0.82rem' }}
           >
             {updateState.status === 'checking' ? 'Checking...' : 'Check for updates'}
           </button>
