@@ -4,7 +4,7 @@
 // ============================================
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { ArrowLeft, Sparkles } from 'lucide-react';
+import { ArrowLeft, Sparkles, Copy } from 'lucide-react';
 import { useZule } from '../context/ZuleContext';
 import { useAuth } from '../firebase/AuthContext';
 import { useTranscription } from '../hooks/useTranscription';
@@ -537,7 +537,7 @@ export function FloatingCopilot() {
       // path (violating Req 1.3). Instead we use whatever text is already
       // available and kick off a fire-and-forget OCR pass that will update
       // screenTextRef for the NEXT request.
-      const screenArmed = isCapturingRef.current && sendScreenKeyframeRef.current;
+      const screenArmed = sendScreenKeyframeRef.current;
       let currentScreenText = screenTextRef.current;
 
       // Vision adapter OCR skip logic (Req 2.1, 2.2, 2.3, 2.4):
@@ -864,53 +864,37 @@ export function FloatingCopilot() {
     try {
       const isActive = screen.isCapturing && sendScreenKeyframeRef.current;
       if (isActive) {
-        // Toggle OFF: stop the capture and disarm the flag. We don't
-        // fire an AI request on disable — the user just wanted to
-        // detach the screen, not ask another question.
+        // Toggle OFF
         screen.stopCapture();
         sendScreenKeyframeRef.current = false;
         setSendScreenKeyframe(false);
         void knowledgeBase.setSetting('sendScreenKeyframe', false);
-        toast.success('Screen detached');
         return;
       }
-      // Toggle ON: start capture if not already running, arm the flag,
-      // then immediately fire an AI request with the screen as context.
-      if (!screen.isCapturing) {
-        await screen.startCapture();
-        // Warm OCR worker non-blocking on session start (Req 3.1).
-        // This ensures the first OCR pass after attach doesn't pay the cold-
-        // start penalty (dynamic import + createWorker + language pack load).
-        void warmOcrWorker();
-        toast.success('Screen attached');
-      } else {
-        toast.success('Using current screen capture');
-      }
+
+      // Toggle ON: arm the flag IMMEDIATELY for instant visual feedback.
+      // The actual capture (BitBlt/UI Automation/getDisplayMedia) happens
+      // lazily when triggerAI runs — not here.
       sendScreenKeyframeRef.current = true;
       setSendScreenKeyframe(true);
       void knowledgeBase.setSetting('sendScreenKeyframe', true);
 
-      // Wait for the video element to have a frame ready for capture.
-      // startCapture() resolves after play() but the video might not have
-      // decoded its first frame yet. Poll briefly (up to 2s) so the
-      // keyframe capture doesn't return null.
-      const video = screen.previewRef?.current;
-      if (video && video.readyState < video.HAVE_ENOUGH_DATA) {
-        await new Promise<void>((resolve) => {
-          const onReady = () => { resolve(); video.removeEventListener('loadeddata', onReady); };
-          video.addEventListener('loadeddata', onReady);
-          // Safety timeout so we don't hang forever
-          setTimeout(() => { video.removeEventListener('loadeddata', onReady); resolve(); }, 2000);
+      // Start the video capture in the background (non-blocking).
+      // If it fails (e.g. user cancels permission), we still have
+      // BitBlt and UI Automation as fallbacks.
+      if (!screen.isCapturing) {
+        screen.startCapture().then(() => {
+          void warmOcrWorker();
+        }).catch(() => {
+          // getDisplayMedia failed/cancelled — that's fine, we have fallbacks
+          console.log('[FloatingCopilot] getDisplayMedia unavailable, using fallback capture');
         });
       }
 
-      // Note: the OCR pass itself happens in triggerAI, which refreshes screen
-      // text for every request path rather than just this button.
-
-      // Echo what we're asking so the user sees feedback.
+      // Fire the AI request immediately — triggerAI handles capture internally
+      // via BitBlt/UI Automation/keyframe. No need to wait for video frame.
       const query = inputText.trim();
-      const echoed = query || 'What do you see on my screen?';
-      // Append user message to chat history
+      const echoed = query || 'Answer the question on my screen';
       setChatHistory(prev => [...prev, { id: generateId(), role: 'user', text: echoed }]);
       if (query) setInputText('');
       await triggerAIRef.current(query || undefined);
@@ -1283,6 +1267,16 @@ export function FloatingCopilot() {
                       {msg.text}
                     </ReactMarkdown>
                   </div>
+                  <button
+                    className="copy-response-btn"
+                    onClick={() => {
+                      navigator.clipboard.writeText(msg.text);
+                    }}
+                    aria-label="Copy response"
+                    title="Copy to clipboard"
+                  >
+                    <Copy size={14} />
+                  </button>
                 </div>
               )
             ))}
