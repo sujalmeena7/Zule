@@ -39,6 +39,7 @@ import { ControlCapsule } from './copilot/ControlCapsule';
 import { SuggestionCard } from './copilot/SuggestionCard';
 import { QuickActions } from './copilot/QuickActions';
 import { InputBar } from './copilot/InputBar';
+import { PhoneCapture } from './copilot/PhoneCapture';
 import { useOverlayMode } from '../overlay/useOverlayMode';
 import { UpdateIndicator } from './UpdateIndicator';
 import { useAutoUpdate } from '../hooks/useAutoUpdate';
@@ -267,6 +268,12 @@ export function FloatingCopilot() {
   // Settings: whether to send a downscaled keyframe when the adapter supports images (Req 23.3)
   const [sendScreenKeyframe, setSendScreenKeyframe] = useState(false);
 
+  // Phone Camera Input state
+  const [phoneServerActive, setPhoneServerActive] = useState(false);
+  const [phoneServerUrl, setPhoneServerUrl] = useState<string | null>(null);
+  const [phoneModalOpen, setPhoneModalOpen] = useState(false);
+  const [lastPhoneImageTime, setLastPhoneImageTime] = useState<number | null>(null);
+
   // Refs
   const startTimeRef = useRef(Date.now());
   const questionDetectorRef = useRef(new QuestionDetectorStream({ debounceMs: 1500 }));
@@ -315,6 +322,49 @@ export function FloatingCopilot() {
   latestFrameHashRef.current = screen.latestFrameHash;
   // Ref to hold the latest triggerAI so effects can call it without depending on it
   const triggerAIRef = useRef<(query?: string) => Promise<void>>(async () => {});
+  // Phone Camera Input: when set, triggerAI uses this as keyframeForContext
+  // instead of screen capture. Cleared after consumption.
+  const phoneImageRef = useRef<{ base64: string; mimeType: string } | null>(null);
+  const inputTextRef = useRef(inputText);
+  inputTextRef.current = inputText;
+
+  // Phone Camera Input: listen for photos sent from the phone browser
+  useEffect(() => {
+    if (!isElectronEnv || !electronAPI?.onPhoneImage) return;
+
+    const cleanup = electronAPI.onPhoneImage((data) => {
+      console.log('[FloatingCopilot] Received photo from phone:', data.mimeType);
+      phoneImageRef.current = data;
+      setLastPhoneImageTime(Date.now());
+
+      // Auto-dismiss the QR code modal so the user immediately sees the streaming answer
+      setPhoneModalOpen(false);
+
+      // Auto-expand the overlay to maximized mode (480x680) so the middle answer area is fully visible
+      if (setOverlayMode) {
+        setOverlayMode('maximized');
+      }
+      setIsHidden(false);
+
+      // Append user message to chat history
+      const query = inputTextRef.current.trim() || 'Answer the question in this photo';
+      setChatHistory((prev) => [
+        ...prev,
+        { id: generateId(), role: 'user', text: query },
+      ]);
+      if (inputTextRef.current.trim()) {
+        setInputText('');
+      }
+
+      // Arm screen keyframe flag so triggerAI includes image context
+      sendScreenKeyframeRef.current = true;
+
+      // Fire AI request immediately
+      void triggerAIRef.current(query);
+    });
+
+    return cleanup;
+  }, [isElectronEnv, electronAPI, setOverlayMode]);
 
   // Timer & Duration Limit Check
   useEffect(() => {
@@ -548,7 +598,14 @@ export function FloatingCopilot() {
       let keyframeForContext: { mimeType: string; base64: string } | null = null;
       let ocrSkippedForVision = false;
 
-      if (screenArmed) {
+      // Phone Camera Input: if a phone image is pending, use it directly
+      // as the keyframe and skip all screen capture paths.
+      if (phoneImageRef.current) {
+        keyframeForContext = phoneImageRef.current;
+        phoneImageRef.current = null; // consume once
+        ocrSkippedForVision = true;
+        currentScreenText = '';
+      } else if (screenArmed) {
         if (isVisionAdapter) {
           // Priority 1: UI Automation text extraction (bypasses display affinity completely).
           // This reads the foreground window's accessibility tree directly — works even
@@ -907,6 +964,43 @@ export function FloatingCopilot() {
       );
     }
   }, [screen, inputText]);
+
+  // Phone Camera Input toggle handler
+  // Click once -> Starts server & opens QR overlay (turns button active).
+  // Click again when active -> Disables server & closes overlay (turns button inactive).
+  const handleTogglePhoneModal = useCallback(async () => {
+    if (phoneServerActive) {
+      // Toggle OFF / Disable
+      if (electronAPI?.stopPhoneServer) {
+        try {
+          await electronAPI.stopPhoneServer();
+        } catch (err) {
+          console.warn('[FloatingCopilot] Failed to stop phone server:', err);
+        }
+      }
+      setPhoneServerActive(false);
+      setPhoneModalOpen(false);
+      phoneImageRef.current = null;
+      return;
+    }
+
+    // Toggle ON / Enable
+    if (isCompact && setOverlayMode) {
+      setOverlayMode('expanded');
+    }
+
+    if (electronAPI?.startPhoneServer) {
+      try {
+        const info = await electronAPI.startPhoneServer();
+        setPhoneServerUrl(info.qrUrl);
+        setPhoneServerActive(true);
+        setPhoneModalOpen(true);
+      } catch (err) {
+        console.error('[FloatingCopilot] Failed to start phone server:', err);
+        toast.error('Failed to start phone camera server');
+      }
+    }
+  }, [phoneServerActive, electronAPI, isCompact, setOverlayMode]);
 
   // Stop the in-flight AI response mid-stream so the user can immediately ask
   // something else. Reuses the same abort + generation-counter machinery as the
@@ -1270,10 +1364,28 @@ export function FloatingCopilot() {
                   <button
                     className="copy-response-btn"
                     onClick={() => {
-                      navigator.clipboard.writeText(msg.text);
+                      let copied = false;
+                      try {
+                        if (navigator.clipboard && navigator.clipboard.writeText) {
+                          navigator.clipboard.writeText(msg.text);
+                          copied = true;
+                        }
+                      } catch {}
+                      if (!copied) {
+                        try {
+                          const ta = document.createElement('textarea');
+                          ta.value = msg.text;
+                          ta.style.position = 'fixed';
+                          ta.style.left = '-9999px';
+                          document.body.appendChild(ta);
+                          ta.select();
+                          document.execCommand('copy');
+                          document.body.removeChild(ta);
+                        } catch {}
+                      }
+                      toast.success('Copied to clipboard', { duration: 1500 });
                     }}
                     aria-label="Copy response"
-                    title="Copy to clipboard"
                   >
                     <Copy size={14} />
                   </button>
@@ -1347,6 +1459,8 @@ export function FloatingCopilot() {
             inputRef={inputRef}
             onUseScreen={handleUseScreen}
             isScreenActive={screen.isCapturing && sendScreenKeyframe}
+            onPhoneCapture={handleTogglePhoneModal}
+            isPhoneActive={phoneServerActive || phoneModalOpen}
             onDictationStart={() => {
               // Pause the main mic so the two SpeechRecognition instances on
               // the same mic don't collide and kill the main pipeline.
@@ -1360,6 +1474,34 @@ export function FloatingCopilot() {
             isGenerating={isLoading || isStreaming}
             onStopGeneration={handleStopGeneration}
           />
+
+          {/* Phone Camera Capture Overlay — scoped cleanly inside suggestion-card */}
+          {phoneModalOpen && (
+            <PhoneCapture
+              isOpen={phoneModalOpen}
+              onClose={() => setPhoneModalOpen(false)}
+              serverUrl={phoneServerUrl}
+              isServerActive={phoneServerActive}
+              onStartServer={async () => {
+                if (electronAPI?.startPhoneServer) {
+                  try {
+                    const info = await electronAPI.startPhoneServer();
+                    setPhoneServerUrl(info.qrUrl);
+                    setPhoneServerActive(true);
+                  } catch (err) {
+                    toast.error('Failed to start phone server');
+                  }
+                }
+              }}
+              onStopServer={async () => {
+                if (electronAPI?.stopPhoneServer) {
+                  await electronAPI.stopPhoneServer();
+                  setPhoneServerActive(false);
+                }
+              }}
+              lastImageTime={lastPhoneImageTime}
+            />
+          )}
         </div>
       </div>
     </div>

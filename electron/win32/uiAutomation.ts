@@ -91,7 +91,7 @@ try {
 
     # Output unique texts joined by newlines
     $unique = $texts | Select-Object -Unique
-    $result = $unique -join "`n"
+    $result = $unique -join [Environment]::NewLine
     Write-Output $result
 } catch {
     Write-Output ""

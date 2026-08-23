@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Zule AI — Phone Camera</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #090d16;
+      color: #f8fafc;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      padding: 20px 16px;
+      overflow-x: hidden;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 440px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 18px;
+    }
+
+    .header {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 16px;
+      backdrop-filter: blur(12px);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      font-size: 1.05rem;
+      letter-spacing: -0.02em;
+    }
+
+    .brand-logo {
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: rgba(16, 185, 129, 0.12);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      color: #34d399;
+    }
+
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #10b981;
+      box-shadow: 0 0 8px rgba(16, 185, 129, 0.8);
+      animation: pulse 2s infinite ease-in-out;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(0.85); }
+    }
+
+    .preview-card {
+      width: 100%;
+      min-height: 280px;
+      background: rgba(15, 23, 42, 0.6);
+      border: 1.5px dashed rgba(255, 255, 255, 0.12);
+      border-radius: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      position: relative;
+      transition: all 0.25s ease;
+    }
+
+    .preview-card.has-image {
+      border-style: solid;
+      border-color: rgba(59, 130, 246, 0.4);
+      background: #020617;
+    }
+
+    .preview-image {
+      width: 100%;
+      height: auto;
+      max-height: 380px;
+      object-fit: contain;
+      display: none;
+      border-radius: 18px;
+    }
+
+    .placeholder-view {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      padding: 30px 20px;
+      text-align: center;
+      color: #94a3b8;
+    }
+
+    .placeholder-icon {
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      background: rgba(59, 130, 246, 0.12);
+      border: 1px solid rgba(59, 130, 246, 0.25);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #60a5fa;
+      font-size: 26px;
+    }
+
+    .placeholder-text {
+      font-size: 0.95rem;
+      font-weight: 500;
+      color: #cbd5e1;
+    }
+
+    .placeholder-sub {
+      font-size: 0.8rem;
+      color: #64748b;
+    }
+
+    .controls {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .btn-capture {
+      width: 100%;
+      padding: 16px;
+      border-radius: 16px;
+      border: none;
+      background: linear-gradient(135deg, #2563eb, #7c3aed);
+      color: #ffffff;
+      font-size: 1.05rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      box-shadow: 0 4px 20px rgba(37, 99, 235, 0.35);
+      transition: transform 0.1s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+    }
+
+    .btn-capture:active {
+      transform: scale(0.98);
+      box-shadow: 0 2px 10px rgba(37, 99, 235, 0.25);
+    }
+
+    .btn-capture:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .btn-send {
+      width: 100%;
+      padding: 14px;
+      border-radius: 14px;
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      background: rgba(59, 130, 246, 0.15);
+      color: #93c5fd;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: all 0.2s ease;
+    }
+
+    .btn-send:active {
+      background: rgba(59, 130, 246, 0.25);
+      transform: scale(0.98);
+    }
+
+    .btn-send:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .options-row {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 12px;
+      font-size: 0.85rem;
+      color: #94a3b8;
+    }
+
+    .toggle-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+    }
+
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 40px;
+      height: 22px;
+    }
+
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: rgba(255, 255, 255, 0.12);
+      transition: 0.25s ease;
+      border-radius: 999px;
+    }
+
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 16px;
+      width: 16px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: 0.25s ease;
+      border-radius: 50%;
+    }
+
+    input:checked + .slider {
+      background-color: #2563eb;
+    }
+
+    input:checked + .slider:before {
+      transform: translateX(18px);
+    }
+
+    .status-toast {
+      width: 100%;
+      padding: 12px 16px;
+      border-radius: 12px;
+      font-size: 0.85rem;
+      font-weight: 500;
+      text-align: center;
+      display: none;
+      animation: fadeIn 0.2s ease;
+    }
+
+    .status-toast.info {
+      background: rgba(59, 130, 246, 0.12);
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      color: #93c5fd;
+      display: block;
+    }
+
+    .status-toast.success {
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.35);
+      color: #6ee7b7;
+      display: block;
+    }
+
+    .status-toast.error {
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      color: #fca5a5;
+      display: block;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .footer-note {
+      font-size: 0.75rem;
+      color: #475569;
+      text-align: center;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="brand">
+        <div class="brand-logo">Z</div>
+        <span>Zule Copilot</span>
+      </div>
+      <div class="status-badge">
+        <span class="status-dot"></span>
+        <span id="headerStatus">Connected</span>
+      </div>
+    </div>
+
+    <div class="preview-card" id="previewCard">
+      <div class="placeholder-view" id="placeholderView">
+        <div class="placeholder-icon">📸</div>
+        <div class="placeholder-text">Point camera at screen or notes</div>
+        <div class="placeholder-sub">Tap button below to snap a photo</div>
+      </div>
+      <img id="previewImg" class="preview-image" alt="Captured question preview" />
+    </div>
+
+    <div id="statusToast" class="status-toast"></div>
+
+    <div class="controls">
+      <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display: none;" />
+      
+      <button class="btn-capture" id="btnCapture">
+        <span>📸 Take Photo</span>
+      </button>
+
+      <button class="btn-send" id="btnSend">
+        <span>⚡ Send to Zule</span>
+      </button>
+
+      <div class="options-row">
+        <span>Auto-send on capture</span>
+        <label class="switch">
+          <input type="checkbox" id="autoSendToggle" checked />
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer-note">
+    Direct LAN connection • Photos are processed in real time
+  </div>
+
+  <script>
+    const cameraInput = document.getElementById('cameraInput');
+    const btnCapture = document.getElementById('btnCapture');
+    const btnSend = document.getElementById('btnSend');
+    const previewCard = document.getElementById('previewCard');
+    const placeholderView = document.getElementById('placeholderView');
+    const previewImg = document.getElementById('previewImg');
+    const autoSendToggle = document.getElementById('autoSendToggle');
+    const statusToast = document.getElementById('statusToast');
+
+    let currentBlob = null;
+    let isUploading = false;
+
+    function showStatus(text, type = 'info') {
+      statusToast.className = 'status-toast ' + type;
+      statusToast.textContent = text;
+    }
+
+    function hideStatus() {
+      statusToast.className = 'status-toast';
+      statusToast.textContent = '';
+    }
+
+    btnCapture.addEventListener('click', () => {
+      cameraInput.click();
+    });
+
+    cameraInput.addEventListener('change', async (event) => {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+
+      showStatus('Resizing image for fast transmission...', 'info');
+
+      try {
+        currentBlob = await resizeImageToBlob(file, 1920, 0.85);
+
+        // Show preview
+        const objectUrl = URL.createObjectURL(currentBlob);
+        previewImg.src = objectUrl;
+        previewImg.style.display = 'block';
+        placeholderView.style.display = 'none';
+        previewCard.classList.add('has-image');
+
+        if (autoSendToggle.checked) {
+          await uploadImage(currentBlob);
+        } else {
+          btnSend.style.display = 'flex';
+          showStatus('Photo captured. Tap "Send to Zule" to answer.', 'info');
+        }
+      } catch (err) {
+        console.error(err);
+        showStatus('Error processing photo. Try again.', 'error');
+      } finally {
+        cameraInput.value = '';
+      }
+    });
+
+    btnSend.addEventListener('click', async () => {
+      if (!currentBlob || isUploading) return;
+      await uploadImage(currentBlob);
+    });
+
+    async function uploadImage(blob) {
+      isUploading = true;
+      btnCapture.disabled = true;
+      btnSend.disabled = true;
+      showStatus('Sending photo to desktop overlay...', 'info');
+
+      try {
+        const response = await fetch('/upload', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'image/jpeg'
+          },
+          body: blob
+        });
+
+        if (!response.ok) {
+          throw new Error('Server returned ' + response.status);
+        }
+
+        if (navigator.vibrate) {
+          try { navigator.vibrate([40, 30, 40]); } catch (e) {}
+        }
+
+        showStatus('✓ Sent! Zule AI is answering on your desktop.', 'success');
+        btnSend.style.display = 'none';
+      } catch (err) {
+        console.error('Upload failed:', err);
+        showStatus('Failed to send photo to Zule. Check Wi-Fi connection.', 'error');
+        btnSend.style.display = 'flex';
+      } finally {
+        isUploading = false;
+        btnCapture.disabled = false;
+        btnSend.disabled = false;
+      }
+    }
+
+    function resizeImageToBlob(file, maxDimension, quality) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        const reader = new FileReader();
+
+        reader.onload = (e) => {
+          img.src = e.target.result;
+        };
+        reader.onerror = reject;
+
+        img.onload = () => {
+          let width = img.width;
+          let height = img.height;
+
+          if (width > maxDimension || height > maxDimension) {
+            if (width > height) {
+              height = Math.round((height * maxDimension) / width);
+              width = maxDimension;
+            } else {
+              width = Math.round((width * maxDimension) / height);
+              height = maxDimension;
+            }
+          }
+
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+
+          canvas.toBlob((blob) => {
+            if (blob) resolve(blob);
+            else reject(new Error('Canvas toBlob failed'));
+          }, 'image/jpeg', quality);
+        };
+
+        img.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+  </script>
+</body>
+</html>

@@ -305,6 +305,28 @@ const electronAPI = {
     ipcRenderer.on('update:state', handler);
     return () => ipcRenderer.removeListener('update:state', handler);
   },
+
+  // ── Phone Camera Input (LAN server) ───────────────────────────────────────
+
+  /** Start the local phone camera HTTP server and get connection info with QR URL. */
+  startPhoneServer: (): Promise<{ port: number; localIp: string; qrUrl: string }> =>
+    ipcRenderer.invoke('phone-server-start'),
+
+  /** Stop the local phone camera HTTP server. */
+  stopPhoneServer: (): Promise<void> =>
+    ipcRenderer.invoke('phone-server-stop'),
+
+  /** Listen for photos sent from the phone browser. */
+  onPhoneImage: (
+    callback: (data: { base64: string; mimeType: string }) => void,
+  ): (() => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      data: { base64: string; mimeType: string },
+    ) => callback(data);
+    ipcRenderer.on('phone-image-received', handler);
+    return () => ipcRenderer.removeListener('phone-image-received', handler);
+  },
 };
 
 // Expose the API to the renderer's window object
