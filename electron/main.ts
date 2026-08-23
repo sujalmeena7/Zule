@@ -129,6 +129,7 @@ app.commandLine.appendSwitch('disable-renderer-accessibility');
 let mainWindow: BrowserWindowType | null = null;
 let overlayManager: OverlayManager | null = null;
 let appTray: any = null;
+let phoneServerModule: typeof import('./phoneServer') | null = null;
 
 // ── IPC Fan-Out: Auto-Update State ───────────────────────────────────────────
 //
@@ -657,6 +658,11 @@ function registerIpcHandlers(): void {
   ipcMain.handle('stop-overlay', () => {
     if (!overlayManager) return false;
     overlayManager.destroy();
+    try {
+      phoneServerModule?.stopPhoneServer();
+    } catch (err) {
+      console.warn('[main] Failed to stop phone server on overlay stop:', err);
+    }
     const win = mainWindow;
     if (win && !win.isDestroyed()) {
       win.show();
@@ -1041,6 +1047,34 @@ function registerIpcHandlers(): void {
     const service = autoUpdateServiceModule.getAutoUpdateService();
     service.deferInstall();
   });
+
+  // ── Phone Camera Input IPC Handlers ─────────────────────────────────────
+  ipcMain.handle('phone-server-start', async () => {
+    try {
+      if (!phoneServerModule) {
+        phoneServerModule = await import('./phoneServer');
+        // Forward received images ONLY to the overlay window (where FloatingCopilot lives)
+        phoneServerModule.onPhoneImage((data) => {
+          const overlayWin = overlayManager?.getWindow();
+          if (overlayWin && !overlayWin.isDestroyed()) {
+            overlayWin.webContents.send('phone-image-received', data);
+          }
+        });
+      }
+      return await phoneServerModule.startPhoneServer();
+    } catch (err) {
+      console.error('[main] phone-server-start failed:', err);
+      throw err;
+    }
+  });
+
+  ipcMain.handle('phone-server-stop', async () => {
+    try {
+      phoneServerModule?.stopPhoneServer();
+    } catch (err) {
+      console.warn('[main] phone-server-stop failed:', err);
+    }
+  });
 }
 
 // ── App Lifecycle ────────────────────────────────────────────────────────────
@@ -1172,6 +1206,15 @@ app.on('before-quit', () => {
           err instanceof Error ? err.message : String(err)
         }`,
       );
+    }
+  }
+
+  // Stop phone capture HTTP server if running
+  if (phoneServerModule?.isPhoneServerRunning()) {
+    try {
+      phoneServerModule.stopPhoneServer();
+    } catch (err) {
+      console.warn('[main] phoneServer shutdown failed:', err);
     }
   }
 

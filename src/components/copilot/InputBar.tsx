@@ -3,7 +3,7 @@
 // ============================================
 
 import { useState, useRef, useEffect, type RefObject } from 'react';
-import { Zap, MoreHorizontal, Send, Mic, MicOff, Image as ImageIcon, Square } from 'lucide-react';
+import { Zap, MoreHorizontal, Send, Mic, MicOff, Image as ImageIcon, Square, Smartphone } from 'lucide-react';
 import { useZuleError } from '../../hooks/useZuleError';
 import { WhisperProvider } from '../../brain/transcription/whisper';
 import type { TranscriptionLine } from '../../types/transcription';
@@ -22,6 +22,11 @@ interface InputBarProps {
   /** Optional: whether a screen capture session is currently active.
    *  When true, the Use Screen button shows an "active" state. */
   isScreenActive?: boolean;
+  /** Optional: handler for the "Phone" camera button. Opens the QR code
+   *  modal to connect a smartphone camera over local Wi-Fi. */
+  onPhoneCapture?: () => void;
+  /** Optional: whether the phone capture server / modal is active. */
+  isPhoneActive?: boolean;
   /** Optional: called when in-bar voice dictation starts. The host pauses the
    *  main mic pipeline so the two SpeechRecognition instances don't collide. */
   onDictationStart?: () => void;
@@ -44,6 +49,8 @@ export function InputBar({
   inputRef,
   onUseScreen,
   isScreenActive,
+  onPhoneCapture,
+  isPhoneActive,
   onDictationStart,
   onDictationEnd,
   isGenerating,
@@ -332,6 +339,17 @@ export function InputBar({
             >
               <ImageIcon size={12} />
               <span>Use Screen</span>
+            </button>
+          )}
+          {onPhoneCapture && (
+            <button
+              className={`use-screen-btn ${isPhoneActive ? 'is-active' : ''}`}
+              onClick={onPhoneCapture}
+              aria-label="Send photo from phone"
+              aria-pressed={isPhoneActive}
+            >
+              <Smartphone size={12} />
+              <span>Phone</span>
             </button>
           )}
           <span className="smart-badge">

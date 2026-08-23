@@ -5014,9 +5014,40 @@ Tested user's Alibaba Model Studio API key (`sk-ws-H.DMLDPEM...`) against `https
 3. **Zule configuration**: Custom (OpenAI-compatible) provider with Base URL `https://ws-086qa1y48tmupvyb.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` and Model ID `qwen3-vl-32b-thinking` (or `qwen3-vl-235b-a22b-thinking`).
 6. **Live Verification**: User configured `qwen3-vl-32b-thinking` and `qwen3-vl-235b-a22b-thinking`. Live Zule execution log confirmed: `[Router] Adapters in order: custom,anthropic,gemini...` and `[Router] ✅ Adapter custom succeeded`.
 
+---
 
+## Phone Camera Input Feature Implementation
 
+Implemented the Phone Camera Input system allowing users to snap photos of their screen or physical notes using their smartphone camera and send them directly over local Wi-Fi to the Zule desktop overlay, bypassing software screen capture restrictions.
 
+**Main Components Built:**
+1. **`electron/phoneServer.ts` & `electron/phonePage.html`**:
+   - Lightweight HTTP server in the Electron main process listening on `0.0.0.0:9473` (with dynamic fallback up to `9483`).
+   - Serves an embedded, responsive mobile web app on `GET /` with rear-camera capture, client-side canvas resize to max 1920px JPEG, live preview, auto-send toggle, and haptic feedback.
+   - Handles `POST /upload` with raw JPEG stream up to 5MB, converts to base64, and broadcasts via `onPhoneImage` listener.
+   - Stops cleanly when sessions end or on app quit.
 
+2. **IPC Integration (`electron/main.ts` & `electron/preload.ts`)**:
+   - `phone-server-start` -> lazily imports `phoneServer.ts`, starts the server, forwards incoming images to `overlayManager.getWindow()`.
+   - `phone-server-stop` -> stops the server.
+   - Cleanup wired into both `stop-overlay` and `before-quit`.
+   - Exposed `startPhoneServer`, `stopPhoneServer`, `onPhoneImage` in preload bridge.
 
+3. **Renderer & UI Components**:
+   - `src/types/electron.d.ts`: Added types for `startPhoneServer`, `stopPhoneServer`, and `onPhoneImage`.
+   - `src/components/copilot/PhoneCapture.tsx` & `.css`: QR code popup rendered using `qrcode` SVG output, copyable LAN URL, live pulsing connection status, step instructions, and Windows Firewall tip.
+   - `src/components/copilot/InputBar.tsx`: Added Phone button with `Smartphone` icon next to "Use Screen".
+   - `src/components/FloatingCopilot.tsx`: Added `phoneImageRef` pattern that sets `keyframeForContext` and skips screen capture when a phone photo arrives, dispatches AI vision query, and updates chat history.
+
+4. **Testing & Verification**:
+   - Unit tests in `electron/__tests__/phoneServer.test.ts` (6/6 passed).
+   - Component tests in `src/components/__tests__/PhoneCapture.test.tsx` (4/4 passed).
+   - Full TypeScript compile clean: `npx tsc --noEmit -p tsconfig.json` (exit 0).
+
+5. **UI/UX Refinements (Card Overlay Integration)**:
+   - Scoped `PhoneCapture` inside `.suggestion-card` (`position: absolute; inset: 0`) so it seamlessly overlays the card with matching glassmorphism and rounded corners instead of an awkward detached floating panel.
+   - Enhanced QR Code rendering with a sharp, high-contrast white card container (`#090d16` dark modules) to eliminate optical scan moire / artifacts.
+   - Auto-dismisses completely upon receiving a photo, auto-expanding the overlay to `maximized` (480x680) so the entire answer is immediately visible.
+   - Added two-way toggle on the "Phone" toolbar button: click once to start/open, click again to stop/disable with glowing active state.
+   - Removed all native `title="..."` tooltips on copy buttons and Phone toolbar button, adding robust textarea fallback for clipboard copying.
 

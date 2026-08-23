@@ -13,12 +13,26 @@ import react from '@vitejs/plugin-react'
 import electron from 'vite-plugin-electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import fs from 'node:fs'
 import { copyVendorAssets } from './scripts/copy-vendor.mjs'
 import { fetchModels } from './scripts/fetch-models.mjs'
 
 // ESM does not provide __dirname; reconstruct from import.meta.url so
 // the absolute alias paths below resolve regardless of cwd.
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
+function copyPhonePage(): void {
+  try {
+    const src = path.resolve(__dirname, 'electron/phonePage.html')
+    const dest = path.resolve(__dirname, 'dist-electron/phonePage.html')
+    if (fs.existsSync(src)) {
+      fs.mkdirSync(path.dirname(dest), { recursive: true })
+      fs.copyFileSync(src, dest)
+    }
+  } catch (err) {
+    console.warn('[vite.electron] failed to copy phonePage.html:', err)
+  }
+}
 
 /**
  * Copy vendor assets plugin (same as base config).
@@ -33,10 +47,15 @@ function copyVendorPlugin(): Plugin {
       // Fire-and-forget: idempotent and non-fatal (renderer falls back to
       // the remote HF fetch if the local copy is missing).
       void fetchModels({ silent: true })
+      copyPhonePage()
     },
     configureServer() {
       copyVendorAssets({ silent: true })
       void fetchModels({ silent: true })
+      copyPhonePage()
+    },
+    closeBundle() {
+      copyPhonePage()
     },
   }
 }

@@ -1,0 +1,244 @@
+/* ============================================
+   Zule AI — Phone Capture Overlay Styling
+   ============================================
+   Seamlessly integrated inside .suggestion-card
+   ============================================ */
+
+.phone-capture-card-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  background: rgba(10, 14, 24, 0.97);
+  backdrop-filter: blur(32px) saturate(1.2);
+  -webkit-backdrop-filter: blur(32px) saturate(1.2);
+  border-radius: 18px;
+  display: flex;
+  flex-direction: column;
+  color: #f8fafc;
+  animation: phoneOverlayIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+  overflow: hidden;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
+}
+
+@keyframes phoneOverlayIn {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ── Header ─────────────────────────────────────────────────────────── */
+
+.phone-capture-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px 8px;
+  flex-shrink: 0;
+}
+
+.phone-capture-brand-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(96, 165, 250, 0.25);
+  color: #93c5fd;
+}
+
+.phone-capture-pill-icon {
+  color: #60a5fa;
+}
+
+.phone-capture-brand-title {
+  font-size: 0.76rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.phone-capture-card-close {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: #94a3b8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.phone-capture-card-close:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #f8fafc;
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+/* ── Body ───────────────────────────────────────────────────────────── */
+
+.phone-capture-card-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 20px 14px;
+  gap: 10px;
+}
+
+/* ── QR Code ────────────────────────────────────────────────────────── */
+
+.phone-capture-qr-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.phone-capture-qr-card {
+  width: 140px;
+  height: 140px;
+  background: #ffffff;
+  border-radius: 14px;
+  padding: 8px;
+  box-shadow:
+    0 8px 30px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(255, 255, 255, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.2s ease;
+}
+
+.phone-capture-qr-card:hover {
+  transform: scale(1.02);
+}
+
+.phone-capture-qr-svg {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.phone-capture-qr-svg svg {
+  width: 100%;
+  height: 100%;
+  shape-rendering: crispEdges;
+}
+
+.phone-capture-qr-placeholder {
+  font-size: 0.75rem;
+  color: #64748b;
+  text-align: center;
+  font-weight: 500;
+}
+
+/* ── URL Box ────────────────────────────────────────────────────────── */
+
+.phone-capture-url-pill {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 6px 5px 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  max-width: 290px;
+  width: 100%;
+}
+
+.phone-capture-url-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.74rem;
+  color: #93c5fd;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.phone-capture-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  background: rgba(59, 130, 246, 0.15);
+  color: #bfdbfe;
+  font-size: 0.7rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.phone-capture-copy-btn:hover {
+  background: rgba(59, 130, 246, 0.25);
+  border-color: rgba(96, 165, 250, 0.5);
+  color: #ffffff;
+}
+
+/* ── Status Badge ───────────────────────────────────────────────────── */
+
+.phone-capture-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+  color: #6ee7b7;
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+
+.phone-capture-radar-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.8);
+  animation: phoneRadarPulse 1.8s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+@keyframes phoneRadarPulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(0.85);
+    opacity: 0.45;
+  }
+}
+
+/* ── Instructions ───────────────────────────────────────────────────── */
+
+.phone-capture-instructions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.7rem;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.instruction-step {
+  color: #94a3b8;
+}
+
+.instruction-sep {
+  color: #475569;
+}
