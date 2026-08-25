@@ -5051,3 +5051,86 @@ Implemented the Phone Camera Input system allowing users to snap photos of their
    - Added two-way toggle on the "Phone" toolbar button: click once to start/open, click again to stop/disable with glowing active state.
    - Removed all native `title="..."` tooltips on copy buttons and Phone toolbar button, adding robust textarea fallback for clipboard copying.
 
+6. **Microphone & Voice-to-Text Dictation Fixes**:
+   - Fixed `useTranscription` in Electron to use `WhisperProvider` with native `onnxruntime-node` instead of failing Google `WebSpeechProvider`.
+   - Updated `electron/main.ts` `registerMediaPermissionHandlers` to include `'microphone'`, `'speech'`, and `'speech-recognition'`.
+   - Fixed `WORKLET_URL` resolution in `src/brain/transcription/whisper.ts` to dynamically resolve `pcm-capture-processor.js` across both `http://` and `file://` protocols.
+   - Added `audioContext.resume()` when context is suspended in `WhisperProvider`.
+   - Fixed `loadModel` and `start` readiness checks in `WhisperProvider` when using `transcribeFn`.
+   - Made preload failure non-fatal in `InputBar.tsx` `startWhisperDictation`.
+
+7. **Real-Time Meeting AI Optimizations (Cluely Parity)**:
+   - **Reduced Latency**: Lowered QuestionDetectorStream debounce from 1500ms → 800ms (final) and 4000ms → 2500ms (interim). Reduced Whisper max buffer from 3000ms → 2000ms.
+   - **Instant UI Feedback for Headphones**: `setIsActive(true)` is now called immediately upon acquiring loopback stream so the green indicator glows with zero delay, running model pre-warming in the background.
+   - **Auto-Grow Overlay**: When autonomous AI answers trigger, the overlay auto-expands from `compact`/`expanded` to `maximized` (480x680) so answers are immediately readable.
+   - **Anti-Thrashing Guard**: Added `isLoadingRef` / `isStreamingRef` guards to prevent concurrent or repeated autonomous triggers from canceling in-flight AI streams.
+   - **System Audio Interim Hook**: Added system audio interim stream watcher into the question detector pipeline.
+   - **Visual Feedback**: Added a clean animated "🎯 Detected question" banner in `FloatingCopilot.tsx` & `.css` to give the user immediate visual confirmation when Zule detects a question.
+
+
+---
+
+## Use Screen first-click race condition fix
+
+Fixed the bug where clicking "Use Screen" for the first time would give
+a pre-fed "I'm ready to help" or "no question found" response.
+
+**Root cause:** `handleUseScreen` kicked off `getDisplayMedia` (async, requires
+user interaction to pick a window) and immediately fired `triggerAI` — but at
+that point no capture source was ready, so the AI received empty screen context.
+
+**Fix (FloatingCopilot.tsx):**
+
+1. `handleUseScreen` now **awaits fresh screen context** before dispatching to AI:
+   - Tries UI Automation first (fastest, no user interaction needed)
+   - Falls back to BitBlt capture
+   - Falls back to getDisplayMedia keyframe (if it resolved fast)
+   - Last resort: OCR on current video frame
+   - If ALL fail, shows a user-visible message instead of calling AI with empty context
+
+2. Added debounce via `useScreenPendingRef` — repeated clicks while a request
+   is in flight are ignored (prevents the duplicate-request issue).
+
+3. In `triggerAI`, added an `alreadyHasContext` guard: if `screenTextRef` already
+   has >20 chars from the prefetch, skip redundant UI Automation/BitBlt calls
+   to reduce latency.
+
+4. `getDisplayMedia` still starts in the background for subsequent requests
+   (where periodic OCR keeps `screenTextRef` fresh), but the first request
+   no longer depends on it being ready.
+
+**Validated:** `npx tsc --noEmit --skipLibCheck` passes cleanly.
+
+
+---
+
+## Overlay anti-close hardening (2026-08-26)
+
+Added two defenses to `electron/overlayManager.ts` that prevent
+browser-based applications (proctoring suites, fullscreen exam platforms,
+kiosk-mode browsers) from forcibly closing or hiding the Zule overlay:
+
+**1. Close event guard**
+
+- Intercepts the Electron `'close'` event with `event.preventDefault()`
+  unless `this.intentionalClose` is set. This blocks external processes
+  that send `WM_CLOSE` to the overlay HWND from succeeding.
+- `intentionalClose` is set to `true` only in `destroy()` (user/app-
+  initiated stop) and in the `before-quit` handler so normal shutdown
+  remains unaffected.
+- After blocking the close, `reapplyPlatformState()` is called to
+  re-assert always-on-top and native stealth layers in case the external
+  app also tried `SetWindowPos` to lower the Z-order.
+
+**2. Visibility watchdog**
+
+- A 2-second `setInterval` checks whether the overlay window is still
+  visible/not-minimized. If an external app used `ShowWindow(SW_HIDE)`,
+  `ShowWindow(SW_MINIMIZE)`, or similar Win32 APIs, the watchdog
+  re-shows the overlay via `showInactive()` + `reapplyPlatformState()`.
+- Respects a new `intentionallyHidden` flag so user-triggered
+  `hide()`/`toggle()` is not overridden.
+- Started at the end of `create()`, cleared in `destroy()`.
+
+**Files modified:** `electron/overlayManager.ts` only.
+**Verification:** `get_diagnostics` clean, zero TypeScript errors.

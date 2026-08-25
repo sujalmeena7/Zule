@@ -87,6 +87,18 @@ export class OverlayManager {
   private stealthHost: StealthHost | null = null;
   private reparenter: Reparenter | null = null;
 
+  // Flag to distinguish Zule-initiated close from external close attempts
+  private intentionalClose = false;
+
+  // Track whether the overlay was intentionally hidden by the user
+  private intentionallyHidden = false;
+
+  // ── Visibility watchdog ─────────────────────────────────────────────────────
+  // Periodic check that detects when external apps hide/minimize the overlay
+  // and recovers it automatically.
+  private visibilityWatchdog: ReturnType<typeof setInterval> | null = null;
+  private static readonly WATCHDOG_INTERVAL_MS = 2000;
+
   // ── Stage B (layered) fields ────────────────────────────────────────────────
   private paintSurface: PaintSurface | null = null;
   private offscreenWindow: BrowserWindowType | null = null;
@@ -324,6 +336,19 @@ export class OverlayManager {
       });
     }
 
+    // ── Prevent external close (browser apps / proctoring suites) ────────────
+    // Some browser-based applications (proctoring suites, fullscreen exam
+    // platforms) enumerate top-level windows and send WM_CLOSE to overlays
+    // they detect. Intercept the 'close' event and prevent it unless Zule
+    // itself initiated the destruction via destroy().
+    this.window.on('close', (event) => {
+      if (!this.intentionalClose) {
+        event.preventDefault();
+        // Re-assert always-on-top in case the app also tried SetWindowPos
+        this.reapplyPlatformState();
+      }
+    });
+
     // ── Window close cleanup ──────────────────────────────────────────────────
 
     this.window.on('closed', () => {
@@ -370,6 +395,9 @@ export class OverlayManager {
     // Ensure stealth host teardown ordering is respected on app quit:
     // release() → destroy() host, before Electron tears down the BrowserWindow.
     app.on('before-quit', () => {
+      // Allow the window to close during app quit
+      this.intentionalClose = true;
+
       // Uninstall keyboard hook before anything else
       if (this.keyboardHook) {
         this.keyboardHook.uninstall();
@@ -394,6 +422,12 @@ export class OverlayManager {
       }
       this.state.hostStrategy = 'none';
     });
+
+    // ── Visibility watchdog ───────────────────────────────────────────────────
+    // Detects when external apps hide/minimize the overlay and recovers it.
+    // Runs every 2s — well within the "no timer more frequent than 1/s" budget
+    // since this is a lightweight isVisible() check (Req 14.1).
+    this.startVisibilityWatchdog();
   }
 
   // ── Lifecycle: destroy ───────────────────────────────────────────────────────
@@ -407,6 +441,9 @@ export class OverlayManager {
    *   3. close BrowserWindow — Electron tears down the Chromium HWND
    */
   destroy(): void {
+    // Stop the visibility watchdog
+    this.stopVisibilityWatchdog();
+
     // Remove screen event listeners
     screen.removeListener('display-added', this.handleDisplayChange);
     screen.removeListener('display-removed', this.handleDisplayRemoved);
@@ -446,6 +483,7 @@ export class OverlayManager {
 
     // Then close the BrowserWindow
     if (this.window) {
+      this.intentionalClose = true;
       this.window.close();
       this.window = null;
     }
@@ -457,6 +495,8 @@ export class OverlayManager {
   /** Show overlay without stealing focus. */
   show(): void {
     if (!this.window) return;
+
+    this.intentionallyHidden = false;
 
     if (this.stealthHost && this.state.hostStrategy !== 'none') {
       this.stealthHost.show();
@@ -470,6 +510,8 @@ export class OverlayManager {
   /** Hide overlay. */
   hide(): void {
     if (!this.window) return;
+
+    this.intentionallyHidden = true;
 
     // Uninstall keyboard hook so keystrokes flow to the foreground app
     if (this.keyboardHook) {
@@ -1360,5 +1402,50 @@ export class OverlayManager {
     const saved = this.store.get(primaryId);
 
     return resolveInitialOverlayBounds(saved, primaryDisplay.workArea);
+  }
+
+  // ── Visibility Watchdog ────────────────────────────────────────────────────
+
+  /**
+   * Start a periodic check that detects when external applications have
+   * hidden or minimized the overlay window (via ShowWindow, SetWindowPos, etc.)
+   * and automatically recovers it.
+   *
+   * This guards against browser-based apps (proctoring suites, fullscreen exam
+   * platforms, kiosk-mode browsers) that enumerate top-level windows and
+   * forcibly hide or minimize overlays they detect.
+   *
+   * The check runs every 2s and only recovers when the overlay *should* be
+   * visible (i.e., it wasn't intentionally hidden by the user via hide/toggle).
+   */
+  private startVisibilityWatchdog(): void {
+    this.stopVisibilityWatchdog(); // Clear any existing watchdog
+
+    this.visibilityWatchdog = setInterval(() => {
+      if (!this.window || this.window.isDestroyed()) return;
+
+      // Only recover if the overlay is supposed to be showing
+      // (not intentionally hidden by the user via hide/toggle)
+      if (this.intentionallyHidden) return;
+
+      if (!this.window.isVisible()) {
+        console.log('[OverlayManager] Watchdog: overlay was externally hidden, recovering...');
+        this.window.showInactive();
+        this.reapplyPlatformState();
+      } else if (this.window.isMinimized()) {
+        console.log('[OverlayManager] Watchdog: overlay was externally minimized, restoring...');
+        this.window.restore();
+        this.window.showInactive();
+        this.reapplyPlatformState();
+      }
+    }, OverlayManager.WATCHDOG_INTERVAL_MS);
+  }
+
+  /** Stop the visibility watchdog timer. */
+  private stopVisibilityWatchdog(): void {
+    if (this.visibilityWatchdog) {
+      clearInterval(this.visibilityWatchdog);
+      this.visibilityWatchdog = null;
+    }
   }
 }
