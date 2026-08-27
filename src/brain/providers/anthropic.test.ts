@@ -671,6 +671,31 @@ describe('AnthropicAdapter — compatible gateways', () => {
     expect(errors[0]?.message).toMatch(/v1\/messages/);
   });
 
+  it('completes a Base URL that names only a host, and leaves any path untouched', async () => {
+    // The observed misconfiguration: `https://tokenbom.com` with no path, which
+    // POSTed the gateway's HTML homepage and got HTTP 200 back.
+    const sse =
+      'event: content_block_delta\n' +
+      'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"ok"}}\n\n';
+    const { impl, calls } = makeRecordingFetch(() => makeStreamResponse([sse]));
+
+    const bare = new AnthropicAdapter({
+      apiKey: TEST_API_KEY,
+      baseUrl: 'https://tokenbom.com',
+      fetchImpl: impl,
+    });
+    await bare.streamGenerate(PROMPT, makeStreamCallbacks().cb, NO_OPTS);
+    expect(String(calls[0].input)).toBe('https://tokenbom.com/v1/messages');
+
+    const withPath = new AnthropicAdapter({
+      apiKey: TEST_API_KEY,
+      baseUrl: 'https://tokenbom.com/anthropic/v1/messages',
+      fetchImpl: impl,
+    });
+    await withPath.streamGenerate(PROMPT, makeStreamCallbacks().cb, NO_OPTS);
+    expect(String(calls[1].input)).toBe('https://tokenbom.com/anthropic/v1/messages');
+  });
+
   it('complete() reads the OpenAI non-streaming shape too', async () => {
     const { impl } = makeRecordingFetch(() =>
       makeJsonResponse({

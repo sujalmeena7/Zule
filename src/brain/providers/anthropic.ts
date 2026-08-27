@@ -143,7 +143,9 @@ export class AnthropicAdapter implements ProviderAdapter {
     this.apiKey = opts.apiKey;
     this.defaultModelId = opts.defaultModelId ?? DEFAULT_MODEL_ID;
     this.capabilities = opts.capabilities ?? DEFAULT_CAPABILITIES;
-    this.baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
+    this.baseUrl = completeMessagesPath(
+      (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, ''),
+    );
     this.anthropicVersion = opts.anthropicVersion ?? DEFAULT_ANTHROPIC_VERSION;
     this.fetchImpl = opts.fetchImpl;
 
@@ -616,6 +618,31 @@ async function throwIfNotOk(response: Response): Promise<Response> {
   const retryAfter = parseRetryAfter(response.headers.get('retry-after'));
   if (retryAfter !== null) err.retryAfterMs = retryAfter;
   throw err;
+}
+
+/**
+ * Completes a Base URL that names only a host into a Messages endpoint.
+ *
+ * Unlike the OpenAI-compatible adapter — where `baseUrl` is an API root and a
+ * path is appended to it — this adapter POSTs `baseUrl` verbatim, so the value
+ * is expected to be a full endpoint (the default is
+ * `https://api.anthropic.com/v1/messages`). A host on its own is therefore an
+ * incomplete entry rather than a different convention, and posting it hits the
+ * gateway's website: the observed failure was `https://tokenbom.com` answering
+ * with its HTML homepage under HTTP 200.
+ *
+ * Only a URL with no path at all is completed. Anything carrying a path is left
+ * exactly as given, so no configuration that works today can be changed by this.
+ */
+function completeMessagesPath(baseUrl: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    return baseUrl; // Not a URL — let `fetch` be the one to complain.
+  }
+  if (parsed.pathname && parsed.pathname !== '/') return baseUrl;
+  return `${parsed.origin}/v1/messages`;
 }
 
 /**
