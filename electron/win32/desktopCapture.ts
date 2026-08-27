@@ -2,16 +2,21 @@
 // Zule AI — Desktop DC Screen Capture (Bypass Display Affinity)
 // ============================================
 //
-// Uses BitBlt from GetDC(NULL) to capture the entire screen including windows
-// that have SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) applied.
+// Uses BitBlt from GetDC(NULL) to capture the entire screen.
 //
-// Why this works: SetWindowDisplayAffinity tells the DWM to exclude the window
-// from PrintWindow, getDisplayMedia, and similar capture APIs. But GetDC(NULL)
-// returns the raw desktop device context — the final composited framebuffer
-// that the GPU sends to the monitor. Display affinity does NOT affect this path.
+// This was written to capture windows with
+// SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) applied, on the reasoning that
+// GetDC(NULL) returns the final composited framebuffer and display affinity is a
+// DWM-level exclusion that only affects PrintWindow, getDisplayMedia and friends.
 //
-// This is the same technique used by hardware-accelerated game capture overlays
-// and screen recording software that bypasses DRM protection.
+// That is no longer true, if it ever was. Measured on Windows 11 build 26200, a
+// protected window is absent from what this path reads: the capture of its exact
+// rect shows the window behind it. `foregroundWindowIsCaptureProtected()` below
+// exists to detect that case so the caller can route to UI Automation, which does
+// still work. `scripts/bitblt-probe.mjs` reproduces the measurement.
+//
+// This remains the right capture for everything else — it is a native call
+// costing tens of milliseconds, against seconds for the text chain.
 //
 // Returns a base64-encoded JPEG of the current screen content.
 
@@ -62,6 +67,66 @@ function ensureLoaded(): boolean {
     return true;
   } catch {
     loadFailed = true;
+    return false;
+  }
+}
+
+/**
+ * Whether the foreground window is excluded from screen capture.
+ *
+ * This exists because the bypass described at the top of this file no longer
+ * holds. Measured on Windows 11 build 26200 against a form with
+ * `WDA_EXCLUDEFROMCAPTURE` applied (`scripts/protected-window.ps1`), foreground
+ * and visible: `GetDC(NULL)` + `BitBlt` of the window's exact rect returns the
+ * *window behind it*, not the window itself. See `scripts/bitblt-probe.mjs` for
+ * the measurement.
+ *
+ * That failure mode is the dangerous one. `WDA_MONITOR` paints the window black,
+ * which is at least detectable from the pixels; `WDA_EXCLUDEFROMCAPTURE` removes
+ * it from the composited framebuffer altogether, so the capture is a valid,
+ * plausible-looking JPEG of the wrong thing. Sent to a vision model it produces a
+ * fast, confident answer about whatever was underneath — worse than no answer,
+ * because nothing about it looks wrong.
+ *
+ * So the affinity is asked for directly instead of inferred from the image. One
+ * call, no heuristics, and it distinguishes "protected" from "dark theme".
+ *
+ * Windows belonging to this process are reported as unprotected: the overlay
+ * sets `setContentProtection(true)` on itself, and it is not the subject of the
+ * capture. Without this, Zule's own overlay taking focus would read as a
+ * protected foreground and disable the pixel path for the rest of the session.
+ */
+export function foregroundWindowIsCaptureProtected(): boolean {
+  if (!ensureLoaded()) return false;
+
+  try {
+    const GetForegroundWindow = user32Lib.func('void *GetForegroundWindow()');
+    const GetWindowDisplayAffinity = user32Lib.func(
+      'bool GetWindowDisplayAffinity(void *hwnd, void *affinity)',
+    );
+    const GetWindowThreadProcessId = user32Lib.func(
+      'uint32_t GetWindowThreadProcessId(void *hwnd, void *pid)',
+    );
+
+    const hwnd = GetForegroundWindow();
+    if (!hwnd) return false;
+
+    // Ownership by pid rather than by handle comparison: every Zule window —
+    // overlay, dashboard, any future one — is owned by this process, so one check
+    // covers them all and none of them has to be plumbed in here.
+    const pidBuf = Buffer.alloc(4);
+    GetWindowThreadProcessId(hwnd, pidBuf);
+    if (pidBuf.readUInt32LE(0) === process.pid) return false;
+
+    const affBuf = Buffer.alloc(4);
+    if (!GetWindowDisplayAffinity(hwnd, affBuf)) return false;
+
+    // WDA_NONE (0) is the only unprotected value. WDA_MONITOR (1) and
+    // WDA_EXCLUDEFROMCAPTURE (0x11) both mean the pixels are not ours to read.
+    return affBuf.readUInt32LE(0) !== 0;
+  } catch {
+    // A failure here must not disable the pixel path. Unprotected is the
+    // assumption that preserves today's behaviour.
     return false;
   }
 }

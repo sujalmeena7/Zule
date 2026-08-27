@@ -788,12 +788,28 @@ function registerIpcHandlers(): void {
     }));
   });
 
-  // ── BitBlt Desktop Capture (bypasses SetWindowDisplayAffinity) ──────────────
-  // Uses GetDC(NULL) + BitBlt which reads the composited framebuffer directly,
-  // ignoring WDA_EXCLUDEFROMCAPTURE. Falls back gracefully if FFI unavailable.
+  // ── BitBlt Desktop Capture ──────────────────────────────────────────────────
+  // Native GetDC(NULL) + BitBlt through koffi: tens of milliseconds, against
+  // seconds for the UI Automation + Tesseract chain.
+  //
+  // Refuses to return a frame when the foreground window is capture-protected.
+  // This path does NOT see through WDA_EXCLUDEFROMCAPTURE — it returns the window
+  // behind the protected one, as a valid JPEG, with nothing about it looking
+  // wrong. Handing that to a vision model buys a fast confident answer about the
+  // wrong screen. `ok: false` instead lets the renderer fall through to UI
+  // Automation, which reads a protected window's text in ~1.6s.
   ipcMain.handle('capture-desktop-bitblt', async () => {
     try {
-      const { captureDesktopAsJpeg } = await import('./win32/desktopCapture');
+      const { captureDesktopAsJpeg, foregroundWindowIsCaptureProtected } = await import(
+        './win32/desktopCapture'
+      );
+
+      // Before the capture, not after: a frame that cannot be used is not worth
+      // the encode.
+      if (foregroundWindowIsCaptureProtected()) {
+        return { ok: false, reason: 'capture-protected' };
+      }
+
       const overlayWin = overlayManager?.getWindow?.() ?? null;
       const shot = captureDesktopAsJpeg(overlayWin);
       // `bytes`/`width`/`height` are diagnostics: the renderer folds them into its
@@ -816,16 +832,22 @@ function registerIpcHandlers(): void {
   // reduce cold-start from ~3s to ~1s. Further requests reuse the cached .NET
   // assemblies in the same PowerShell session (if the OS caches them).
   //
-  // One-strike circuit breaker. The spawn either works on this machine or it
-  // does not: a missing/blocked `powershell.exe`, an unavailable
-  // `UIAutomationClient` assembly, or a policy that refuses `Add-Type` fails
-  // identically on every call. Retrying it costs the full 5 s budget per screen
-  // dispatch and returns nothing, and the caller's next step — BitBlt pixels,
-  // then OCR — does not need it. So the first hard failure disables it for the
-  // session and later dispatches skip straight to the capture that works.
+  // One-strike circuit breaker, for spawn-level failures only. A missing or
+  // blocked `powershell.exe`, an unavailable `UIAutomationClient` assembly, or a
+  // policy that refuses `Add-Type` fails identically on every call, so retrying
+  // costs the full budget per screen dispatch and returns nothing.
   //
-  // `no-text` is NOT a strike: that is a successful walk of a window that had no
-  // readable text, which says nothing about the next window.
+  // A TIMEOUT is not a strike, and this is the case that matters. UI Automation
+  // is verified working on this machine — `scripts/uia-probe.mjs` reads a
+  // capture-protected window in ~1.6s — yet `FindAll(Descendants, TrueCondition)`
+  // walks the entire accessibility tree, and on a Chrome or VS Code window that
+  // is thousands of elements and can overrun the 5s budget. That says something
+  // about the window in front at the time, nothing about the machine. Striking on
+  // it would disable the one path that survives display affinity for the rest of
+  // the session, on the evidence of a single heavy window.
+  //
+  // `no-text` is likewise not a strike: a successful walk of a window with no
+  // readable text says nothing about the next window.
   let uiaDisabledReason: string | null = null;
   ipcMain.handle('extract-foreground-text', async () => {
     if (process.platform !== 'win32') {
@@ -859,6 +881,17 @@ function registerIpcHandlers(): void {
       const msg = err instanceof Error ? err.message : String(err);
       const stderr = String((err as { stderr?: unknown })?.stderr ?? '').trim();
       const cause = stderr.length > 0 ? stderr.split('\n')[0].slice(0, 300) : msg.slice(0, 300);
+
+      // `killed` is set when execFile terminated the process itself, which on
+      // these options means only one thing: the 5s timeout elapsed. Per the note
+      // on the breaker above, that is a fact about the foreground window's tree
+      // size, so the next dispatch — against a different window — gets to try.
+      const timedOut = (err as { killed?: boolean })?.killed === true;
+      if (timedOut) {
+        console.warn('[UIAutomation] Timed out after 5000ms — tree too large; not disabling');
+        return { ok: false, reason: 'timeout' };
+      }
+
       uiaDisabledReason = cause;
       console.warn(
         `[UIAutomation] Failed — disabling UI Automation for this session. Cause: ${cause}`,

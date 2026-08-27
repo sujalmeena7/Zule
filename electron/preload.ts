@@ -132,10 +132,18 @@ const electronAPI = {
     return () => ipcRenderer.removeListener('overlay-key', handler);
   },
 
-  /** Capture the desktop using BitBlt (bypasses display affinity protection).
-   *  Returns base64 JPEG or null if unavailable. */
-  captureDesktopBitBlt: (): Promise<{ ok: boolean; base64?: string; reason?: string }> =>
-    ipcRenderer.invoke('capture-desktop-bitblt'),
+  /** Capture the desktop using BitBlt. Returns `ok: false` with
+   *  `reason: 'capture-protected'` when the foreground window has display affinity
+   *  set — this path cannot see through it, so it declines rather than returning a
+   *  frame of the window behind. */
+  captureDesktopBitBlt: (): Promise<{
+    ok: boolean;
+    base64?: string;
+    reason?: string;
+    bytes?: number;
+    width?: number;
+    height?: number;
+  }> => ipcRenderer.invoke('capture-desktop-bitblt'),
 
   /** Extract text from the foreground window using Windows UI Automation
    *  (accessibility API). Bypasses display affinity — reads the UI tree directly. */

@@ -81,11 +81,15 @@ export interface ElectronAPI {
   blurOverlay?: () => void;
   /** Listen for keystrokes from the low-level keyboard hook (IPC-based input). */
   onOverlayKey?: (callback: (key: { type: string; char?: string }) => void) => () => void;
-  /** Capture screen using BitBlt (bypasses display affinity / capture protection). */
   /**
    * Native BitBlt screen capture. `bytes`/`width`/`height` describe the encoded
    * JPEG actually produced (downscaled to a 1600px longest edge) and exist so
    * the dispatch's `[perf]` line can attribute latency to payload size.
+   *
+   * `reason: 'capture-protected'` means the foreground window has display affinity
+   * set. This path does not see through it — it would return the window behind the
+   * protected one — so it refuses rather than handing back a plausible frame of the
+   * wrong screen. UI Automation is the only source that reads such a window.
    */
   captureDesktopBitBlt?: () => Promise<{
     ok: boolean;

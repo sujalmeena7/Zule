@@ -82,6 +82,17 @@ import './FloatingCopilot.css';
  * is to stop paying for it on the critical path at all.
  */
 const UIA_TIMEOUT_MS = 4000;
+
+/**
+ * The budget when the foreground window is capture-protected.
+ *
+ * Every other source is already known to be a dead end in that case, so a 4s
+ * give-up returns nothing at all rather than something cheaper. The main process
+ * kills its PowerShell at 5000ms, so waiting slightly past that costs nothing and
+ * turns a discarded in-flight result into a usable one.
+ */
+const UIA_PROTECTED_TIMEOUT_MS = 5500;
+
 const BITBLT_TIMEOUT_MS = 1500;
 
 /**
@@ -900,6 +911,14 @@ export function FloatingCopilot() {
           );
         }
 
+        // Set when the native capture reports the foreground window is excluded
+        // from capture (`WDA_MONITOR` / `WDA_EXCLUDEFROMCAPTURE`). Every pixel
+        // source is then a dead end — BitBlt reads the window behind the protected
+        // one and getDisplayMedia blacks it out — so the flag exists to stop a
+        // later pixel attempt from succeeding with the wrong screen. Declared out
+        // here because the text chain below needs it too.
+        let captureProtected = false;
+
         if (visionAvailable) {
           // ---- PIXEL PATH ----------------------------------------------------
           // A vision model can read the screen directly, which makes every text
@@ -932,6 +951,17 @@ export function FloatingCopilot() {
                 sw.note(`shot ${Math.round(bitblt.bytes / 1024)}KB ${bitblt.width}x${bitblt.height}`);
               }
               console.log('[FloatingCopilot] BitBlt → vision model (no OCR, no UIA)');
+            } else if (bitblt.reason === 'capture-protected') {
+              // Not a failure — a refusal, and the only correct one. The pixels of
+              // a protected window are unreadable by every capture API available
+              // here, and the previous behaviour was to hand the model a valid JPEG
+              // of whatever sat behind it and answer fast and wrong.
+              captureProtected = true;
+              sw.note('capture-protected');
+              // eslint-disable-next-line no-console
+              console.log(
+                '[FloatingCopilot] Foreground window is capture-protected — UI Automation is the only path to its text',
+              );
             } else {
               // The pixel path failing silently is what sends a vision-capable
               // setup down the 10-second text chain, so name the cause. A blank
@@ -946,7 +976,13 @@ export function FloatingCopilot() {
 
           // getDisplayMedia keyframe — the web-mode equivalent of BitBlt, and the
           // fallback when the native module is unavailable.
-          if (!keyframeForContext && !ocrSkippedForVision) {
+          //
+          // Skipped outright on a protected window: display affinity was designed
+          // to defeat exactly this API, so it returns a frame with the window
+          // blacked out. That frame is not empty, so it would satisfy the check
+          // below and suppress the text chain — trading a working UI Automation
+          // read for a picture of a black rectangle.
+          if (!keyframeForContext && !ocrSkippedForVision && !captureProtected) {
             try {
               const keyframeResult = await getKeyframeAsyncRef.current();
               if (keyframeResult) {
@@ -976,7 +1012,7 @@ export function FloatingCopilot() {
             try {
               const uia = await raceTimeout(
                 window.electronAPI.extractForegroundText(),
-                UIA_TIMEOUT_MS,
+                captureProtected ? UIA_PROTECTED_TIMEOUT_MS : UIA_TIMEOUT_MS,
                 { ok: false, text: '' },
               );
               if (uia.ok && uia.text && uia.text.length > 20) {
@@ -988,7 +1024,12 @@ export function FloatingCopilot() {
           }
 
           // OCR the live getDisplayMedia frame.
-          if (!currentScreenText || currentScreenText.length <= 20) {
+          //
+          // Skipped on a protected window. Display affinity blanks this API by
+          // design, so Tesseract would be run for its full timeout against a black
+          // rectangle — seconds spent to learn nothing, on the one path where the
+          // remaining time matters most.
+          if ((!currentScreenText || currentScreenText.length <= 20) && !captureProtected) {
             const fresh = await raceTimeout(captureTextNowRef.current(), OCR_TIMEOUT_MS, '');
             if (fresh) {
               currentScreenText = fresh;
@@ -999,9 +1040,13 @@ export function FloatingCopilot() {
           // Last resort: BitBlt, then OCR the frame it returns.
           //
           // `captureTextNow` OCRs the `getDisplayMedia` video frame, so it returns
-          // '' whenever that stream is unavailable — which is precisely the case
-          // for a window with display affinity set, the one case this whole chain
-          // exists to serve. BitBlt still reaches those pixels.
+          // '' whenever that stream is unavailable. BitBlt reaches pixels that API
+          // cannot — a window on a display it was not granted, for one.
+          //
+          // It does not reach a capture-protected window: the native side refuses
+          // and returns `capture-protected`, so this block costs one IPC round trip
+          // and stops. Left unguarded deliberately, because the refusal belongs in
+          // one place rather than being restated at every call site.
           if (
             (!currentScreenText || currentScreenText.length <= 20)
             && typeof window !== 'undefined'
@@ -1534,6 +1579,11 @@ export function FloatingCopilot() {
       prefetchSw.mark('providers');
       const visionAvailable = activeAdapterSupportsImageInput() || hasVisionProvider();
 
+      // As in `triggerAI`: a protected foreground window makes every pixel source
+      // a dead end, and the getDisplayMedia fallback below would otherwise satisfy
+      // itself with a blacked-out frame and skip the text chain entirely.
+      let captureProtected = false;
+
       if (visionAvailable && typeof window !== 'undefined' && window.electronAPI?.captureDesktopBitBlt) {
         const bitblt = await raceTimeout(
           window.electronAPI.captureDesktopBitBlt(),
@@ -1544,11 +1594,14 @@ export function FloatingCopilot() {
         if (bitblt.ok && bitblt.base64) {
           prefetchedImage = { mimeType: 'image/jpeg', base64: bitblt.base64 };
           console.log('[FloatingCopilot] UseScreen prefetch: BitBlt → vision model');
+        } else if (bitblt.reason === 'capture-protected') {
+          captureProtected = true;
+          console.log('[FloatingCopilot] UseScreen prefetch: window is capture-protected → UI Automation');
         }
         prefetchSw.mark('bitblt-vision');
       }
 
-      if (visionAvailable && !prefetchedImage && screen.isCapturing) {
+      if (visionAvailable && !prefetchedImage && !captureProtected && screen.isCapturing) {
         // Native module unavailable (non-Windows, koffi missing). getDisplayMedia
         // reaches everything except display-affinity windows.
         try {
@@ -1576,7 +1629,7 @@ export function FloatingCopilot() {
         typeof window !== 'undefined' && window.electronAPI?.extractForegroundText
           ? raceTimeout(
               window.electronAPI.extractForegroundText(),
-              UIA_TIMEOUT_MS,
+              captureProtected ? UIA_PROTECTED_TIMEOUT_MS : UIA_TIMEOUT_MS,
               { ok: false, text: '' } as { ok: boolean; text?: string },
             ).catch(() => ({ ok: false, text: '' }))
           : Promise.resolve({ ok: false, text: '' } as { ok: boolean; text?: string });
@@ -1608,8 +1661,9 @@ export function FloatingCopilot() {
         prefetchSw.mark('bitblt');
       }
 
-      // Priority 3: If getDisplayMedia resolved fast enough, try keyframe
-      if (!prefetchedText && !prefetchedImage && screen.isCapturing) {
+      // Priority 3: If getDisplayMedia resolved fast enough, try keyframe.
+      // Not on a protected window — display affinity blanks this API by design.
+      if (!prefetchedText && !prefetchedImage && !captureProtected && screen.isCapturing) {
         try {
           const kf = await getKeyframeAsyncRef.current();
           if (kf) {
@@ -1619,10 +1673,10 @@ export function FloatingCopilot() {
         } catch { /* fall through */ }
       }
 
-      // Validate: if we got no context at all, show feedback instead of
-      // sending an empty request to the AI
-      if (!prefetchedText && !prefetchedImage) {
-        // Last resort: try captureTextNow (OCR on current video frame)
+      // Last resort: OCR the current video frame. Skipped on a protected window,
+      // where that frame is a black rectangle and Tesseract would burn its whole
+      // timeout confirming it.
+      if (!prefetchedText && !prefetchedImage && !captureProtected) {
         try {
           const ocrText = await raceTimeout(captureTextNowRef.current(), OCR_TIMEOUT_MS, '');
           if (ocrText && ocrText.length > 10) {
