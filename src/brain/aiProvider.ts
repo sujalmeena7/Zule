@@ -262,12 +262,23 @@ async function registerProviderAdapter(
       const { AnthropicAdapter } = await import('./providers/anthropic');
       // Forward optional baseUrl and modelId so users can point Anthropic at
       // compatible gateways (e.g. api.lumosel.vip) and choose a model.
-      const anthropicOpts: { apiKey: string; baseUrl?: string; defaultModelId?: string } = { apiKey };
+      const anthropicOpts: {
+        apiKey: string;
+        baseUrl?: string;
+        defaultModelId?: string;
+        fastModelId?: string;
+      } = { apiKey };
       if (config.baseUrl && config.baseUrl.trim()) {
         anthropicOpts.baseUrl = config.baseUrl.trim();
       }
       if (config.modelId && config.modelId.trim()) {
         anthropicOpts.defaultModelId = config.modelId.trim();
+      }
+      // Same field the custom provider uses. Screen dispatches set
+      // `preferFastModel`, so a gateway that hosts both a slow strong model and
+      // a fast one can serve each from the single Anthropic slot.
+      if (config.fastModelId && config.fastModelId.trim()) {
+        anthropicOpts.fastModelId = config.fastModelId.trim();
       }
       routerInstance.registerAdapter(new AnthropicAdapter(anthropicOpts));
       break;

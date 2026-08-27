@@ -728,6 +728,18 @@ export function Settings() {
     );
   }, []);
 
+  /**
+   * The fast-model slot for a non-custom provider. Screen dispatches ask for it
+   * by setting `preferFastModel`, so a gateway hosting both a strong model and a
+   * quick one can serve each from a single provider entry — which is the only
+   * lever that moves time-to-first-token, since the model chosen dominates it.
+   */
+  const handleProviderFastModelChange = useCallback((id: string, value: string) => {
+    setProviders((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, fastModelId: value } : p))
+    );
+  }, []);
+
   // --- Custom (OpenAI-compatible) field handlers (task 11.2) --------------
   //
   // Every handler routes the raw value through `clampField`, so a paste that
@@ -1914,6 +1926,33 @@ export function Settings() {
                                 onChange={(e) => handleProviderModelChange(provider.id, e.target.value)}
                               />
                             </div>
+                            {looksLikeThinkingModel(provider.modelId || '') && (
+                              <span style={CUSTOM_FIELD_HINT_STYLE}>{THINKING_MODEL_HINT}</span>
+                            )}
+                          </div>
+                          {/* The same fast slot the Custom provider has. Time-to-first
+                              token is decided almost entirely by which model answers,
+                              so this is the one field that changes how immediate a
+                              screen question feels. No Test speed button here: the
+                              measurement path speaks the OpenAI dialect and would
+                              report a number this endpoint never produced. */}
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            <label htmlFor="anthropic-fast-model-id" style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                              Fast model for screen questions <span style={{ fontWeight: 400, opacity: 0.7 }}>(optional)</span>
+                            </label>
+                            <div className="api-key-input provider-key-input">
+                              <input
+                                id="anthropic-fast-model-id"
+                                type="text"
+                                className="input-glass"
+                                placeholder="claude-3-5-haiku-20241022"
+                                value={provider.fastModelId || ''}
+                                onChange={(e) => handleProviderFastModelChange(provider.id, e.target.value)}
+                              />
+                            </div>
+                            <span style={CUSTOM_FIELD_HINT_STYLE}>
+                              Screen questions go to this model. Leave empty to use the model above.
+                            </span>
                           </div>
                         </div>
                       ) : (

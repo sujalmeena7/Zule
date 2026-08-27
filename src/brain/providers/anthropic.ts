@@ -108,6 +108,16 @@ export interface AnthropicAdapterOptions {
   apiKey: string;
   /** Override the default model id (`claude-3-5-sonnet-20241022`). */
   defaultModelId?: string;
+  /**
+   * Model id used when the caller sets `CallOpts.preferFastModel` — the screen
+   * path, where the answer is worthless if it arrives late.
+   *
+   * Same key, same base URL, same dialect: only the `model` field of the body
+   * changes, so this costs nothing to configure and nothing to fall back from.
+   * Left undefined, `preferFastModel` is a no-op and the default model answers,
+   * which is the behaviour before this field existed.
+   */
+  fastModelId?: string;
   /** Override the default capability descriptor. */
   capabilities?: Capabilities;
   /** Override the base URL (test harnesses, regional endpoints, gateways). */
@@ -130,6 +140,7 @@ export class AnthropicAdapter implements ProviderAdapter {
 
   private readonly apiKey: string;
   private readonly defaultModelId: string;
+  private readonly fastModelId?: string;
   private readonly baseUrl: string;
   private readonly anthropicVersion: string;
   private readonly fetchImpl?: typeof fetch;
@@ -142,6 +153,10 @@ export class AnthropicAdapter implements ProviderAdapter {
     }
     this.apiKey = opts.apiKey;
     this.defaultModelId = opts.defaultModelId ?? DEFAULT_MODEL_ID;
+    // Blank is unset, so a field the User cleared in Settings does not become a
+    // model id of `''` that the gateway would reject.
+    const trimmedFastModel = opts.fastModelId?.trim();
+    this.fastModelId = trimmedFastModel ? trimmedFastModel : undefined;
     this.capabilities = opts.capabilities ?? DEFAULT_CAPABILITIES;
     this.baseUrl = completeMessagesPath(
       (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, ''),
@@ -177,12 +192,27 @@ export class AnthropicAdapter implements ProviderAdapter {
   }
 
   /**
+   * The model id to send.
+   *
+   * Precedence is explicit > fast > default, matching the OpenAI-compatible
+   * adapter. An explicit `opts.modelId` wins outright because a caller naming
+   * one model is a stronger statement than a caller expressing a preference for
+   * speed; `preferFastModel` falls through to the default whenever no fast model
+   * is configured, so the screen path can set the flag unconditionally.
+   */
+  private resolveModelId(opts: CallOpts): string {
+    if (opts.modelId) return opts.modelId;
+    if (opts.preferFastModel && this.fastModelId) return this.fastModelId;
+    return this.defaultModelId;
+  }
+
+  /**
    * Non-streaming Messages call. Returns the parsed text and the
    * provider-reported usage (falling back to the local estimator when
    * the response omits `usage`).
    */
   async complete(prompt: PromptInput, opts: CallOpts): Promise<ProviderResponse> {
-    const modelId = opts.modelId ?? this.defaultModelId;
+    const modelId = this.resolveModelId(opts);
     const body = JSON.stringify(buildRequestBody(prompt, opts, modelId, false));
 
     const response = await retryWithJitter(
@@ -239,15 +269,23 @@ export class AnthropicAdapter implements ProviderAdapter {
     cb: StreamCallbacks,
     opts: CallOpts,
   ): Promise<void> {
-    const modelId = opts.modelId ?? this.defaultModelId;
+    const modelId = this.resolveModelId(opts);
     const body = JSON.stringify(buildRequestBody(prompt, opts, modelId, true));
+
+    // Wall clock for the metrics frame. Started before the fetch so it covers
+    // connection and any transient retry, which is the latency the User feels
+    // rather than the latency the model spent generating.
+    const startedAt = performance.now();
+    let ttftMs = -1;
+    let attempts = 0;
 
     // Initial connection (with retries on transient HTTP failures). If we
     // exhaust retries the error escapes — the router treats that as a
     // failover trigger.
     const response = await retryWithJitter(
-      () =>
-        fetchWithTimeout(
+      () => {
+        attempts += 1;
+        return fetchWithTimeout(
           this.baseUrl,
           {
             method: 'POST',
@@ -260,7 +298,8 @@ export class AnthropicAdapter implements ProviderAdapter {
             signal: opts.signal,
             fetchImpl: this.fetchImpl,
           },
-        ).then(throwIfNotOk),
+        ).then(throwIfNotOk);
+      },
       { signal: opts.signal },
     );
 
@@ -359,6 +398,7 @@ export class AnthropicAdapter implements ProviderAdapter {
             ) {
               recognisedAnyFrame = true;
               cumulativeText += delta.text;
+              if (ttftMs < 0) ttftMs = performance.now() - startedAt;
               cb.onToken(cumulativeText);
             } else if (
               // Extended thinking. Kept out of `cumulativeText` — it is not part
@@ -406,6 +446,7 @@ export class AnthropicAdapter implements ProviderAdapter {
             if (openAi.text) {
               recognisedAnyFrame = true;
               cumulativeText += openAi.text;
+              if (ttftMs < 0) ttftMs = performance.now() - startedAt;
               cb.onToken(cumulativeText);
             }
             if (openAi.reasoning) {
@@ -477,6 +518,18 @@ export class AnthropicAdapter implements ProviderAdapter {
       inputTokens ?? this.countTokens(prompt.fullPrompt || prompt.userText || '');
     const completionTokens =
       outputTokens ?? this.countTokens(cumulativeText);
+
+    // Emitted before `onComplete` so a consumer logging both sees the model id
+    // alongside the timings. Without this frame the overlay's `[perf] answered
+    // by …` line never printed for Anthropic, which made its latency
+    // unattributable: you could see the total but not which model spent it, nor
+    // how much of it was time-to-first-token versus generation.
+    cb.onMetrics?.({
+      ttftMs: Math.round(ttftMs >= 0 ? ttftMs : performance.now() - startedAt),
+      totalMs: Math.round(performance.now() - startedAt),
+      retries: Math.max(0, attempts - 1),
+      modelId,
+    });
 
     cb.onComplete({
       text: cumulativeText,
