@@ -200,6 +200,13 @@ export class MemoryStore {
     const maxResults = opts?.maxResults ?? DEFAULT_SEARCH_MAX_RESULTS;
     const minScore = opts?.minScore ?? DEFAULT_SEARCH_MIN_SCORE;
 
+    // Nothing to score against means nothing to embed for. `generateEmbedding`
+    // is a single-threaded WASM forward pass on the renderer main thread, so it
+    // blocks the event loop and cannot be raced against a timeout; skipping it
+    // outright on an empty store is the only way to not pay for it. Checked
+    // before the embedding rather than after, which is where the cost is.
+    if (this.facts.size === 0 || maxResults <= 0) return [];
+
     const queryEmbedding = await this.generateEmbedding(query);
 
     const scored: SearchResult[] = [];

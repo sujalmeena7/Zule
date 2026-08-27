@@ -15,6 +15,13 @@ interface SuggestionCardProps {
   isLoading: boolean;
   isStreaming: boolean;
   streamingText: string;
+  /**
+   * A thinking model's chain-of-thought, streamed while it works out the
+   * answer. Not the answer, and never rendered as one — but on a hard problem
+   * this is the only thing arriving for tens of seconds, so it drives a live
+   * progress readout in place of the static "Thinking..." spinner.
+   */
+  reasoningText?: string;
   aiResponse: AIResponse | null;
   onTriggerAI: (query: string) => void;
   /** Provider id for rating attribution (defaults to 'unknown'). */
@@ -33,6 +40,7 @@ export function SuggestionCard({
   isLoading,
   isStreaming,
   streamingText,
+  reasoningText = '',
   aiResponse,
   onTriggerAI,
   providerId = 'unknown',
@@ -63,6 +71,36 @@ export function SuggestionCard({
     }
   }, [aiResponse?.text]);
 
+  // Wall-clock for the in-flight request. A thinking model can spend a minute
+  // before its first answer token, and a spinner alone gives the user no way to
+  // judge whether that is normal or whether the request died — a number that
+  // keeps moving does.
+  const [waitSeconds, setWaitSeconds] = useState(0);
+  // Collapsed by default. This is an interview overlay: the reasoning trace is
+  // long, restates the question, and is not what the user is trying to read.
+  const [showReasoning, setShowReasoning] = useState(false);
+  useEffect(() => {
+    if (!isLoading) {
+      setWaitSeconds(0);
+      return;
+    }
+    const startedAt = Date.now();
+    // 500ms so the displayed second is never more than half a second stale;
+    // the value itself is floored to whole seconds to avoid a jittery readout.
+    const id = setInterval(() => {
+      setWaitSeconds(Math.floor((Date.now() - startedAt) / 1000));
+    }, 500);
+    return () => clearInterval(id);
+  }, [isLoading]);
+
+  // Reasoning arrives as characters, but "tokens" is the unit users see quoted
+  // for these models. ~4 chars/token is the usual English approximation and is
+  // only ever used for a progress readout, never for billing or budgeting.
+  const reasoningTokens = reasoningText ? Math.round(reasoningText.length / 4) : 0;
+  // The tail is what the model is working on *now*, which is the part that
+  // signals progress. The head is minutes-old context by the time it matters.
+  const reasoningTail = reasoningText.slice(-600);
+
   return (
     <>
       {/* AI Suggestion */}
@@ -83,7 +121,23 @@ export function SuggestionCard({
               >
                 <Loader2 size={18} className="spinner" />
               </motion.div>
-              <span>Thinking...</span>
+              <span>
+                {reasoningTokens > 0
+                  ? `Reasoning · ${waitSeconds}s · ${reasoningTokens} tokens`
+                  : waitSeconds >= 2
+                    ? `Thinking... ${waitSeconds}s`
+                    : 'Thinking...'}
+              </span>
+              {reasoningTail && (
+                <button
+                  type="button"
+                  className="reasoning-toggle"
+                  onClick={() => setShowReasoning((v) => !v)}
+                  aria-expanded={showReasoning}
+                >
+                  {showReasoning ? 'hide' : 'show'}
+                </button>
+              )}
             </motion.div>
           ) : isStreaming && streamingText ? (
             <motion.div 
@@ -127,6 +181,17 @@ export function SuggestionCard({
             </motion.div>
           )}
         </AnimatePresence>
+
+        {/*
+          The live reasoning tail. Rendered as plain text, not markdown: a
+          chain-of-thought is full of half-written code fences and list markers
+          that a markdown renderer would either swallow or reflow on every
+          chunk. `aria-hidden` because the status line above already announces
+          progress politely — reading the whole trace aloud would be hostile.
+        */}
+        {isLoading && showReasoning && reasoningTail && (
+          <pre className="reasoning-trace" aria-hidden="true"><span>{reasoningTail}</span></pre>
+        )}
       </div>
 
       {/* Modality badges and citation chips (Requirements 23.4, 5.5, 24.2) */}

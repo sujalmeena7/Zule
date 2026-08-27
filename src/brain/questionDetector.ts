@@ -228,8 +228,8 @@ export class QuestionDetectorStream {
   private lastInterimTriggeredAt = 0;
 
   constructor(opts: QuestionDetectorStreamOpts = {}) {
-    this.debounceMs = opts.debounceMs ?? 1500;
-    this.interimThrottleMs = opts.interimThrottleMs ?? 4000;
+    this.debounceMs = opts.debounceMs ?? 800;
+    this.interimThrottleMs = opts.interimThrottleMs ?? 2500;
     this.locale = opts.locale ?? 'en';
     this.now = opts.now ?? (() => Date.now());
   }

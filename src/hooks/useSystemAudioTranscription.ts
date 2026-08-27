@@ -165,35 +165,23 @@ export function useSystemAudioTranscription(
     const audioTrack = stream.getAudioTracks()[0];
     audioTrack?.addEventListener('ended', () => disable());
 
-    // 2. Pre-warm the main-process Whisper model. This is where loading happens
-    //    now (native onnxruntime-node), NOT in the renderer. ~760 ms cold.
+    // Show the green dot IMMEDIATELY after stream acquisition — the user
+    // has already granted permission and the stream is live. Model preload
+    // and provider start happen below but shouldn't block the UI indicator.
+    setIsActive(true);
+
+    // 2. Pre-warm the main-process Whisper model (non-blocking for UI).
+    //    Native onnxruntime-node, ~760ms cold start.
     try {
       await bridge.whisperPreload?.({});
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.warn('[useSystemAudioTranscription] whisper preload failed:', err);
-      toast.error(
-        'Could not load the local speech model. Mic transcription is unaffected.',
-      );
-      isEnablingRef.current = false;
-      teardown();
-      setIsActive(false);
-      return;
+      console.warn('[useSystemAudioTranscription] whisper preload failed (will load on-demand):', err);
+      // Don't abort — the transcribeFn call will trigger lazy load anyway.
     }
 
-    // 3. Spin up the Whisper provider in CAPTURE-ONLY mode: it captures the
-    //    loopback stream and delegates every audio chunk to the main process
-    //    over IPC. No in-renderer ML model is loaded (the renderer's WASM/
-    //    WebGPU engine crashes — 0xC0000005).
-    //
-    //    The `transcribeFn` is the single point at which the loopback
-    //    pipeline crosses into `whisper:transcribe`, so the VAD gate
-    //    (design.md §"VAD Module" / Requirements 5.1–5.6) is applied
-    //    here, immediately before the IPC call.
-
-    // Hydrate the gate threshold from the persisted Settings row
-    // (Requirement 7.3 / Property 17). A corrupt or missing value falls
-    // back to `medium` — the documented default (Requirement 7.6).
+    // 3. Spin up the Whisper provider in CAPTURE-ONLY mode.
+    // Hydrate the gate threshold from the persisted Settings row.
     try {
       const persisted = await database.getSetting<VADSensitivity>(
         'vadSensitivity',
@@ -205,15 +193,9 @@ export function useSystemAudioTranscription(
           : 'medium';
       speechThresholdRef.current = mapSensitivityToThreshold(sensitivity);
     } catch {
-      // IndexedDB unavailable in this environment — keep the default.
       speechThresholdRef.current = mapSensitivityToThreshold('medium');
     }
 
-    // Live sensitivity changes from Settings flow in here. The listener
-    // mutates the ref so the next chunk's gate uses the new threshold
-    // without restarting capture (Requirement 7.4 / Property 18). The
-    // returned unsubscribe is registered alongside the provider event
-    // unsubscribes so teardown clears it exactly once.
     const offVadBus = vadSensitivityBus.subscribe((event) => {
       speechThresholdRef.current = mapSensitivityToThreshold(event.value);
     });
@@ -223,10 +205,7 @@ export function useSystemAudioTranscription(
       speakerRole: 'other',
       language,
       transcribeFn: async (pcm) => {
-        // VAD gate. The kill-switch lets the existing
-        // `useSystemAudioTranscription` integration tests keep their
-        // assertions unchanged (Requirement 9.3): when enabled the gate
-        // is bypassed and every chunk is forwarded.
+        // VAD gate
         if (!VAD_DISABLE_FOR_TEST.enabled) {
           let result: VADResult | undefined;
           let cause: 'threw' | 'invalid-score' | null = null;
@@ -238,11 +217,6 @@ export function useSystemAudioTranscription(
             cause = 'threw';
           }
 
-          // Validate the score. Even though `scoreChunk` is documented
-          // to return a number in `[0, 1]`, treat its output as untrusted
-          // — Requirement 5.5 / Property 15 says we must forward the
-          // chunk and emit a typed error on NaN, out-of-range, or an
-          // undefined return.
           if (cause === null) {
             const score = result?.score;
             if (
@@ -257,9 +231,6 @@ export function useSystemAudioTranscription(
           }
 
           if (cause !== null) {
-            // Safe-by-default: open the gate, log the typed failure,
-            // and fall through to the IPC so a broken VAD never
-            // silently suppresses transcription.
             telemetry.emit({
               kind: 'error',
               name: 'transcription.vad-failed',
@@ -271,13 +242,6 @@ export function useSystemAudioTranscription(
               breadcrumb: ['useSystemAudioTranscription', 'loopback', cause],
             });
           } else if (result && !result.isSpeech) {
-            // Sub-threshold chunk — skip the IPC, count it once, and
-            // suppress the interim placeholder that
-            // `WhisperProvider.processAccumulatedAudio` already emitted
-            // for this chunk so the consumer never sees a `…` for
-            // silence (Requirements 5.2, 5.6 / Properties 13, 21).
-            // React batches the two `setInterimText` calls in the same
-            // microtask, so only the cleared value is rendered.
             telemetry.emit({ kind: 'vad.skipped', pipeline: 'loopback' });
             setInterimText('');
             return '';
@@ -305,7 +269,6 @@ export function useSystemAudioTranscription(
     // 4. Start capture. Inference happens out-of-process per chunk.
     try {
       await provider.start({ stream, language, speakerId: SYSTEM_SPEAKER_ID, speakerRole: 'other' });
-      setIsActive(true);
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn('[useSystemAudioTranscription] enable() failed:', err);
@@ -316,6 +279,7 @@ export function useSystemAudioTranscription(
       isEnablingRef.current = false;
     }
   }, [isSupported, language, disable, teardown, notifyError]);
+
 
   const pause = useCallback(() => {
     providerRef.current?.pause();

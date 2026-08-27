@@ -5134,3 +5134,108 @@ kiosk-mode browsers) from forcibly closing or hiding the Zule overlay:
 
 **Files modified:** `electron/overlayManager.ts` only.
 **Verification:** `get_diagnostics` clean, zero TypeScript errors.
+
+
+---
+
+## Fix: AI Response Latency with "Use Screen" + Nemotron/OpenRouter (2026-08-26)
+
+**Problem:** When using "Use Screen" with Nemotron 3.5 Lightning via OpenRouter,
+the first click responds in ~2s but subsequent queries (typing "next") required
+toggling Use Screen off/on to get a response. Without toggling, responses took
+10-30s inconsistently.
+
+**Root Cause:** In `triggerAI` (FloatingCopilot.tsx), the `alreadyHasContext`
+optimization checked if `screenTextRef.current` had >20 chars. On subsequent
+queries, this always held stale text from the PREVIOUS question, causing:
+1. AI answered the OLD question (stale text reuse)
+2. If user toggled off/on: full re-initialization added 10-30s latency
+3. OpenRouter 404 on image input for text-only Nemotron → retry without image → double round-trip
+
+**Fix (src/components/FloatingCopilot.tsx):**
+1. Replaced `alreadyHasContext` with `calledFromUseScreenButton = useScreenPendingRef.current`
+   — only skips fresh capture on the initial "Use Screen" click (which prefetches).
+   All subsequent queries ALWAYS force fresh UI Automation → BitBlt capture.
+2. Text_Only_Adapter path: changed from fire-and-forget to awaited fresh capture
+   (UIA first, OCR fallback), so the CURRENT request gets fresh screen content.
+3. BitBlt Priority 2: when image is captured, try OCR first to extract text.
+   If OCR succeeds, use text instead of image — avoids OpenRouter 404 + retry
+   for text-only models like Nemotron. Only sends raw image if OCR fails.
+4. All builds (tsc, vite, electron) pass cleanly.
+
+**Expected behavior after fix:**
+- User clicks "Use Screen" once → fast response (~2s)
+- User types "next" (or any query) → fresh screen capture + fast response (~2-3s)
+- No toggle off/on needed between questions
+- Consistent latency regardless of which question number
+
+## 2026-08-27 — Latency fast path (click → first token ~2–3s)
+
+- 2026-08-27: Removed all three Transformers.js embedding passes from the screen-grounded dispatch path, parallelized + deadline-capped KB/memory retrieval on the conversational path, warmed providers and redaction rules at idle after mount, halved capture timeouts, dropped the duplicate UIA capture in triggerAI, and added [perf] stage instrumentation.
+
+**Root cause of the 20–30s MCQ latency:** every screen dispatch ran three sequential WASM forward passes on the critical path — semanticCache.getWithFrame(), knowledgeBase.search(), memoryStore.search() — plus a cold provider registration (IndexedDB read + key decryption + dynamic adapter import) and a redundant second UI-tree walk, all before the request left the process.
+
+**What changed:**
+1. src/brain/contextManager.ts — new buildMinimalScreenContext() skips KB/memory retrieval entirely (contextBuilder.build() is synchronous, so the only await left is a memoized redaction-rule load). buildContextWindow() now runs both searches concurrently and races them against retrievalDeadlineMs (600ms default); the searches keep running past the deadline so the warmed model speeds up the next dispatch. Redaction rules are memoized behind primeFastContext() / invalidateRedactionRuleCache().
+2. src/brain/screenFastCache.ts (new) — zero-async exact-match (FNV-1a) response cache for the screen path, replacing the embedding-based lookup. Bounded at 32 entries, LRU-refresh on hit, rejects simulated responses.
+3. src/brain/aiProvider.ts — warmProviders() so first request skips cold adapter registration.
+4. src/components/FloatingCopilot.tsx — fast-path gate requires real grounding (>=24 chars screen text or a keyframe), so a blind screen-armed dispatch still takes the full retrieval path; idle warm-up effect on mount; named capture timeouts (UIA 1200ms, BitBlt 1500ms, OCR 1500ms, was 3000ms each); OCR calls wrapped in raceTimeout; alreadyHasContext guard added to the text-only adapter branch to stop the double capture; makeStopwatch() emits [perf] marks at capture/cache/context/ttft.
+
+**Privacy note:** redaction is NOT shortcut on the fast path — skipRedaction stays false, so the attestation still stamps applied: true (Req 2.9). Only retrieval is skipped.
+
+**Verification:** vite build passes; tsc -b reports no new errors from these files (the two in FloatingCopilot.tsx — unused screenContextGuardRef, BitBlt TS2722 — are present at HEAD); test suite 3415 passed / 47 failed, all 47 pre-existing and unrelated (stale electron session mock, fast-check seeds, UpdateBanner).
+
+**Deferred:** ~92 pre-existing tsc -b errors across the repo remain unfixed at the User's request — to be addressed separately.
+
+## 2026-08-27 — Latency round 2: capture chain was the real cost
+
+- 2026-08-27: Fixed the regressions and misdiagnoses from round 1 after the User reported 20–60s dispatches and occasional "No conversation context was included" replies.
+
+**What round 1 got wrong:**
+1. The deadline caps were decorative. transformersEnv pins the ONNX WASM backend to numThreads=1 and proxy=false, so embeddings run ON THE RENDERER MAIN THREAD. A Promise.race against setTimeout cannot preempt them — the timer cannot fire while WASM holds the event loop. RETRIEVAL_DEADLINE_MS / SEMANTIC_CACHE_DEADLINE_MS only bound the awaitable parts (IndexedDB, hydration). Comments corrected to say so.
+2. OCR_TIMEOUT_MS was set to 1500ms. Tesseract on a full frame needs seconds, so the cap converted a slow success into a hard failure returning "". Raised to 8000ms: OCR is the LAST text source, so its alternative is no screen text at all, not a cheaper capture.
+3. The useFastPath gate required grounding to have materialised. That routed exactly the failed-capture case into the full retrieval path — the slowest one — because it priced retrieval at the 600ms deadline instead of its real main-thread cost. Now gated on screenArmed. hasScreenGrounding is retained only for cache keying and the fail-fast check.
+
+**The dominant cost, found this round:** electron/win32/uiAutomation.ts extractForegroundText does NOT call a native API — it spawns powershell.exe, loads System.Windows.Automation, and walks every descendant of the foreground window with three pattern queries each. Its docstring claims 200–500ms; a browser window has thousands of accessibility nodes and the native side allows itself 5s. UIA_TIMEOUT_MS=1200 therefore expired before it could ever succeed, on precisely the windows it exists to serve. Raised to 4000ms.
+
+**The empty-prompt bug (ss2):** with UIA expired, the chain fell to BitBlt, which succeeds and returns an IMAGE. Nemotron is text-only, so the adapter strips the image before sending — a capture that worked still reached the model as an empty prompt. Fixes:
+- src/utils/ocrImage.ts (new) — ocrBase64Image() decodes base64 to a canvas and runs the existing OCR worker. The worker only accepted canvas/video, so there was no route from BitBlt or Phone Camera output to text.
+- FloatingCopilot: on a text-only adapter, an image-only capture is OCR'd in handleUseScreen, in the phoneImageRef branch, and via a new BitBlt+OCR last resort in the text-only branch of triggerAI (captureTextNow OCRs the getDisplayMedia frame, which is empty for display-affinity windows — the exact case the chain exists for).
+- hasScreenGrounding now counts a keyframe only when activeAdapterSupportsImageInput().
+- triggerAI aborts with a plain message when screen-armed with no grounding and no query, instead of spending a round trip to have the model report the empty context.
+
+**Other wins:** handleUseScreen now starts UIA and BitBlt CONCURRENTLY (preference order preserved by which result is consumed, not which is issued) so a native BitBlt no longer waits on a PowerShell spawn. knowledgeBase.search() and memoryStore.search() now check for an empty corpus BEFORE embedding — previously an empty KB still cost a full main-thread forward pass. Fast cache keyed on hasScreenGrounding, not useFastPath, so two ungrounded "next" dispatches cannot collide on a query-only key.
+
+**Verification:** vite build passes; no new tsc errors (FloatingCopilot 394/845 and memoryStore 18/19/79 all confirmed identical at HEAD); full suite 3417 passed / 45 failed across the same 7 files that failed before the change.
+
+**Still open — the structural fix:** UIA is on the critical path as a per-dispatch PowerShell spawn. The real answer is a long-lived PowerShell host talking over stdin/stdout, and/or extracting in the background while armed so dispatch reads a ref. Not attempted yet; needs a decision on process lifecycle.
+- 2026-08-27: Screen dispatch rerouted to a vision model (pixel-first). FloatingCopilot capture chain split: when any reachable adapter accepts images (hasVisionProvider), Use Screen does BitBlt only (~50ms native GetDC+BitBlt via koffi) and sends pixels — no PowerShell UI Automation spawn, no Tesseract. The UIA -> captureTextNow -> BitBlt+OCR text chain is now shared and reached only when no vision provider exists or every pixel capture failed. Both handleUseScreen prefetch and triggerAI follow the same split.
+- 2026-08-27: Router-level vision routing. CallOpts.requireImageInput filters failover to image-capable adapters; NoVisionProviderError raised when none exist (nothing is attempted — it is a config gap, not a failed request). New AI_Provider_Router.hasImageCapableAdapter() answers "any usable adapter", not "the first one" (getActiveAdapterCapabilities reported only the head of the priority list, which forced the OCR detour on setups that already had Gemini configured).
+- 2026-08-27: Gateway capability claims are now verified at runtime. custom.ts declares imageInput: true (deliberate, commit 008100a) but a gateway fronts many models and most are text-only. The router now marks an adapter image-incapable on an image-rejection error (isImageUnsupportedError moved to providers/http.ts so router and aiProvider share one definition), fails over to the next vision adapter, and remembers the verdict until re-registration. Guarded on prompt.images being non-empty so an unrelated error mentioning "multimodal" cannot brand an adapter.
+- 2026-08-27: streamAIResponse no longer retries text-only when the caller set requireImageInput — the image was the only grounding, so dropping it produces the "No conversation context was included" non-answer. Throws NoVisionProviderError instead; FloatingCopilot catches it, sets forceTextChainRef and re-dispatches once down the text chain (clearing screenTextRef/useScreenPendingRef so it is a genuine re-capture), and only then shows an actionable Settings message.
+- 2026-08-27: Verified — vite build passes; tsc -b shows only pre-existing TS6133s in touched files; full suite 3427 passed / 45 failed across the same 7 pre-existing failing files (releaseGates, reparent.degradation, reparent.roundtrip, UpdateBanner, dualModeOverlay.bugcondition, useZuleError, dualModeOverlay.preservation). 10 new tests added (8 router requireImageInput/runtime-rejection cases, 2 aiProvider). NOT measured: no click-to-first-token number from a running app — latency figures remain arithmetic from code inspection.
+- 2026-08-28: Diagnosed 60s DSA latency as a thinking-model reasoning phase that rendered nothing: openAICompatible read only delta.content, so qwen3-vl-thinking reasoning frames were dropped and the overlay sat on a static "Thinking..." spinner.
+- 2026-08-28: Added extractDeltaReasoning (delta.reasoning + delta.reasoning_content) and an optional onReasoning callback threaded through StreamCallbacks, providerRouter, aiProvider, and FloatingCopilot; Anthropic thinking_delta handled too.
+- 2026-08-28: SuggestionCard now shows a live "Reasoning - Ns - N tokens" readout with a collapsible trace tail instead of a bare spinner, so a long think is visibly progressing.
+- 2026-08-28: Raised the custom provider default max_tokens 2048 to 8192 because a thinking model spends that budget on reasoning before the answer starts, which was truncating hard DSA solutions; added a warning when a stream ends with reasoning but empty text.
+- 2026-08-28: Verified - 4 new reasoning-delta tests, 87/87 passing across the adapter+router suites, vite build clean, no new tsc errors in touched files.
+- 2026-08-28: Confirmed live from the overlay readout that the reasoning phase is the whole cost - qwen3-vl-235b-a22b-thinking produced 3099 reasoning tokens in 52s (~60 tok/s) for the LFU Cache question, which also proves the old 2048 max_tokens would have truncated it outright.
+- 2026-08-28: Added ReasoningEffort (none|low|medium|high) to CallOpts plus defaultReasoningEffort on OpenAICompatibleAdapter; emits OpenRouter-style reasoning:{effort} and maps none to reasoning:{enabled:false} since thinking-baked variants reject effort:none.
+- 2026-08-28: Custom provider now defaults to reasoning effort low (DEFAULT_REASONING_EFFORT in custom.ts).
+- 2026-08-28: Guarded the extension: a 4xx naming reasoning triggers one retry without the field and disables it for that adapter permanently; 401/402/403/429/5xx deliberately excluded so router failover and cooldown still see real errors.
+- 2026-08-28: Verified - 169/169 passing across all provider+router suites (10 new reasoning tests), vite build clean, no new tsc errors.
+- 2026-08-28: Added a second model slot on the custom endpoint: preferFastModel on CallOpts plus fastModelId on OpenAICompatibleAdapter/CustomOpenAICompatibleAdapter/ProviderConfig, so screen questions reach a non-thinking model while everything else keeps the smart one. Boolean rather than a model id so router failover never carries a foreign model name.
+- 2026-08-28: Screen dispatch in FloatingCopilot now sends preferFastModel + reasoningEffort none; both degrade to today's behaviour when the provider has neither configured, so the feature ships dark until the fast model is filled in.
+- 2026-08-28: Answer-first output: ANSWER_FIRST_DIRECTIVE prepended to every screen prompt in buildMinimalScreenContext, and modePrompts coding-interview no longer says to give hints instead of solutions.
+- 2026-08-28: BitBlt capture was sending a full-resolution quality-85 JPEG; now downscaled to a 1600px longest edge at quality 80 via the existing downscaleSize, and returns byte count + dimensions so the [perf] line can attribute latency to payload size.
+- 2026-08-28: New src/brain/providers/modelCatalog.ts - GET /models discovery plus a streaming speed probe that reports first-word latency, words/sec, and whether the model deliberated first. Deliberately no hardcoded recommended-model list: free-tier ids churn weekly, so the User measures their own gateway.
+- 2026-08-28: Settings custom provider section gained a Fast model field, a Load models button feeding a shared datalist, a per-field Test speed button, and a thinking-model advisory driven by looksLikeThinkingModel.
+- 2026-08-28: Verified - 179/179 provider+router suites (10 new), 21/21 new modelCatalog tests, 8/8 customProviderConfig, 8/8 SettingsCustomProvider, vite build clean, no new tsc errors (UpdateBanner.test.ts failure is pre-existing and unrelated).
+
+- 2026-08-28: makeStopwatch gained elapsed() - the total without reprinting the stage breakdown - and the screen dispatch now logs a second [perf] line from onMetrics naming the model that actually answered plus ttft, provider latency and wall clock. AIResponse carries no model id, so onComplete could not do it.
+- 2026-08-28: Verified - 205/205 provider+router+catalog tests across 14 files, 8/8 customProviderConfig, 8/8 SettingsCustomProvider, vite build clean in 8.01s, tsc -b back to the 77-error pre-existing baseline with no new errors.
+- 2026-08-28: Live run showed 156s total = capture 13s + ttft 143s, and no model id anywhere in the log. Root causes found: openAICompatible never called cb.onMetrics (only simulation did), so the resolved model id was unobservable; and the vision decision in triggerAI/handleUseScreen reads the router adapter list before streamAIResponse lazily populates it, so the first screen dispatch of a session answers no vision provider and takes the PowerShell+Tesseract text chain.
+- 2026-08-28: Fixes - openAICompatible.streamGenerate now emits onMetrics (modelId, ttftMs, totalMs, retries) with ttft falling back to total on a reasoning-only stream; triggerAI and handleUseScreen await warmProviders before deciding vision; ensureProvidersSynced records its config hash only after the pass completes so a mid-sync throw can no longer wedge a session with zero adapters.
+- 2026-08-28: UI Automation got a one-strike session circuit breaker in the extract-foreground-text IPC handler plus stderr in the failure reason - it was failing on this machine and costing ~5s per dispatch with an unexplainable Command failed message. no-text is deliberately not a strike.
+- 2026-08-28: Added pixel-path diagnostics: a line naming forceTextChain/activeAdapterVision/anyVisionAdapter whenever the text chain is chosen, and the BitBlt reason (or timeout) when the pixel path returns nothing.
+- 2026-08-28: Measured after the fixes, same machine and same question class as the 156s baseline: providers 26ms | capture 151ms | cache 6ms | context 1ms | ttft 1195ms | shot 156KB 1600x900, answered by qwen3-vl-235b-a22b-instruct, full answer at 11.2s wall. Capture 13s to 151ms; first token 143s to 1.2s. Plan snuggly-honking-metcalfe complete and verified live.

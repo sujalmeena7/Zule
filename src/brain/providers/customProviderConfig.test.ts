@@ -31,6 +31,7 @@ import type { CustomField } from './customProviderConfig';
 import {
   buildCustomConfigForSave,
   CUSTOM_PROVIDER_ID,
+  looksLikeThinkingModel,
   MAX_PRIORITY,
   MIN_PRIORITY,
   mergeCustomEntry,
@@ -412,5 +413,114 @@ describe("Property 7: Provider_Sync's plan is a total, non-mutating function of 
       }),
       { numRuns: 100 },
     );
+  });
+});
+
+// ── The optional fast model ─────────────────────────────────────────────────
+//
+// `fastModelId` is the one Custom_Provider text field that can be blank without
+// the configuration being incomplete: blank means "send every dispatch to
+// `modelId`", which is the behaviour that predates the field. The tests below
+// pin that asymmetry, because getting it wrong would refuse to register a
+// perfectly usable endpoint for the sake of an optional input.
+
+describe('Custom_Provider fast model — an optional field, never a gate', () => {
+  const COMPLETE: ProviderConfig = {
+    id: CUSTOM_PROVIDER_ID,
+    enabled: true,
+    priority: 6,
+    baseUrl: 'https://openrouter.ai/api/v1',
+    modelId: 'qwen-thinking',
+  };
+  const KEYS = { [CUSTOM_PROVIDER_ID]: 'sk-abcdef123456' };
+
+  it('registers with no fast model at all, and never names it as missing', () => {
+    for (const fastModelId of [undefined, '', '   ', '\t\n']) {
+      const entry: ProviderConfig = { ...COMPLETE };
+      if (fastModelId !== undefined) entry.fastModelId = fastModelId;
+
+      const plan = planProviderSync([entry], KEYS, new Set());
+      expect(plan.register).toContain(CUSTOM_PROVIDER_ID);
+      expect(
+        plan.diagnostics.filter((d) => d.kind === 'custom.config-incomplete'),
+      ).toHaveLength(0);
+    }
+  });
+
+  it('carries a trimmed fast model through to the registration decision', () => {
+    const plan = planProviderSync(
+      [{ ...COMPLETE, fastModelId: '  qwen-instruct \n' }],
+      KEYS,
+      new Set(),
+    );
+    expect(plan.register).toContain(CUSTOM_PROVIDER_ID);
+  });
+
+  it('persists a trimmed fast model, and leaves it untouched when no draft is supplied', () => {
+    const previous: ProviderConfig = { ...COMPLETE, fastModelId: 'qwen-instruct' };
+
+    const saved = buildCustomConfigForSave({
+      previous,
+      enabled: true,
+      priority: 6,
+      baseUrlDraft: 'https://openrouter.ai/api/v1',
+      modelIdDraft: 'qwen-thinking',
+      fastModelIdDraft: '  other-instruct  ',
+      apiKeyDraft: '',
+    });
+    expect(saved.ok).toBe(true);
+    if (saved.ok) expect(saved.config.fastModelId).toBe('other-instruct');
+
+    // A caller that predates the field omits the draft entirely; that must not
+    // silently erase what the User already configured.
+    const untouched = buildCustomConfigForSave({
+      previous,
+      enabled: true,
+      priority: 6,
+      baseUrlDraft: 'https://openrouter.ai/api/v1',
+      modelIdDraft: 'qwen-thinking',
+      apiKeyDraft: '',
+    });
+    expect(untouched.ok).toBe(true);
+    if (untouched.ok) expect(untouched.config.fastModelId).toBe('qwen-instruct');
+  });
+
+  it('clears the stored fast model when the draft is explicitly blank', () => {
+    const saved = buildCustomConfigForSave({
+      previous: { ...COMPLETE, fastModelId: 'qwen-instruct' },
+      enabled: true,
+      priority: 6,
+      baseUrlDraft: 'https://openrouter.ai/api/v1',
+      modelIdDraft: 'qwen-thinking',
+      fastModelIdDraft: '   ',
+      apiKeyDraft: '',
+    });
+    // Emptying the input is how the User says "go back to one model", so a blank
+    // draft has to be honoured rather than read as "no opinion".
+    expect(saved.ok).toBe(true);
+    if (saved.ok) expect(saved.config.fastModelId).toBe('');
+  });
+});
+
+describe('looksLikeThinkingModel', () => {
+  it('flags the deliberating variants and leaves ordinary ids alone', () => {
+    for (const id of [
+      'qwen/qwen3-vl-235b-a22b-thinking',
+      'deepseek/deepseek-r1',
+      'Qwen/QwQ-32B-Preview',
+      'openai/o1-mini',
+      'some-reasoning-model',
+    ]) {
+      expect(looksLikeThinkingModel(id)).toBe(true);
+    }
+
+    for (const id of [
+      'qwen/qwen3-vl-235b-a22b-instruct',
+      'meta-llama/llama-3.1-8b-instruct',
+      'gpt-4o-mini',
+      '',
+    ]) {
+      expect(looksLikeThinkingModel(id)).toBe(false);
+    }
   });
 });

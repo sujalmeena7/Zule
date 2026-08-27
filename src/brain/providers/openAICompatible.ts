@@ -50,6 +50,7 @@ import type {
   ProviderHttpError,
   ProviderResponse,
   PromptInput,
+  ReasoningEffort,
   StreamCallbacks,
 } from './types';
 
@@ -89,6 +90,20 @@ export interface OpenAICompatibleAdapterOptions {
   /** Model id used when `CallOpts.modelId` is absent. */
   defaultModelId: string;
   /**
+   * Model id used when the caller sets `CallOpts.preferFastModel` — the
+   * latency-critical slot, served by the same endpoint and credential.
+   *
+   * Exists because "make the answer arrive sooner" is, past a point, a model
+   * choice rather than a tuning knob: a thinking-tuned variant deliberates for
+   * tens of seconds whether or not it is asked to, so the only way to be quick
+   * is to ask a model that does not deliberate. Since one gateway usually fronts
+   * both variants, this is a second `model` string rather than a second adapter.
+   *
+   * Left undefined, `preferFastModel` is a no-op and the request is
+   * byte-identical to what it was before this option existed.
+   */
+  fastModelId?: string;
+  /**
    * `max_tokens` to send when the caller does not specify `maxOutputTokens`.
    *
    * Omitting `max_tokens` is not neutral on a metered gateway: the endpoint
@@ -99,6 +114,17 @@ export interface OpenAICompatibleAdapterOptions {
    * this; leaving it undefined preserves the "send no `max_tokens`" behaviour.
    */
   defaultMaxOutputTokens?: number;
+  /**
+   * Deliberation budget sent for a thinking model when the caller specifies
+   * none. Left undefined the `reasoning` field is omitted entirely, so an
+   * endpoint applies whatever it does by default.
+   *
+   * Worth setting for a gateway: the reasoning phase dominates wall-clock
+   * latency and its default is "as long as the model likes". Unknown to a
+   * plain OpenAI-compatible server, which is handled — see
+   * `reasoningRejected`.
+   */
+  defaultReasoningEffort?: ReasoningEffort;
   /**
    * Optional bearer token. Blank / whitespace-only is treated as
    * "no credential configured" and the `Authorization` header is omitted.
@@ -135,12 +161,27 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
   protected readonly providerId: string;
   protected readonly apiKey: string | undefined;
   protected readonly defaultModelId: string;
+  protected readonly fastModelId?: string;
   protected readonly baseUrl: string;
   protected readonly fetchImpl?: typeof fetch;
 
   private readonly streamingTimeoutMs: number;
   private readonly nonStreamingTimeoutMs: number;
   private readonly defaultMaxOutputTokens?: number;
+  private readonly defaultReasoningEffort?: ReasoningEffort;
+  /**
+   * Set once an endpoint has rejected the `reasoning` field.
+   *
+   * `reasoning` is an OpenRouter extension, not part of the OpenAI schema.
+   * Gateways that don't know it mostly ignore it, but a strict server answers
+   * HTTP 400 for the unknown parameter — which would turn a latency
+   * optimisation into a total outage for that provider. So the first rejection
+   * is absorbed: the request is reissued without the field and the field is
+   * never sent to this adapter again. Not time-bounded, in the same spirit as
+   * the router's image-capability verdict: a server that doesn't understand a
+   * parameter won't start understanding it.
+   */
+  private reasoningRejected = false;
   private readonly onUsage?: (usage: OpenAICompatibleUsageEvent) => void;
   private readonly scrubError: (message: string) => string;
   private readonly preflightHook?: (prompt: PromptInput) => void;
@@ -153,6 +194,11 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     const trimmedKey = opts.apiKey?.trim();
     this.apiKey = trimmedKey ? trimmedKey : undefined;
     this.defaultModelId = opts.defaultModelId;
+    // Blank / whitespace-only means "no fast model configured", matching how a
+    // blank apiKey is read above. A Settings field the User left empty must not
+    // become a request for the model named `''`.
+    const trimmedFastModel = opts.fastModelId?.trim();
+    this.fastModelId = trimmedFastModel ? trimmedFastModel : undefined;
     this.capabilities = opts.capabilities ?? DEFAULT_CAPABILITIES;
     this.baseUrl = opts.baseUrl.replace(/\/+$/, '');
     this.fetchImpl = opts.fetchImpl;
@@ -160,6 +206,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     this.nonStreamingTimeoutMs =
       opts.nonStreamingTimeoutMs ?? DEFAULT_NON_STREAMING_TIMEOUT_MS;
     this.defaultMaxOutputTokens = opts.defaultMaxOutputTokens;
+    this.defaultReasoningEffort = opts.defaultReasoningEffort;
     this.onUsage = opts.onUsage;
     this.scrubError = opts.scrubError ?? ((message: string) => message);
     this.preflightHook = opts.preflight;
@@ -175,6 +222,61 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     if (opts.maxOutputTokens !== undefined) return opts;
     if (this.defaultMaxOutputTokens === undefined) return opts;
     return { ...opts, maxOutputTokens: this.defaultMaxOutputTokens };
+  }
+
+  /**
+   * The model id to send.
+   *
+   * Precedence is explicit > fast > default. An explicit `opts.modelId` wins
+   * outright because it is a caller naming one model, which is a stronger
+   * statement than a caller expressing a preference for speed. `preferFastModel`
+   * falls through to the default whenever no fast model is configured, so the
+   * flag is safe to set unconditionally on the screen path.
+   */
+  private resolveModelId(opts: CallOpts): string {
+    if (opts.modelId) return opts.modelId;
+    if (opts.preferFastModel && this.fastModelId) return this.fastModelId;
+    return this.defaultModelId;
+  }
+
+  /**
+   * The deliberation budget to send, or `undefined` to omit the field. The
+   * caller's choice wins over the adapter default; a prior rejection overrides
+   * both, because sending it again would just reproduce the 400.
+   */
+  private resolveReasoningEffort(opts: CallOpts): ReasoningEffort | undefined {
+    if (this.reasoningRejected) return undefined;
+    return opts.reasoningEffort ?? this.defaultReasoningEffort;
+  }
+
+  /**
+   * Issues a request, and if the endpoint rejects the `reasoning` extension,
+   * reissues it once without that field.
+   *
+   * The retry exists because `reasoning` buys latency but is not universally
+   * understood: a gateway that 400s on the unknown parameter would otherwise
+   * fail every request to this provider. Only a 4xx naming the field triggers
+   * it — a 429, a 5xx, or an unrelated 400 must keep their normal meaning so
+   * the router's failover and retry logic still see the real error.
+   */
+  private async requestWithReasoningFallback(
+    build: (effort: ReasoningEffort | undefined) => string,
+    issue: (body: string) => Promise<Response>,
+    opts: CallOpts,
+  ): Promise<Response> {
+    const effort = this.resolveReasoningEffort(opts);
+    if (effort === undefined) return issue(build(undefined));
+
+    try {
+      return await issue(build(effort));
+    } catch (err) {
+      if (!isReasoningUnsupportedError(err)) throw err;
+      this.reasoningRejected = true;
+      console.warn(
+        `[${this.providerId}] Endpoint rejected the 'reasoning' parameter — retrying without it and not sending it again.`,
+      );
+      return issue(build(undefined));
+    }
   }
 
   /**
@@ -199,29 +301,32 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     // here produces zero HTTP requests (Requirement 2.10).
     this.preflightHook?.(prompt);
 
-    const modelId = opts.modelId ?? this.defaultModelId;
+    const modelId = this.resolveModelId(opts);
     const url = this.endpoint();
-    const body = JSON.stringify(
-      buildRequestBody(prompt, this.withDefaultMaxTokens(opts), modelId, false),
-    );
+    const resolved = this.withDefaultMaxTokens(opts);
 
-    const response = await retryWithJitter(
-      () =>
-        fetchWithTimeout(
-          url,
-          {
-            method: 'POST',
-            headers: this.buildHeaders(),
-            body,
-          },
-          {
-            kind: 'non-streaming',
-            timeoutMs: opts.timeoutMs ?? this.nonStreamingTimeoutMs,
-            signal: opts.signal,
-            fetchImpl: this.fetchImpl,
-          },
-        ).then((res) => throwIfNotOk(res, this.providerId, this.scrubError)),
-      { signal: opts.signal },
+    const response = await this.requestWithReasoningFallback(
+      (effort) => JSON.stringify(buildRequestBody(prompt, resolved, modelId, false, effort)),
+      (body) =>
+        retryWithJitter(
+          () =>
+            fetchWithTimeout(
+              url,
+              {
+                method: 'POST',
+                headers: this.buildHeaders(),
+                body,
+              },
+              {
+                kind: 'non-streaming',
+                timeoutMs: opts.timeoutMs ?? this.nonStreamingTimeoutMs,
+                signal: opts.signal,
+                fetchImpl: this.fetchImpl,
+              },
+            ).then((res) => throwIfNotOk(res, this.providerId, this.scrubError)),
+          { signal: opts.signal },
+        ),
+      opts,
     );
 
     const json = (await response.json()) as unknown;
@@ -266,29 +371,43 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     // Pre-flight first: a throw must not be preceded by any fetch.
     this.preflightHook?.(prompt);
 
-    const modelId = opts.modelId ?? this.defaultModelId;
+    const modelId = this.resolveModelId(opts);
     const url = this.endpoint();
-    const body = JSON.stringify(
-      buildRequestBody(prompt, this.withDefaultMaxTokens(opts), modelId, true),
-    );
+    const resolved = this.withDefaultMaxTokens(opts);
 
-    const response = await retryWithJitter(
-      () =>
-        fetchWithTimeout(
-          url,
-          {
-            method: 'POST',
-            headers: this.buildHeaders(),
-            body,
+    // Wall-clock and attempt accounting for `cb.onMetrics`. Without these the
+    // only adapter that ever reported metrics was `simulation`, so a real
+    // request's latency could not be attributed to a model at all — and on this
+    // path the whole question is whether the fast slot or the thinking model
+    // answered.
+    const startedAt = performance.now();
+    let attempts = 0;
+    let ttftMs = -1;
+
+    const response = await this.requestWithReasoningFallback(
+      (effort) => JSON.stringify(buildRequestBody(prompt, resolved, modelId, true, effort)),
+      (body) =>
+        retryWithJitter(
+          () => {
+            attempts += 1;
+            return fetchWithTimeout(
+              url,
+              {
+                method: 'POST',
+                headers: this.buildHeaders(),
+                body,
+              },
+              {
+                kind: 'streaming',
+                timeoutMs: opts.timeoutMs ?? this.streamingTimeoutMs,
+                signal: opts.signal,
+                fetchImpl: this.fetchImpl,
+              },
+            ).then((res) => throwIfNotOk(res, this.providerId, this.scrubError));
           },
-          {
-            kind: 'streaming',
-            timeoutMs: opts.timeoutMs ?? this.streamingTimeoutMs,
-            signal: opts.signal,
-            fetchImpl: this.fetchImpl,
-          },
-        ).then((res) => throwIfNotOk(res, this.providerId, this.scrubError)),
-      { signal: opts.signal },
+          { signal: opts.signal },
+        ),
+      opts,
     );
 
     const reader = response.body?.getReader();
@@ -316,6 +435,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     const decoder = new TextDecoder();
     let buffer = '';
     let cumulativeText = '';
+    let cumulativeReasoning = '';
     let lastUsage: unknown = null;
 
     try {
@@ -346,8 +466,19 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
 
           const partText = extractDeltaContent(parsed);
           if (partText) {
+            if (ttftMs < 0) ttftMs = performance.now() - startedAt;
             cumulativeText += partText;
             cb.onToken(cumulativeText);
+          }
+          // A thinking model streams its chain-of-thought here for the whole
+          // reasoning phase while `delta.content` stays null. Surfaced
+          // separately from `onToken` so it never contaminates the answer, but
+          // surfaced at all so a 60-second think is visibly progressing rather
+          // than indistinguishable from a stall.
+          const partReasoning = extractDeltaReasoning(parsed);
+          if (partReasoning) {
+            cumulativeReasoning += partReasoning;
+            cb.onReasoning?.(cumulativeReasoning);
           }
           // Ollama reports `usage` on the final frame; LM Studio sometimes
           // does, sometimes not. Keep the most-recent one for
@@ -379,10 +510,32 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
 
     const usage = extractUsage(lastUsage, prompt, cumulativeText, this);
 
+    // A thinking model spends `max_tokens` on reasoning first, so a budget that
+    // is generous for a normal answer can be exhausted before the answer
+    // starts. The symptom is an empty success, which is otherwise
+    // indistinguishable from a model that had nothing to say.
+    if (!cumulativeText && cumulativeReasoning) {
+      console.warn(
+        `[${this.providerId}] Stream ended with ${cumulativeReasoning.length} chars of reasoning but an empty answer — ` +
+          `the reasoning phase likely consumed the whole max_tokens budget. Raise it for this model.`,
+      );
+    }
+
     this.onUsage?.({
       modelId,
       promptTokens: usage.promptTokens,
       completionTokens: usage.completionTokens,
+    });
+
+    // Emitted before `onComplete` so a consumer that logs both sees the model id
+    // alongside the timings rather than after them. `ttftMs` falls back to the
+    // total when the answer was empty: there was no first token to time, and
+    // reporting 0 would read as "instant".
+    cb.onMetrics?.({
+      ttftMs: Math.round(ttftMs >= 0 ? ttftMs : performance.now() - startedAt),
+      totalMs: Math.round(performance.now() - startedAt),
+      retries: Math.max(0, attempts - 1),
+      modelId,
     });
 
     cb.onComplete({
@@ -427,6 +580,7 @@ function buildRequestBody(
   opts: CallOpts,
   modelId: string,
   stream: boolean,
+  reasoningEffort?: ReasoningEffort,
 ): Record<string, unknown> {
   // Prefer the role-tagged messages for OpenAI-compatible servers. When
   // `Context_Builder` has assembled `fullPrompt`, we fold it into the user
@@ -465,6 +619,16 @@ function buildRequestBody(
   };
   if (opts.maxOutputTokens !== undefined) {
     body.max_tokens = opts.maxOutputTokens;
+  }
+
+  // OpenRouter's reasoning control, and the de-facto convention gateways copy.
+  // `'none'` maps to `enabled: false` rather than `effort: 'none'` because the
+  // latter is rejected outright by models whose thinking cannot be turned off,
+  // whereas `enabled: false` is documented to be ignored by them — a request
+  // that degrades to "reasons anyway" beats one that 400s.
+  if (reasoningEffort) {
+    body.reasoning =
+      reasoningEffort === 'none' ? { enabled: false } : { effort: reasoningEffort };
   }
 
   return body;
@@ -532,6 +696,54 @@ function extractCompletionText(json: unknown): string {
     return text;
   }
   return '';
+}
+
+/**
+ * True when a request failed *because of* the `reasoning` extension rather than
+ * for a real reason.
+ *
+ * Deliberately narrow. It requires a 4xx AND the word "reasoning" in the body
+ * the gateway echoed back, because the consequence of a false positive is
+ * permanently disabling a latency optimisation, and the consequence of matching
+ * too loosely is worse: a 429 or a 5xx that happens to mention reasoning would
+ * be swallowed into a silent retry instead of reaching the router's failover.
+ * 402 is excluded on purpose — that is a real billing failure that a retry
+ * without `reasoning` would not fix.
+ */
+function isReasoningUnsupportedError(err: unknown): boolean {
+  const status = (err as { status?: unknown })?.status;
+  if (typeof status !== 'number' || status < 400 || status >= 500) return false;
+  if (status === 401 || status === 402 || status === 403 || status === 429) return false;
+  const msg = (err instanceof Error ? err.message : String(err ?? '')).toLowerCase();
+  return msg.includes('reasoning');
+}
+
+/**
+ * Reads a *reasoning* delta from a streaming SSE frame, returning '' when the
+ * frame carries none.
+ *
+ * Thinking models (`qwen3-vl-…-thinking`, DeepSeek-R1, GLM-Z1, …) do not put
+ * their chain-of-thought in `delta.content`. They emit it on a sibling field
+ * for the whole reasoning phase, and `delta.content` stays null until the
+ * answer itself begins. On a hard problem that phase runs for tens of seconds,
+ * so an adapter that reads only `content` calls `onToken` zero times and the UI
+ * cannot tell a working request from a hung one.
+ *
+ * Two spellings exist and neither is standard, so both are accepted:
+ *   - `reasoning`          — OpenRouter's normalised field
+ *   - `reasoning_content`  — DashScope / vLLM / SGLang, and DeepSeek's own API
+ *
+ * `reasoning_details` (OpenRouter's structured form) is deliberately ignored:
+ * it duplicates `reasoning`, so reading both would double every chunk.
+ */
+function extractDeltaReasoning(json: unknown): string {
+  if (!json || typeof json !== 'object') return '';
+  const choices = (json as { choices?: unknown }).choices;
+  if (!Array.isArray(choices) || choices.length === 0) return '';
+  const delta = (choices[0] as { delta?: Record<string, unknown> })?.delta;
+  if (!delta || typeof delta !== 'object') return '';
+  const reasoning = delta.reasoning ?? delta.reasoning_content;
+  return typeof reasoning === 'string' ? reasoning : '';
 }
 
 /**

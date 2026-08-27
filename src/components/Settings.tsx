@@ -3,7 +3,7 @@
 // ============================================
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import type { CSSProperties } from 'react';
+import type { CSSProperties, JSX } from 'react';
 import {
   Key, Palette, Keyboard, Database, Trash2, Plus, FileText,
   Sun, Moon, Shield, Upload, Eye, EyeOff, CheckCircle2, Wand2,
@@ -19,6 +19,7 @@ import {
   MAX_MODEL_ID_LENGTH,
   buildCustomConfigForSave,
   clampField,
+  looksLikeThinkingModel,
   mergeCustomEntry,
 } from '../brain/providers/customProviderConfig';
 import { MAX_BASE_URL_LENGTH } from '../brain/providers/endpointValidator';
@@ -230,6 +231,112 @@ const CUSTOM_FIELD_LABEL_STYLE: CSSProperties = {
   color: 'var(--text-tertiary)',
 };
 
+/** DOM id of the `<datalist>` shared by both Custom_Provider model inputs. */
+const CUSTOM_MODEL_LIST_ID = 'custom-provider-model-options';
+
+/** Shared styling for the small helper / result lines under a model input. */
+const CUSTOM_FIELD_HINT_STYLE: CSSProperties = {
+  fontSize: '0.7rem',
+  color: 'var(--text-tertiary)',
+  lineHeight: 1.4,
+};
+
+/**
+ * Advisory shown when a model id looks like a deliberating variant.
+ *
+ * Deliberately phrased as an observation with a next step rather than a warning:
+ * a thinking model is the right choice for a considered answer and the wrong one
+ * for a question already on screen in front of an interviewer, and the User is
+ * the only one who knows which they are doing.
+ */
+const THINKING_MODEL_HINT =
+  'This model thinks before answering — expect 30–60s on hard questions. Set a fast model below so screen questions skip the wait.';
+
+/**
+ * One Custom_Provider model input, with its optional-model help text, its
+ * `<datalist>` binding, its Test speed button, and the measurement result.
+ *
+ * Extracted because there are two of these — the default model and the fast one
+ * — and they differ only in label, placeholder, and which slot they measure.
+ * Inlining both would duplicate about forty lines of JSX whose only meaningful
+ * difference is a string.
+ */
+function CustomModelField(props: {
+  id: string;
+  label: string;
+  help?: string;
+  placeholder: string;
+  value: string;
+  onChange: (value: string) => void;
+  /** Rendered under the input when the id looks like a deliberating variant. */
+  thinkingHint?: boolean;
+  onMeasure: () => void;
+  /** Result of the most recent measurement for *this* slot. */
+  status?: { state: 'testing' | 'ok' | 'failed'; message?: string };
+  /** Ids offered as completions; `null` before the catalog has been loaded. */
+  catalog: string[] | null;
+}): JSX.Element {
+  const measuring = props.status?.state === 'testing';
+  const canMeasure = props.value.trim().length > 0 && !measuring;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+      <label htmlFor={props.id} style={CUSTOM_FIELD_LABEL_STYLE}>
+        {props.label}
+      </label>
+      <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+        <div className="api-key-input provider-key-input" style={{ flex: '1 1 auto' }}>
+          <input
+            id={props.id}
+            type="text"
+            maxLength={MAX_MODEL_ID_LENGTH}
+            className="input-glass"
+            placeholder={props.placeholder}
+            value={props.value}
+            onChange={(e) => props.onChange(e.target.value)}
+            // Only bind the list once it has entries: an empty `<datalist>`
+            // renders as a dead dropdown arrow in Chromium.
+            list={props.catalog && props.catalog.length > 0 ? CUSTOM_MODEL_LIST_ID : undefined}
+          />
+        </div>
+        <button
+          type="button"
+          className="btn-secondary"
+          style={{ padding: '4px 10px', fontSize: '0.7rem', whiteSpace: 'nowrap', flex: '0 0 auto' }}
+          onClick={props.onMeasure}
+          disabled={!canMeasure}
+          aria-busy={measuring}
+          title={
+            canMeasure
+              ? 'Send one short prompt to this model and time the answer.'
+              : 'Enter a model ID to measure its speed.'
+          }
+        >
+          {measuring ? 'Timing…' : 'Test speed'}
+        </button>
+      </div>
+      {props.help !== undefined && <span style={CUSTOM_FIELD_HINT_STYLE}>{props.help}</span>}
+      {props.thinkingHint === true && (
+        <span style={{ ...CUSTOM_FIELD_HINT_STYLE, color: 'var(--accent-amber, #d99a2b)' }}>
+          {THINKING_MODEL_HINT}
+        </span>
+      )}
+      {props.status?.message !== undefined && (
+        <span
+          role="status"
+          style={{
+            ...CUSTOM_FIELD_HINT_STYLE,
+            color:
+              props.status.state === 'ok' ? 'var(--accent-green, #3ba55d)' : 'var(--accent-red)',
+          }}
+        >
+          {props.status.message}
+        </span>
+      )}
+    </div>
+  );
+}
+
 // --- Data-egress disclosure (task 11.4, Requirement 1.4) -----------------
 //
 // The notice is persistent, not a dismissible banner: it stays visible for the
@@ -356,6 +463,26 @@ export function Settings() {
   // never enters state (Requirements 3.3, 3.9).
   const [providerTestStatus, setProviderTestStatus] =
     useState<Record<string, CustomConnectionTestStatus | null>>({});
+
+  // --- Custom provider: model discovery + speed measurement ---------------
+  //
+  // Both exist so the User picks a model by measurement on their own gateway
+  // rather than from a list shipped in the binary. Free-tier model ids churn
+  // weekly, so a hardcoded recommendation names a 404 within a release or two.
+  //
+  // `customModelCatalog` backs a `<datalist>` shared by both model inputs. It is
+  // purely a convenience: `null` (never loaded) and `[]` (endpoint has no
+  // listing) both leave the fields as ordinary free text.
+  const [customModelCatalog, setCustomModelCatalog] = useState<string[] | null>(null);
+  const [customCatalogLoading, setCustomCatalogLoading] = useState(false);
+  /**
+   * Latest speed measurement per model slot. Keyed by the field it describes so
+   * the two buttons cannot overwrite each other's result — the whole point is
+   * comparing the two numbers side by side.
+   */
+  const [customSpeedStatus, setCustomSpeedStatus] = useState<
+    Partial<Record<'modelId' | 'fastModelId', { state: 'testing' | 'ok' | 'failed'; message?: string }>>
+  >({});
 
 
   // Performance Profile & Ephemeral Mode State
@@ -633,9 +760,26 @@ export function Settings() {
 
   const handleCustomModelIdChange = useCallback((value: string) => {
     setProviderTestStatus((prev) => ({ ...prev, [CUSTOM_PROVIDER_ID]: null }));
+    // A measurement describes one specific model id; editing the field makes it
+    // stale, so it is discarded rather than left to describe the wrong model.
+    setCustomSpeedStatus((prev) => ({ ...prev, modelId: undefined }));
     const clamped = clampField('modelId', value);
     setProviders((prev) =>
       prev.map((p) => (p.id === CUSTOM_PROVIDER_ID ? { ...p, modelId: clamped } : p)),
+    );
+  }, []);
+
+  /**
+   * The optional fast-model field. Unlike the other three this one cannot make
+   * the configuration invalid — blank means "use the model above" — so there is
+   * no error state to clear, only the stale Connection_Test result.
+   */
+  const handleCustomFastModelIdChange = useCallback((value: string) => {
+    setProviderTestStatus((prev) => ({ ...prev, [CUSTOM_PROVIDER_ID]: null }));
+    setCustomSpeedStatus((prev) => ({ ...prev, fastModelId: undefined }));
+    const clamped = clampField('fastModelId', value);
+    setProviders((prev) =>
+      prev.map((p) => (p.id === CUSTOM_PROVIDER_ID ? { ...p, fastModelId: clamped } : p)),
     );
   }, []);
 
@@ -749,6 +893,112 @@ export function Settings() {
     [providers, providerKeys],
   );
 
+  // --- Custom provider: model discovery + speed measurement ---------------
+
+  /**
+   * The credential to probe with: the draft if the User has typed one, otherwise
+   * the stored cipher decrypted for the duration of the call.
+   *
+   * Returns `''` rather than throwing when neither exists — a gateway that needs
+   * no key is legitimate, and the probe's own HTTP 401 is a better error message
+   * than anything this function could invent.
+   */
+  const resolveCustomApiKey = useCallback(async (): Promise<string> => {
+    const draft = (providerKeys[CUSTOM_PROVIDER_ID] ?? '').trim();
+    if (draft.length > 0) return draft;
+    const entry = providers.find((p) => p.id === CUSTOM_PROVIDER_ID);
+    if (!entry?.apiKeyCipher) return '';
+    try {
+      return await decryptApiKey(entry.apiKeyCipher);
+    } catch (error) {
+      console.error('[Settings] Stored custom credential could not be read:', error);
+      return '';
+    }
+  }, [providers, providerKeys]);
+
+  /**
+   * Ask the gateway what models it serves and use the answer to populate the
+   * shared `<datalist>`.
+   *
+   * Failure is deliberately non-fatal: the fields stay free text, so an endpoint
+   * without a `/models` route is exactly as configurable as it was before this
+   * button existed.
+   */
+  const handleLoadCustomModels = useCallback(async () => {
+    const entry = providers.find((p) => p.id === CUSTOM_PROVIDER_ID);
+    const baseUrl = (entry?.baseUrl ?? '').trim();
+    if (baseUrl.length === 0) {
+      toast.error('Enter the Base URL first.');
+      return;
+    }
+
+    setCustomCatalogLoading(true);
+    try {
+      const apiKey = await resolveCustomApiKey();
+      const { listGatewayModels } = await import('../brain/providers/modelCatalog');
+      const result = await listGatewayModels({ baseUrl, apiKey });
+      if (result.ok) {
+        setCustomModelCatalog(result.models);
+        toast.success(`Found ${result.models.length} models on this endpoint.`);
+      } else {
+        setCustomModelCatalog(null);
+        toast.error(`Could not list models: ${result.detail}`);
+      }
+    } catch (error) {
+      console.error('[Settings] Model listing could not run:', error);
+      setCustomModelCatalog(null);
+      toast.error('Could not list models.');
+    } finally {
+      setCustomCatalogLoading(false);
+    }
+  }, [providers, resolveCustomApiKey]);
+
+  /**
+   * Time one model with a fixed short prompt and report the two numbers that
+   * decide whether it belongs in the fast slot: when the first answer word
+   * arrives, and how fast words arrive after that.
+   *
+   * This is what replaces a recommended-models list. The User measures their own
+   * gateway, today, and picks on the result.
+   */
+  const handleMeasureCustomModelSpeed = useCallback(
+    async (field: 'modelId' | 'fastModelId') => {
+      const entry = providers.find((p) => p.id === CUSTOM_PROVIDER_ID);
+      const baseUrl = (entry?.baseUrl ?? '').trim();
+      const modelId = ((field === 'modelId' ? entry?.modelId : entry?.fastModelId) ?? '').trim();
+      if (baseUrl.length === 0 || modelId.length === 0) {
+        toast.error('Enter the Base URL and a model ID first.');
+        return;
+      }
+
+      setCustomSpeedStatus((prev) => ({ ...prev, [field]: { state: 'testing' } }));
+      try {
+        const apiKey = await resolveCustomApiKey();
+        const { measureModelSpeed, formatSpeedSample } = await import(
+          '../brain/providers/modelCatalog'
+        );
+        const result = await measureModelSpeed({ baseUrl, apiKey, modelId });
+        if (result.ok) {
+          const message = formatSpeedSample(result);
+          setCustomSpeedStatus((prev) => ({ ...prev, [field]: { state: 'ok', message } }));
+          toast.success(message);
+        } else {
+          setCustomSpeedStatus((prev) => ({
+            ...prev,
+            [field]: { state: 'failed', message: result.detail },
+          }));
+          toast.error(result.detail);
+        }
+      } catch (error) {
+        console.error('[Settings] Speed test could not run:', error);
+        const message = 'The speed test could not run.';
+        setCustomSpeedStatus((prev) => ({ ...prev, [field]: { state: 'failed', message } }));
+        toast.error(message);
+      }
+    },
+    [providers, resolveCustomApiKey],
+  );
+
 
   const handleSaveProviders = useCallback(async () => {
     setProvidersSaving(true);
@@ -777,6 +1027,10 @@ export function Settings() {
           // programmatically (Requirement 1.2).
           const baseUrlDraft = clampField('baseUrl', positioned.baseUrl ?? '');
           const modelIdDraft = clampField('modelId', positioned.modelId ?? '');
+          // Optional field: an empty string persists as "no fast model", which
+          // the adapter reads as "use `modelId` for everything" — the behaviour
+          // that predates this field.
+          const fastModelIdDraft = clampField('fastModelId', positioned.fastModelId ?? '');
           const apiKeyDraft = providerKeys[CUSTOM_PROVIDER_ID] ?? '';
 
           // Encrypt only a non-empty draft. A blank draft leaves
@@ -826,6 +1080,7 @@ export function Settings() {
             priority: positioned.priority,
             baseUrlDraft,
             modelIdDraft,
+            fastModelIdDraft,
             apiKeyDraft,
             apiKeyCipher,
           });
@@ -1525,21 +1780,60 @@ export function Settings() {
                             )}
                           </div>
 
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                            <label htmlFor="custom-provider-model-id" style={CUSTOM_FIELD_LABEL_STYLE}>
-                              Model ID
-                            </label>
-                            <div className="api-key-input provider-key-input">
-                              <input
-                                id="custom-provider-model-id"
-                                type="text"
-                                maxLength={MAX_MODEL_ID_LENGTH}
-                                className="input-glass"
-                                placeholder="meta-llama/llama-3.1-8b-instruct"
-                                value={provider.modelId || ''}
-                                onChange={(e) => handleCustomModelIdChange(e.target.value)}
-                              />
-                            </div>
+                          {/* Shared completion source for both model inputs.
+                              Rendered once, referenced by `list=` from each. */}
+                          {customModelCatalog !== null && customModelCatalog.length > 0 && (
+                            <datalist id={CUSTOM_MODEL_LIST_ID}>
+                              {customModelCatalog.map((id) => (
+                                <option key={id} value={id} />
+                              ))}
+                            </datalist>
+                          )}
+
+                          <CustomModelField
+                            id="custom-provider-model-id"
+                            label="Model ID"
+                            placeholder="meta-llama/llama-3.1-8b-instruct"
+                            value={provider.modelId || ''}
+                            onChange={handleCustomModelIdChange}
+                            thinkingHint={looksLikeThinkingModel(provider.modelId || '')}
+                            onMeasure={() => handleMeasureCustomModelSpeed('modelId')}
+                            status={customSpeedStatus.modelId}
+                            catalog={customModelCatalog}
+                          />
+
+                          <CustomModelField
+                            id="custom-provider-fast-model-id"
+                            label="Fast model for screen questions (optional)"
+                            help="Screen questions go to this model. Leave empty to use the model above."
+                            placeholder="qwen/qwen3-vl-235b-a22b-instruct"
+                            value={provider.fastModelId || ''}
+                            onChange={handleCustomFastModelIdChange}
+                            thinkingHint={looksLikeThinkingModel(provider.fastModelId || '')}
+                            onMeasure={() => handleMeasureCustomModelSpeed('fastModelId')}
+                            status={customSpeedStatus.fastModelId}
+                            catalog={customModelCatalog}
+                          />
+
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              style={{ padding: '4px 10px', fontSize: '0.7rem' }}
+                              onClick={handleLoadCustomModels}
+                              disabled={
+                                customCatalogLoading || (provider.baseUrl ?? '').trim().length === 0
+                              }
+                              aria-busy={customCatalogLoading}
+                              title="Ask this endpoint which models it serves, then pick from the list."
+                            >
+                              {customCatalogLoading ? 'Loading…' : 'Load models'}
+                            </button>
+                            <span style={CUSTOM_FIELD_HINT_STYLE}>
+                              {customModelCatalog === null
+                                ? 'Optional — fills both fields with the models your endpoint offers.'
+                                : `${customModelCatalog.length} models available — start typing to filter.`}
+                            </span>
                           </div>
                         </div>
                       ) : provider.id === 'ollama' ? (

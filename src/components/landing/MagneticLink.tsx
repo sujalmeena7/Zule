@@ -20,7 +20,7 @@
 //
 // Requirements: 4.1, 4.2, 4.5
 
-import { useEffect, useRef, type MouseEvent as ReactMouseEvent } from 'react';
+import { useEffect, useRef, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
 import { motion, useMotionValue, animate } from 'framer-motion';
 
 import { useLandingMotion } from './LandingMotionContext';
@@ -147,7 +147,7 @@ export function MagneticLink({
   onClick,
   onHoverChange,
   className,
-}: MagneticLinkProps): JSX.Element {
+}: MagneticLinkProps): ReactElement {
   const anchorRef = useRef<HTMLAnchorElement | null>(null);
   const { reducedMotion } = useLandingMotion();
   const x = useMotionValue(0);

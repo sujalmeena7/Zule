@@ -45,6 +45,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type RefObject,
+  type ReactElement,
 } from 'react';
 
 import { ActiveIndicator } from './ActiveIndicator';
@@ -263,7 +264,7 @@ export function FloatingNavbar({
   onDownload,
   onAnchor,
   heroBottomRef,
-}: FloatingNavbarProps): JSX.Element {
+}: FloatingNavbarProps): ReactElement {
   // ----------------------------------------------------------------
   // Scroll-driven compaction.
   // ----------------------------------------------------------------
@@ -494,8 +495,12 @@ export function FloatingNavbar({
   // onHoverChange prop is not removed yet (that's task 4.1). These
   // callbacks are now no-ops for ownership; the Link_Group delegation
   // above is the source of truth.
+  //
+  // The `_id` parameter is unused but part of the signature: every call site
+  // passes the link's id, and dropping the parameter makes those calls a type
+  // error rather than simplifying anything.
   const makeHoverHandler = useCallback(
-    () => () => {
+    (_id: string) => () => {
       // Intentionally no-op: ownership is now delegated at the group level.
     },
     [],

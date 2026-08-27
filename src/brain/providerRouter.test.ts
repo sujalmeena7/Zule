@@ -15,6 +15,7 @@ import {
   AI_Provider_Router,
   VaultLockedError,
   AllProvidersFailedError,
+  NoVisionProviderError,
 } from './providerRouter';
 import type {
   CallOpts,
@@ -432,6 +433,184 @@ describe('AI_Provider_Router', () => {
       await expect(
         router.stream(DEFAULT_PROMPT, callbacks),
       ).rejects.toBeInstanceOf(AllProvidersFailedError);
+    });
+  });
+
+  // The screen-capture fast path sends pixels and keeps no text copy, so an
+  // image handed to a text-only adapter is stripped and the model is asked a
+  // question that is no longer in the prompt. These pin the routing that makes
+  // "the image is the only grounding" a safe thing for a caller to say.
+  describe('requireImageInput routing', () => {
+    const VISION_CAPS: Capabilities = { ...DEFAULT_CAPABILITIES, imageInput: true };
+
+    const IMAGE_PROMPT: PromptInput = {
+      ...DEFAULT_PROMPT,
+      images: [{ mimeType: 'image/jpeg', base64: 'AAAA' }],
+    };
+
+    function noopCallbacks(): StreamCallbacks {
+      return { onToken: () => {}, onComplete: () => {}, onError: () => {} };
+    }
+
+    it('skips text-only adapters ahead of the vision one', async () => {
+      const router = new AI_Provider_Router();
+      const callLog: string[] = [];
+
+      router.registerAdapter(createMockAdapter('textonly', { callLog }));
+      router.registerAdapter(
+        createMockAdapter('vision', { callLog, capabilities: VISION_CAPS }),
+      );
+      router.setPriority(['textonly', 'vision']);
+      router.setVaultLocked(false);
+
+      await router.stream(IMAGE_PROMPT, noopCallbacks(), { requireImageInput: true });
+
+      expect(callLog).toEqual(['stream:vision']);
+    });
+
+    it('throws NoVisionProviderError instead of degrading to a text-only adapter', async () => {
+      const router = new AI_Provider_Router();
+      const callLog: string[] = [];
+
+      router.registerAdapter(createMockAdapter('textonly', { callLog }));
+      router.setPriority(['textonly']);
+      router.setVaultLocked(false);
+
+      await expect(
+        router.stream(IMAGE_PROMPT, noopCallbacks(), { requireImageInput: true }),
+      ).rejects.toBeInstanceOf(NoVisionProviderError);
+      // Nothing was attempted — the condition is a configuration gap, not a
+      // failed request, so no round trip should have been spent on it.
+      expect(callLog).toEqual([]);
+    });
+
+    it('fails over to the next vision adapter when one rejects the image', async () => {
+      const router = new AI_Provider_Router();
+      const callLog: string[] = [];
+      const rejects = new Error(
+        'CustomAdapter: HTTP 404 — No endpoints found that support image input',
+      );
+
+      router.registerAdapter(
+        createMockAdapter('lying-gateway', {
+          callLog,
+          capabilities: VISION_CAPS,
+          shouldFail: true,
+          failError: rejects,
+        }),
+      );
+      router.registerAdapter(
+        createMockAdapter('real-vision', { callLog, capabilities: VISION_CAPS }),
+      );
+      router.setPriority(['lying-gateway', 'real-vision']);
+      router.setVaultLocked(false);
+
+      await router.stream(IMAGE_PROMPT, noopCallbacks(), { requireImageInput: true });
+
+      expect(callLog).toEqual(['stream:lying-gateway', 'stream:real-vision']);
+    });
+
+    it('remembers a rejection so the next request skips that adapter', async () => {
+      const router = new AI_Provider_Router();
+      const callLog: string[] = [];
+      const rejects = new Error('HTTP 400 — model does not support image_url parts');
+
+      router.registerAdapter(
+        createMockAdapter('lying-gateway', {
+          callLog,
+          capabilities: VISION_CAPS,
+          shouldFail: true,
+          failError: rejects,
+        }),
+      );
+      router.registerAdapter(
+        createMockAdapter('real-vision', { callLog, capabilities: VISION_CAPS }),
+      );
+      router.setPriority(['lying-gateway', 'real-vision']);
+      router.setVaultLocked(false);
+
+      await router.stream(IMAGE_PROMPT, noopCallbacks(), { requireImageInput: true });
+      callLog.length = 0;
+      await router.stream(IMAGE_PROMPT, noopCallbacks(), { requireImageInput: true });
+
+      expect(callLog).toEqual(['stream:real-vision']);
+    });
+
+    it('does not brand an adapter text-only from an image-shaped error on a text prompt', async () => {
+      const router = new AI_Provider_Router();
+      const failure = Object.assign(
+        new Error('HTTP 500 — multimodal backend unavailable'),
+        { status: 500 },
+      );
+
+      router.registerAdapter(
+        createMockAdapter('vision', {
+          capabilities: VISION_CAPS,
+          shouldFail: true,
+          failError: failure,
+        }),
+      );
+      router.setPriority(['vision']);
+      router.setVaultLocked(false);
+
+      await expect(
+        router.stream(DEFAULT_PROMPT, noopCallbacks()),
+      ).rejects.toBeInstanceOf(AllProvidersFailedError);
+
+      // No image was sent, so the message match must not count as evidence.
+      expect(router.hasImageCapableAdapter()).toBe(true);
+    });
+
+    it('re-registration clears the runtime rejection verdict', async () => {
+      const router = new AI_Provider_Router();
+      const rejects = new Error('HTTP 404 — No endpoints found that support image input');
+
+      router.registerAdapter(
+        createMockAdapter('gateway', {
+          capabilities: VISION_CAPS,
+          shouldFail: true,
+          failError: rejects,
+        }),
+      );
+      router.setPriority(['gateway']);
+      router.setVaultLocked(false);
+
+      await expect(
+        router.stream(IMAGE_PROMPT, noopCallbacks(), { requireImageInput: true }),
+      ).rejects.toBeInstanceOf(AllProvidersFailedError);
+      expect(router.hasImageCapableAdapter()).toBe(false);
+
+      // The User pointed the same provider at a multimodal model.
+      router.registerAdapter(
+        createMockAdapter('gateway', { capabilities: VISION_CAPS }),
+      );
+      expect(router.hasImageCapableAdapter()).toBe(true);
+    });
+
+    it('hasImageCapableAdapter looks past the first adapter', () => {
+      const router = new AI_Provider_Router();
+
+      router.registerAdapter(createMockAdapter('textonly'));
+      router.registerAdapter(
+        createMockAdapter('vision', { capabilities: VISION_CAPS }),
+      );
+      router.setPriority(['textonly', 'vision']);
+      router.setVaultLocked(false);
+
+      expect(router.getActiveAdapterCapabilities()?.imageInput).toBe(false);
+      expect(router.hasImageCapableAdapter()).toBe(true);
+    });
+
+    it('reports no image capability while the vault is locked', () => {
+      const router = new AI_Provider_Router();
+
+      router.registerAdapter(
+        createMockAdapter('vision', { capabilities: VISION_CAPS }),
+      );
+      router.setPriority(['vision']);
+      router.setVaultLocked(true);
+
+      expect(router.hasImageCapableAdapter()).toBe(false);
     });
   });
 });

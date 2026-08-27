@@ -291,7 +291,16 @@ function registerDisplayMediaHandler(): void {
 // the user has already opted in by clicking the mic. The OS still enforces its
 // own microphone privacy prompt on first use.
 function registerMediaPermissionHandlers(): void {
-  const ALLOWED = new Set(['media', 'audioCapture', 'mediaKeySystem']);
+  const ALLOWED = new Set([
+    'media',
+    'audioCapture',
+    'microphone',
+    'speech',
+    'speech-recognition',
+    'display-capture',
+    'screen',
+    'mediaKeySystem',
+  ]);
 
   // Async permission *requests* (e.g. getUserMedia, SpeechRecognition).
   session.defaultSession.setPermissionRequestHandler(
@@ -784,10 +793,14 @@ function registerIpcHandlers(): void {
   // ignoring WDA_EXCLUDEFROMCAPTURE. Falls back gracefully if FFI unavailable.
   ipcMain.handle('capture-desktop-bitblt', async () => {
     try {
-      const { captureDesktopAsBase64 } = await import('./win32/desktopCapture');
+      const { captureDesktopAsJpeg } = await import('./win32/desktopCapture');
       const overlayWin = overlayManager?.getWindow?.() ?? null;
-      const base64 = captureDesktopAsBase64(overlayWin);
-      return base64 ? { ok: true, base64 } : { ok: false, reason: 'capture-failed' };
+      const shot = captureDesktopAsJpeg(overlayWin);
+      // `bytes`/`width`/`height` are diagnostics: the renderer folds them into its
+      // `[perf]` line so payload size is attributable instead of guessed at.
+      return shot
+        ? { ok: true, base64: shot.base64, bytes: shot.bytes, width: shot.width, height: shot.height }
+        : { ok: false, reason: 'capture-failed' };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       return { ok: false, reason: msg };
@@ -802,9 +815,24 @@ function registerIpcHandlers(): void {
   // Optimization: Uses a minimal PowerShell script with pre-compiled type to
   // reduce cold-start from ~3s to ~1s. Further requests reuse the cached .NET
   // assemblies in the same PowerShell session (if the OS caches them).
+  //
+  // One-strike circuit breaker. The spawn either works on this machine or it
+  // does not: a missing/blocked `powershell.exe`, an unavailable
+  // `UIAutomationClient` assembly, or a policy that refuses `Add-Type` fails
+  // identically on every call. Retrying it costs the full 5 s budget per screen
+  // dispatch and returns nothing, and the caller's next step — BitBlt pixels,
+  // then OCR — does not need it. So the first hard failure disables it for the
+  // session and later dispatches skip straight to the capture that works.
+  //
+  // `no-text` is NOT a strike: that is a successful walk of a window that had no
+  // readable text, which says nothing about the next window.
+  let uiaDisabledReason: string | null = null;
   ipcMain.handle('extract-foreground-text', async () => {
     if (process.platform !== 'win32') {
       return { ok: false, reason: 'not-windows' };
+    }
+    if (uiaDisabledReason) {
+      return { ok: false, reason: `disabled-after-failure: ${uiaDisabledReason}` };
     }
     try {
       const { execFile } = await import('node:child_process');
@@ -814,6 +842,7 @@ function registerIpcHandlers(): void {
       // Minimal PowerShell script — optimized for speed over elegance
       const psScript = `Add-Type -A UIAutomationClient,UIAutomationTypes;Add-Type 'using System;using System.Runtime.InteropServices;public class W{[DllImport("user32.dll")]public static extern IntPtr GetForegroundWindow();}';$h=[W]::GetForegroundWindow();if($h-eq[IntPtr]::Zero){exit};$e=[System.Windows.Automation.AutomationElement]::FromHandle($h);if(!$e){exit};$r=@();foreach($c in $e.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)){try{$n=$c.Current.Name;if($n-and$n.Length-gt2-and$n.Length-lt5000){$r+=$n}}catch{}};($r|Select -Unique) -join [char]10`;
 
+      const startedAt = Date.now();
       const { stdout } = await execFileAsync(
         'powershell.exe',
         ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', psScript],
@@ -821,11 +850,20 @@ function registerIpcHandlers(): void {
       );
 
       const text = stdout.trim();
+      console.log(`[UIAutomation] ${text.length} chars in ${Date.now() - startedAt}ms`);
       return text.length > 0 ? { ok: true, text } : { ok: false, reason: 'no-text' };
     } catch (err: unknown) {
+      // `execFile` puts the actual cause on `stderr`, not on `message` — the
+      // message is only the command line, which is why every previous failure
+      // here was unexplainable from the log.
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`[UIAutomation] Failed: ${msg}`);
-      return { ok: false, reason: msg };
+      const stderr = String((err as { stderr?: unknown })?.stderr ?? '').trim();
+      const cause = stderr.length > 0 ? stderr.split('\n')[0].slice(0, 300) : msg.slice(0, 300);
+      uiaDisabledReason = cause;
+      console.warn(
+        `[UIAutomation] Failed — disabling UI Automation for this session. Cause: ${cause}`,
+      );
+      return { ok: false, reason: cause };
     }
   });
 

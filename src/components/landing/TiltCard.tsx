@@ -16,6 +16,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
+  type ReactElement,
 } from 'react';
 
 import { useLandingMotion } from './LandingMotionContext';
@@ -147,7 +148,7 @@ export function TiltCard({
   children,
   className,
   maxTiltDeg = 8,
-}: TiltCardProps): JSX.Element {
+}: TiltCardProps): ReactElement {
   const { reducedMotion } = useLandingMotion();
   const ref = useRef<HTMLDivElement>(null);
   const [{ rotX, rotY }, setRotation] = useState<TiltRotation>({

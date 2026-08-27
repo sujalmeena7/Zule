@@ -154,6 +154,11 @@ export interface ProviderConfig {
   baseUrl?: string;
   /** The `model` field value sent in the request body. */
   modelId?: string;
+  /**
+   * Optional second model id used for screen-grounded dispatches, where latency
+   * matters more than depth. Blank / absent means every dispatch uses `modelId`.
+   */
+  fastModelId?: string;
   /** Optional User-supplied pricing so Spend_Tracker can cost custom requests. */
   pricePerMTokens?: { input: number; output: number };
   /** Epoch ms at which the User acknowledged the data-egress disclosure. */
@@ -1276,13 +1281,26 @@ export const database = {
       const { vectorStore, QUANTIZATION_THRESHOLD } = await import(
         '../brain/vectorStore'
       );
-      // Embed the query through the existing `embed:generate` channel
-      // (delegated from `vectorStore.generateEmbedding` when the IPC
-      // bridge is present, with the renderer-side LRU on top — design
-      // §"Components and Interfaces / Vector_Index Service").
-      const queryVector = await vectorStore.generateEmbedding(query);
 
+      // Read the corpus BEFORE embedding the query.
+      //
+      // `generateEmbedding` is a single-threaded WASM forward pass that runs on
+      // the renderer main thread (`transformersEnv` pins `numThreads = 1` and
+      // `proxy = false`), so it blocks the event loop for its whole duration and
+      // cannot be raced against a timeout — a `setTimeout` cannot fire while
+      // WASM holds the thread. That makes it the single most expensive thing on
+      // the dispatch path, and an empty or chunk-less Knowledge_Base gives it
+      // nothing to match against. Ordering the cheap IndexedDB read first turns
+      // "no documents" from a multi-second stall into an immediate return.
       const allDocs = await this.getAllDocuments();
+
+      // Total live chunk count drives both this guard and the ANN/linear-scan
+      // switch below. The walk is cheap (just `chunks.length` per document) and
+      // avoids pulling in `kbRetention.totalChunkCount` purely for the policy
+      // gate.
+      let totalChunks = 0;
+      for (const doc of allDocs) totalChunks += doc.chunks.length;
+      if (totalChunks === 0) return [];
 
       const resolvedOpts: KBSearchOptions =
         typeof opts === 'number'
@@ -1298,12 +1316,11 @@ export const database = {
           : 0;
       if (maxResults === 0) return [];
 
-      // Total live chunk count drives the ANN/linear-scan switch. The
-      // walk is cheap (just `chunks.length` per document) and avoids
-      // pulling in `kbRetention.totalChunkCount` purely for the policy
-      // gate.
-      let totalChunks = 0;
-      for (const doc of allDocs) totalChunks += doc.chunks.length;
+      // Only now, with the corpus known to be non-empty and a real result budget
+      // in hand, pay for the embedding. Delegated through the `embed:generate`
+      // channel when the IPC bridge is present, with the renderer-side LRU on
+      // top — design §"Components and Interfaces / Vector_Index Service".
+      const queryVector = await vectorStore.generateEmbedding(query);
 
       const queryBridge =
         typeof window !== 'undefined'

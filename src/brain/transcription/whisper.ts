@@ -57,13 +57,24 @@ export const DEFAULT_WHISPER_MODEL = 'Xenova/whisper-base.en' as const;
  * is reached (sustained speech without pauses). Replaces the old fixed-
  * interval timer approach for much lower perceived latency.
  */
-const DEFAULT_MAX_BUFFER_MS = 3000;
+const DEFAULT_MAX_BUFFER_MS = 2000;
 
 /**
- * URL of the AudioWorkletProcessor script. Served from public/ by Vite
- * in both dev and production (Vite copies public/ → dist/).
+ * Resolves the URL of the AudioWorkletProcessor script. Works in both
+ * dev (http://) and production packaged Electron (file://).
  */
-const WORKLET_URL = '/pcm-capture-processor.js';
+export function getWorkletUrl(): string {
+  if (typeof window !== 'undefined' && window.location) {
+    try {
+      return new URL('pcm-capture-processor.js', window.location.href).href;
+    } catch {
+      return '/pcm-capture-processor.js';
+    }
+  }
+  return '/pcm-capture-processor.js';
+}
+
+const WORKLET_URL = getWorkletUrl();
 
 /**
  * Sample rate expected by Whisper models (16 kHz mono).
@@ -526,8 +537,8 @@ export class WhisperProvider {
 
     this._isCancelled = false;
 
-    // Load model if not ready
-    if (!this._isModelLoaded || !this.transcriber) {
+    // Load model if not ready (transcribeFn delegates out-of-process so transcriber is null)
+    if (!this._isModelLoaded || (!this.transcribeFn && !this.transcriber)) {
       await this.loadModel();
     }
 
@@ -586,6 +597,14 @@ export class WhisperProvider {
     // is our minimum — assert it exists and throw early.
     this.audioContext = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
 
+    if (this.audioContext.state === 'suspended') {
+      try {
+        await this.audioContext.resume();
+      } catch (err) {
+        console.warn('[WhisperProvider] Failed to resume audioContext:', err);
+      }
+    }
+
     if (!this.audioContext.audioWorklet) {
       throw new Error(
         'AudioWorklet is not supported in this environment. ' +
@@ -596,7 +615,7 @@ export class WhisperProvider {
     this.sourceNode = this.audioContext.createMediaStreamSource(this.mediaStream);
 
     // Load the PCM capture worklet processor.
-    await this.audioContext.audioWorklet.addModule(WORKLET_URL);
+    await this.audioContext.audioWorklet.addModule(getWorkletUrl());
     this.workletNode = new AudioWorkletNode(this.audioContext, 'pcm-capture-processor');
 
     // Configure the worklet with current settings.

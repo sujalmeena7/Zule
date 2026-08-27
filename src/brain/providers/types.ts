@@ -18,6 +18,7 @@ export type {
   PromptInput,
   CallOpts,
   ProviderResponse,
+  ReasoningEffort,
   StreamCallbacks,
   ProviderAdapter,
   ProviderId,

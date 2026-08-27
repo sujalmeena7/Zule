@@ -255,6 +255,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     const decoder = new TextDecoder();
     let buffer = '';
     let cumulativeText = '';
+    let cumulativeReasoning = '';
     // Anthropic reports input tokens on `message_start` and output tokens
     // on `message_delta`; both are cumulative-by-event so we keep the
     // most recent value seen.
@@ -296,7 +297,7 @@ export class AnthropicAdapter implements ProviderAdapter {
               : '');
 
           if (eventType === 'content_block_delta') {
-            const delta = (parsed as { delta?: { type?: unknown; text?: unknown } })
+            const delta = (parsed as { delta?: { type?: unknown; text?: unknown; thinking?: unknown } })
               ?.delta;
             if (
               delta &&
@@ -306,6 +307,17 @@ export class AnthropicAdapter implements ProviderAdapter {
             ) {
               cumulativeText += delta.text;
               cb.onToken(cumulativeText);
+            } else if (
+              // Extended thinking. Kept out of `cumulativeText` — it is not part
+              // of the answer — but surfaced so a long think is visibly
+              // progressing instead of looking like a stall.
+              delta &&
+              typeof delta === 'object' &&
+              delta.type === 'thinking_delta' &&
+              typeof delta.thinking === 'string'
+            ) {
+              cumulativeReasoning += delta.thinking;
+              cb.onReasoning?.(cumulativeReasoning);
             }
           } else if (eventType === 'message_start') {
             const usage = (parsed as { message?: { usage?: unknown } })?.message

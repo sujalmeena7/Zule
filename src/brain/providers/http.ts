@@ -299,6 +299,35 @@ export function isRetryableError(err: unknown): boolean {
   return false;
 }
 
+// --- Image-capability classifier -----------------------------------------
+
+/**
+ * True when a provider rejected the request specifically because the chosen
+ * model cannot accept image input.
+ *
+ * An adapter's `capabilities.imageInput` describes the *adapter*, but a gateway
+ * fronts many models and most cheap or free ones are text-only. Those endpoints
+ * reject the whole request (OpenRouter answers 404 "No endpoints found that
+ * support image input") rather than dropping the attachment, so a declared
+ * capability is a claim, not a guarantee — this is how the claim gets checked.
+ *
+ * Lives here rather than in the router or `aiProvider` because both need it and
+ * a second copy would drift: the router uses it to fail over to another
+ * vision-capable adapter, `aiProvider` to decide whether a text-only retry is
+ * worth attempting.
+ */
+export function isImageUnsupportedError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err ?? '')).toLowerCase();
+  return (
+    msg.includes('support image input') ||
+    msg.includes('support image') ||
+    msg.includes('image input') ||
+    msg.includes('does not support image') ||
+    msg.includes('image_url') ||
+    msg.includes('multimodal')
+  );
+}
+
 // --- Retry-After parsing -------------------------------------------------
 
 /**

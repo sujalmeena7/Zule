@@ -17,7 +17,9 @@
 // Requirements: 6.3, 6.5, 10.3
 
 import { motion, useScroll, useTransform } from 'framer-motion';
-import { useRef, type CSSProperties, type ReactNode } from 'react';
+import { useRef, type CSSProperties, type ReactNode ,
+  type ReactElement,
+} from 'react';
 
 import { useLandingMotion } from './LandingMotionContext';
 
@@ -99,7 +101,7 @@ function ParallaxLayerMotion({
   className,
   style,
 }: Required<Pick<ParallaxLayerProps, 'children'>> &
-  Omit<ParallaxLayerProps, 'children'>): JSX.Element {
+  Omit<ParallaxLayerProps, 'children'>): ReactElement {
   const ref = useRef<HTMLDivElement>(null);
 
   // `['start end', 'end start']` means: progress is 0 when the layer's
@@ -156,7 +158,7 @@ export function ParallaxLayer({
   maxPx = 20,
   className,
   style,
-}: ParallaxLayerProps): JSX.Element {
+}: ParallaxLayerProps): ReactElement {
   const { reducedMotion } = useLandingMotion();
 
   if (reducedMotion) {

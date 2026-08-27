@@ -30,6 +30,7 @@ import {
   useMemo,
   useState,
   type RefObject,
+  type ReactElement,
 } from 'react';
 import { motion } from 'framer-motion';
 
@@ -127,7 +128,7 @@ export function ActiveIndicator({
   hoveredId,
   itemRefs,
   sectionIds = DEFAULT_OBSERVED_SECTION_IDS,
-}: ActiveIndicatorProps): JSX.Element | null {
+}: ActiveIndicatorProps): ReactElement | null {
   const { reducedMotion } = useLandingMotion();
 
   // Latest viewport-relative bounds of each observed section.

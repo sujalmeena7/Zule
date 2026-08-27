@@ -1,6 +1,7 @@
 /* ============================================
    Zule AI — Floating Copilot Styles
-   Cluely-style Minimal Design
+   Stealth UI — Ultra-subtle, low-visibility design
+   Inspired by Cluely / ParakeetAI overlay aesthetics
    ============================================ */
 
 /* --- Workspace Background --- */
@@ -39,7 +40,7 @@
   background: rgba(15, 15, 25, 0.4);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: var(--radius-pill);
   color: var(--text-secondary);
   font-size: 0.8rem;
@@ -50,7 +51,7 @@
 }
 
 .copilot-back-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.08);
   color: var(--text-primary);
 }
 
@@ -63,49 +64,54 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  animation: fadeInScale 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
-  transition: opacity 0.3s ease;
+  animation: fadeInScale 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+  transition: opacity 0.25s ease;
   pointer-events: auto;
   
-  /* Force dark mode colors for the floating widget */
-  --text-primary: #f8fafc;
-  --text-secondary: #cbd5e1;
-  --text-tertiary: #94a3b8;
-  --glass-bg: rgba(10, 10, 15, 0.85);
-  --glass-border: rgba(255, 255, 255, 0.15);
-  --accent-blue: #60a5fa;
+  /* Stealth dark mode — very low contrast, near-invisible to onlookers */
+  --text-primary: rgba(220, 225, 235, 0.92);
+  --text-secondary: rgba(180, 190, 205, 0.72);
+  --text-tertiary: rgba(140, 150, 165, 0.55);
+  --glass-bg: rgba(8, 8, 12, 0.78);
+  --glass-border: rgba(255, 255, 255, 0.06);
+  --accent-blue: rgba(130, 170, 220, 0.7);
   color: var(--text-primary);
 }
 
 /* In Electron, stealth is handled by setContentProtection(true) at the OS level.
-   This CSS class is only applied in web fallback mode — adds a subtle visual indicator. */
+   This CSS class is only applied in web fallback mode. */
 .copilot-overlay.invisible-mode {
-  opacity: 0.25;
+  opacity: 0.15;
   pointer-events: none;
   transition: opacity 0.2s ease;
 }
 
 .copilot-overlay.invisible-mode:hover {
-  opacity: 0.85;
+  opacity: 0.75;
   pointer-events: auto;
 }
 
-/* --- Control Capsule (Cluely-style: Logo + Hide + Stop) --- */
+/* --- Control Capsule (Stealth: minimal, dark, no glow) --- */
 .control-capsule {
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 6px 8px;
-  background: rgba(30, 30, 40, 0.92);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 5px 7px;
+  background: rgba(18, 18, 24, 0.92);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 999px;
   margin: 0;
   width: fit-content;
   cursor: grab;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
   user-select: none;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.control-capsule:hover {
+  border-color: rgba(255, 255, 255, 0.1);
 }
 
 .control-capsule:active {
@@ -113,11 +119,12 @@
 }
 
 .capsule-logo {
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   flex-shrink: 0;
   overflow: hidden;
   border-radius: 50%;
+  opacity: 0.85;
 }
 
 .capsule-logo svg,
@@ -132,10 +139,10 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 12px 4px 8px;
+  padding: 4px 10px 4px 6px;
   border-radius: 999px;
   color: var(--text-secondary);
-  font-size: 0.82rem;
+  font-size: 0.78rem;
   font-weight: 500;
   transition: all var(--transition-fast);
   white-space: nowrap;
@@ -143,11 +150,11 @@
 
 .capsule-hide-btn:hover {
   color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .capsule-hide-label {
-  font-size: 0.82rem;
+  font-size: 0.78rem;
   font-weight: 500;
   letter-spacing: 0.01em;
 }
@@ -164,118 +171,151 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
-  background: rgba(239, 68, 68, 0.15);
-  color: #f87171;
+  background: rgba(200, 60, 60, 0.12);
+  color: rgba(240, 100, 100, 0.8);
   transition: all var(--transition-fast);
   flex-shrink: 0;
 }
 
 .capsule-stop-btn:hover {
-  background: rgba(239, 68, 68, 0.3);
-  color: #ef4444;
+  background: rgba(200, 60, 60, 0.22);
+  color: rgba(240, 80, 80, 0.95);
 }
 
-/* Stealth toggle. A single pill-shaped button that swaps between Eye
-   (visible to screen capture) and EyeOff (stealth ON) via a vertical
-   slide + fade transition. Both icons are rendered absolutely-positioned
-   on top of each other; the `is-stealth` / `is-visible` class on the
-   button decides which one is parked at the visible slot (translateY 0,
-   opacity 1) and which is parked off-stage (translateY ±8px, opacity 0).
-   The crossfade is driven entirely by GPU-composited opacity+transform
-   so it stays smooth even when the BrowserWindow is resizing. */
+/* Stealth toggle — very subtle, no bright blue glow */
 .capsule-stealth-toggle {
   position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 28px;
+  width: 28px;
+  height: 24px;
   padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.03);
   flex-shrink: 0;
-  margin-right: 4px;
+  margin-right: 3px;
   cursor: pointer;
   overflow: hidden;
-  /* Premium easing for any structural movement. background-color uses a
-     gentler ease for the hover state per the design brief. */
-  transition: background-color 0.2s ease,
-              border-color 0.2s ease;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
 }
 
 .capsule-stealth-toggle:hover {
-  background: rgba(255, 255, 255, 0.10);
-  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
 }
 
 .capsule-stealth-toggle:active {
-  background: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .capsule-stealth-toggle:focus-visible {
-  outline: 2px solid rgba(96, 165, 250, 0.6);
+  outline: 2px solid rgba(130, 170, 220, 0.4);
   outline-offset: 2px;
 }
 
-/* When stealth is active, hint at it with a subtle blue tint on the
-   pill — purely cosmetic, on top of the icon slide. */
+/* Stealth active — very faint indicator, NO bright blue */
 .capsule-stealth-toggle.is-stealth {
-  background: rgba(96, 165, 250, 0.14);
-  border-color: rgba(96, 165, 250, 0.28);
+  background: rgba(130, 170, 220, 0.06);
+  border-color: rgba(130, 170, 220, 0.12);
 }
 
 .capsule-stealth-toggle.is-stealth:hover {
-  background: rgba(96, 165, 250, 0.22);
-  border-color: rgba(96, 165, 250, 0.40);
+  background: rgba(130, 170, 220, 0.1);
+  border-color: rgba(130, 170, 220, 0.18);
 }
 
-/* Live caption — a thin, unobtrusive line at the top of the scroll body that
-   shows the most recent transcribed speech, so the user can confirm at a glance
-   that Zule is hearing the conversation correctly. Not a full transcript; just
-   the latest line, labelled by speaker. */
-/* Rolling window of recent caption lines. */
+/* Detected question banner — subtle, no bright blue */
+.detected-question-banner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  margin-bottom: 6px;
+  border-radius: 6px;
+  background: rgba(130, 170, 220, 0.06);
+  border: 1px solid rgba(130, 170, 220, 0.1);
+  font-size: 11px;
+  line-height: 1.3;
+  color: rgba(180, 200, 230, 0.75);
+  animation: banner-fade-in 0.2s ease-out;
+}
+
+.detected-question-icon {
+  font-size: 11px;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.detected-question-label {
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  color: rgba(150, 180, 220, 0.7);
+  flex-shrink: 0;
+}
+
+.detected-question-text {
+  color: rgba(220, 225, 235, 0.75);
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@keyframes banner-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Rolling caption lines */
 .live-caption-stack {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-bottom: 10px;
-  padding: 8px 10px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  gap: 3px;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.04);
 }
 
 .live-caption {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  font-size: 12.5px;
+  gap: 6px;
+  font-size: 12px;
   line-height: 1.4;
 }
 
-/* Older lines in the stack fade slightly so the newest reads as primary. */
 .live-caption-stack .live-caption:not(:last-child) {
-  opacity: 0.55;
+  opacity: 0.45;
 }
 
 .live-caption-speaker {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 9.5px;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  padding: 2px 6px;
+  padding: 1px 5px;
   border-radius: 999px;
-  opacity: 0.9;
+  opacity: 0.8;
 }
 
 .live-caption-text {
-  color: rgba(255, 255, 255, 0.86);
-  /* Clamp to two lines so a long sentence never pushes the suggestions down. */
+  color: rgba(220, 225, 235, 0.72);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   line-clamp: 2;
@@ -283,27 +323,25 @@
   overflow: hidden;
 }
 
-/* "Them" (the other party) — green, matching the system-audio toggle. */
+/* Speaker labels — very subtle colors */
 .live-caption-other .live-caption-speaker {
-  background: rgba(52, 211, 153, 0.18);
-  color: rgb(110, 231, 183);
+  background: rgba(52, 180, 130, 0.1);
+  color: rgba(110, 200, 170, 0.8);
 }
 
-/* "You" (mic) — blue. */
 .live-caption-user .live-caption-speaker {
-  background: rgba(96, 165, 250, 0.18);
-  color: rgb(147, 197, 253);
+  background: rgba(130, 170, 220, 0.1);
+  color: rgba(160, 190, 230, 0.8);
 }
 
-/* In-progress (interim) speech: subtle pulsing so it reads as "live". */
 .live-caption.is-live .live-caption-text {
-  opacity: 0.75;
-  animation: live-caption-pulse 1.6s ease-in-out infinite;
+  opacity: 0.6;
+  animation: live-caption-pulse 2s ease-in-out infinite;
 }
 
 @keyframes live-caption-pulse {
-  0%, 100% { opacity: 0.55; }
-  50% { opacity: 0.9; }
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 0.75; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -312,107 +350,82 @@
   }
 }
 
-/* System-audio (loopback) toggle — shares the pill geometry of the stealth
-   toggle. When active it tints green to signal live capture of the other
-   party's audio. */
+/* System audio toggle — subtle green indicator */
 .capsule-sysaudio-toggle {
   position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 28px;
+  width: 28px;
+  height: 24px;
   padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.05);
-  color: rgba(255, 255, 255, 0.92);
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(255, 255, 255, 0.7);
   flex-shrink: 0;
-  margin-right: 4px;
+  margin-right: 3px;
   cursor: pointer;
-  transition: background-color 0.2s ease,
-              border-color 0.2s ease,
-              color 0.2s ease;
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
 }
 
-/* "Listening" indicator: a small green dot in the top-right corner of the
-   headphones button while system-audio capture is active. The pulsing ring
-   makes it read as a live/recording state at a glance. */
 .sysaudio-listening-dot {
   position: absolute;
-  top: 3px;
-  right: 3px;
-  width: 6px;
-  height: 6px;
+  top: 2px;
+  right: 2px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
-  background: rgb(52, 211, 153);
-  box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6);
-  animation: sysaudio-pulse 1.8s ease-out infinite;
+  background: rgba(52, 180, 130, 0.8);
+  box-shadow: none;
+  animation: sysaudio-pulse 2s ease-out infinite;
 }
 
 @keyframes sysaudio-pulse {
-  0% {
-    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.55);
-  }
-  70% {
-    box-shadow: 0 0 0 5px rgba(52, 211, 153, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0);
-  }
+  0% { box-shadow: 0 0 0 0 rgba(52, 180, 130, 0.3); }
+  70% { box-shadow: 0 0 0 3px rgba(52, 180, 130, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(52, 180, 130, 0); }
 }
 
-/* Respect reduced-motion: keep the dot, drop the pulse. */
 @media (prefers-reduced-motion: reduce) {
-  .sysaudio-listening-dot {
-    animation: none;
-  }
+  .sysaudio-listening-dot { animation: none; }
 }
 
 .capsule-sysaudio-toggle:hover {
-  background: rgba(255, 255, 255, 0.10);
-  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.1);
 }
 
 .capsule-sysaudio-toggle:focus-visible {
-  outline: 2px solid rgba(96, 165, 250, 0.6);
+  outline: 2px solid rgba(130, 170, 220, 0.4);
   outline-offset: 2px;
 }
 
 .capsule-sysaudio-toggle.is-active {
-  background: rgba(52, 211, 153, 0.16);
-  border-color: rgba(52, 211, 153, 0.34);
-  color: rgb(110, 231, 183);
+  background: rgba(52, 180, 130, 0.08);
+  border-color: rgba(52, 180, 130, 0.15);
+  color: rgba(110, 200, 170, 0.85);
 }
 
 .capsule-sysaudio-toggle.is-active:hover {
-  background: rgba(52, 211, 153, 0.24);
-  border-color: rgba(52, 211, 153, 0.46);
+  background: rgba(52, 180, 130, 0.12);
+  border-color: rgba(52, 180, 130, 0.22);
 }
 
-/* Both icons live in the same slot. The active one is parked at
-   translateY(0)/opacity 1; the inactive one is moved off-stage. The
-   exit direction differs per icon so the swap reads as a vertical
-   wheel rather than a crossfade in place. */
+/* Stealth icon transitions */
 .capsule-stealth-toggle .stealth-icon {
   position: absolute;
   inset: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: rgba(255, 255, 255, 0.92);
-  /* Material easing — same curve used for the card and chevron so the
-     entire overlay shares one motion language. */
-  transition: opacity 0.24s cubic-bezier(0.4, 0, 0.2, 1),
-              transform 0.24s cubic-bezier(0.4, 0, 0.2, 1);
-  /* Force a permanent compositor layer so the first toggle animates
-     as smoothly as subsequent ones — no layer creation cost mid-frame. */
+  color: rgba(255, 255, 255, 0.7);
+  transition: opacity 0.2s ease, transform 0.2s ease;
   will-change: opacity, transform;
   transform: translate3d(0, 0, 0);
   pointer-events: none;
 }
 
-/* Visible state (stealth OFF): Eye is on stage, EyeOff parks below. */
 .capsule-stealth-toggle.is-visible .stealth-icon-eye {
   opacity: 1;
   transform: translate3d(0, 0, 0);
@@ -420,62 +433,44 @@
 
 .capsule-stealth-toggle.is-visible .stealth-icon-eyeoff {
   opacity: 0;
-  transform: translate3d(0, 8px, 0);
+  transform: translate3d(0, 6px, 0);
 }
 
-/* Stealth state (stealth ON): EyeOff is on stage, Eye parks above. */
 .capsule-stealth-toggle.is-stealth .stealth-icon-eye {
   opacity: 0;
-  transform: translate3d(0, -8px, 0);
+  transform: translate3d(0, -6px, 0);
 }
 
 .capsule-stealth-toggle.is-stealth .stealth-icon-eyeoff {
   opacity: 1;
   transform: translate3d(0, 0, 0);
-  color: #93c5fd;
+  color: rgba(160, 190, 230, 0.75);
 }
 
 
-/* --- Suggestion Card (Main Panel) ---
-   Cluely-style layout isolation: the card uses a strict flex-column layout
-   with a max-height constraint. Content is split into three zones:
-     1. Top Zone    — .card-header (flex-shrink: 0) — always visible
-     2. Middle Zone — .card-scroll-body (flex: 1, overflow-y: auto) — scrolls
-     3. Bottom Zone — .card-quick-actions + .card-input-bar (flex-shrink: 0)
-   No matter how much content renders in the middle zone, the outer card
-   dimensions NEVER change beyond its natural size. The bottom controls
-   stay anchored. */
+/* --- Suggestion Card (Stealth Panel) ---
+   Ultra-dark, minimal borders, near-invisible to onlookers */
 .suggestion-card {
   position: absolute;
   top: 100%;
   left: 50%;
   transform: translateX(-50%) translateY(0);
   transform-origin: top center;
-  margin-top: 10px;
-  width: 480px;
-  background: rgba(15, 15, 22, 0.88);
-  backdrop-filter: blur(32px);
-  -webkit-backdrop-filter: blur(32px);
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  border-radius: 18px;
-  box-shadow:
-    0 8px 40px rgba(0, 0, 0, 0.5),
-    0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+  margin-top: 8px;
+  width: 440px;
+  background: rgba(10, 10, 14, 0.92);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 14px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
   overflow: hidden;
-  /* Internal breathing room */
-  padding: 0 0 12px 0;
-  /* LAYOUT LOCK: Card sizes to content but NEVER grows beyond 75vh.
-     No fixed height — avoids empty space when content is short. */
+  padding: 0 0 10px 0;
   max-height: 75vh;
-  /* Flex column: strict three-zone layout */
   display: flex;
   flex-direction: column;
-  /* JITTER FIX: Only transition GPU-composited properties (opacity +
-     transform). Layout properties (max-height, margin, border-width)
-     snap instantly — animating them causes reflow that jitters the
-     control capsule above. */
-  transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1),
-              transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+              transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
   will-change: opacity, transform;
   opacity: 1;
 }
@@ -485,109 +480,115 @@
   opacity: 0;
   pointer-events: none;
   margin-top: 0;
-  transform: translateX(-50%) translateY(-8px) scale(0.97);
+  transform: translateX(-50%) translateY(-6px) scale(0.97);
   border-width: 0;
-  /* Ensure the card doesn't occupy visual space when collapsed */
   padding: 0;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
-   TOP ZONE — Card Header (Cluely layout isolation)
-   ═══════════════════════════════════════════════════════════════════════
-   Fixed at top, never scrolls. Mode pill on the left, maximize/restore
-   button on the right. */
+/* ═══ TOP ZONE — Card Header ═══ */
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 14px 16px 10px;
-  /* LAYOUT LOCK: Never shrinks, never pushed off-screen */
+  padding: 12px 14px 8px;
   flex-shrink: 0;
   flex-grow: 0;
 }
 
-/* Card maximize / restore corner button. Renders only in native overlay
-   mode. Subtle ghost styling so it doesn't compete with the mode pill. */
+/* Mode pill — stealth: muted, no bright blue, no glow */
+.card-mode-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  background: rgba(130, 170, 220, 0.1);
+  color: rgba(180, 200, 230, 0.82);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  border: 1px solid rgba(130, 170, 220, 0.12);
+  box-shadow: none;
+  letter-spacing: 0.01em;
+}
+
+/* Assist now button — subtle */
+.card-assist-now-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.card-assist-now-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+}
+
+.card-assist-now-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Maximize/restore button */
 .card-maximize-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  color: var(--text-secondary, #cbd5e1);
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  color: var(--text-secondary);
   cursor: pointer;
-  transition: background-color 0.18s ease, color 0.18s ease, transform 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 .card-maximize-btn:hover {
-  background: rgba(255, 255, 255, 0.10);
-  color: var(--text-primary, #f8fafc);
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-primary);
 }
 
 .card-maximize-btn.is-maximized {
-  background: rgba(96, 165, 250, 0.14);
-  border-color: rgba(96, 165, 250, 0.28);
-  color: #93c5fd;
+  background: rgba(130, 170, 220, 0.08);
+  border-color: rgba(130, 170, 220, 0.12);
+  color: rgba(160, 190, 230, 0.8);
 }
 
 .card-maximize-btn:focus-visible {
-  outline: 2px solid rgba(96, 165, 250, 0.6);
+  outline: 2px solid rgba(130, 170, 220, 0.4);
   outline-offset: 2px;
-}
-
-.card-mode-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 6px 16px;
-  background: #3b82f6;
-  color: white;
-  border-radius: 999px;
-  font-size: 0.78rem;
-  font-weight: 600;
-  box-shadow: 0 2px 12px rgba(59, 130, 246, 0.35);
-  letter-spacing: 0.01em;
 }
 
 
 /* --- AI Suggestion --- */
 .card-suggestion {
-  padding: 16px 18px;
-  min-height: 60px;
+  padding: 14px 16px;
+  min-height: 50px;
+  position: relative;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
-   MIDDLE ZONE — Scrollable body wrapper (Cluely layout isolation)
-   ═══════════════════════════════════════════════════════════════════════
-   This is the ONLY element that scrolls. It sits between the pinned
-   header (top zone) and the pinned quick-actions + input bar (bottom
-   zone). All variable-height content — AI responses, modality badges,
-   ratings, follow-ups — lives inside this div.
-
-   Critical CSS:
-   - flex: 1 1 0  → absorbs all remaining height after top/bottom zones
-   - min-height: 0 → REQUIRED for flex overflow. Without this, the flex
-     item's min-height defaults to min-content, which prevents the
-     scrollbar from activating and instead expands the parent.
-   - overflow-y: auto → only scrolls when content exceeds available space
-   ═══════════════════════════════════════════════════════════════════════ */
+/* ═══ MIDDLE ZONE — Scrollable body ═══ */
 .card-scroll-body {
   flex: 1 1 0;
-  min-height: 0; /* Critical: enables flex-based overflow scrolling */
+  min-height: 0;
   overflow-y: auto;
   scroll-behavior: smooth;
   -webkit-overflow-scrolling: touch;
-  /* Subtle scrollbar styling */
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+  scrollbar-color: rgba(255, 255, 255, 0.06) transparent;
 }
 
-/* Webkit scrollbar styling for the middle zone */
 .card-scroll-body::-webkit-scrollbar {
-  width: 4px;
+  width: 3px;
 }
 
 .card-scroll-body::-webkit-scrollbar-track {
@@ -595,47 +596,44 @@
 }
 
 .card-scroll-body::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
 }
 
 .card-scroll-body::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.14);
 }
 
-/* User message echo. Displayed at the top of the scrollable body when
-   the user submits a question, so they can see what they asked. Renders
-   as a right-aligned chat bubble — Cluely-style chat UI. */
+/* User message bubble — subtle, no bright blue */
 .user-message {
   display: flex;
   justify-content: flex-end;
-  padding: 12px 18px 6px;
+  padding: 10px 16px 4px;
 }
 
-/* Spacing between consecutive assistant messages in chat history */
 .card-scroll-body > .card-suggestion + .user-message {
-  margin-top: 8px;
-  padding-top: 14px;
-  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  margin-top: 6px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.03);
 }
 
 .user-message-bubble {
   display: inline-block;
   max-width: 80%;
-  padding: 8px 14px;
-  background: rgba(96, 165, 250, 0.16);
-  border: 1px solid rgba(96, 165, 250, 0.28);
-  border-radius: 14px 14px 4px 14px;
-  font-size: 0.85rem;
-  line-height: 1.45;
-  color: var(--text-primary, #f8fafc);
+  padding: 7px 12px;
+  background: rgba(130, 170, 220, 0.08);
+  border: 1px solid rgba(130, 170, 220, 0.12);
+  border-radius: 12px 12px 3px 12px;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: var(--text-primary);
   word-break: break-word;
   white-space: pre-wrap;
 }
 
 .suggestion-text {
-  font-size: 0.92rem;
-  line-height: 1.7;
+  font-size: 0.88rem;
+  line-height: 1.65;
   color: var(--text-primary);
   white-space: pre-wrap;
 }
@@ -644,13 +642,13 @@
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  background: rgba(234, 179, 8, 0.15);
-  border: 1px solid rgba(234, 179, 8, 0.3);
-  color: #fde047;
-  padding: 10px 14px;
+  background: rgba(200, 160, 40, 0.08);
+  border: 1px solid rgba(200, 160, 40, 0.15);
+  color: rgba(240, 210, 80, 0.8);
+  padding: 8px 12px;
   border-radius: 8px;
-  margin-bottom: 12px;
-  font-size: 0.8rem;
+  margin-bottom: 10px;
+  font-size: 0.78rem;
   line-height: 1.4;
 }
 
@@ -667,7 +665,7 @@
   display: inline-block;
   width: 2px;
   height: 1em;
-  background: var(--accent-primary, #3b82f6);
+  background: rgba(130, 170, 220, 0.6);
   margin-left: 2px;
   vertical-align: text-bottom;
   animation: blink-cursor 0.8s ease-in-out infinite;
@@ -683,7 +681,55 @@
   align-items: center;
   gap: 8px;
   color: var(--text-secondary);
-  font-size: 0.85rem;
+  font-size: 0.82rem;
+}
+
+/* Reasoning progress — the "show / hide" affordance next to the status line.
+   Styled as a quiet text link rather than a button so it does not compete with
+   the answer for attention. */
+.reasoning-toggle {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  margin-left: auto;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.74rem;
+  opacity: 0.65;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.reasoning-toggle:hover,
+.reasoning-toggle:focus-visible {
+  opacity: 1;
+}
+
+/* The live chain-of-thought. The newest text must stay visible, so the box is
+   `column-reverse`: that pins its single child to the *bottom*, and `overflow:
+   hidden` then clips the older text off the top. Height-capping a normal block
+   would do the opposite — showing the oldest lines and hiding the ones the
+   model is currently writing, which is the only part that signals progress. */
+.reasoning-trace {
+  display: flex;
+  flex-direction: column-reverse;
+  max-height: 140px;
+  overflow: hidden;
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-left: 2px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-secondary);
+  opacity: 0.7;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  /* Fade the top edge so the clipped older text reads as "scrolled past"
+     rather than as a rendering bug. */
+  mask-image: linear-gradient(to bottom, transparent, black 24px);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, black 24px);
 }
 
 @keyframes spin {
@@ -702,7 +748,7 @@
   align-items: center;
   gap: 8px;
   color: var(--text-tertiary);
-  font-size: 0.85rem;
+  font-size: 0.82rem;
 }
 
 
@@ -711,53 +757,53 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  padding: 4px 18px 10px;
+  gap: 5px;
+  padding: 3px 16px 8px;
 }
 
 .modality-badge {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
+  gap: 3px;
+  padding: 2px 7px;
   border-radius: 999px;
-  font-size: 0.68rem;
+  font-size: 0.65rem;
   font-weight: 500;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text-secondary);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-tertiary);
   white-space: nowrap;
 }
 
 .modality-audio {
-  border-color: rgba(59, 130, 246, 0.25);
-  background: rgba(59, 130, 246, 0.08);
-  color: #93bbfd;
+  border-color: rgba(130, 170, 220, 0.1);
+  background: rgba(130, 170, 220, 0.04);
+  color: rgba(160, 190, 230, 0.7);
 }
 
 .modality-screen {
-  border-color: rgba(168, 85, 247, 0.25);
-  background: rgba(168, 85, 247, 0.08);
-  color: #c4a5f7;
+  border-color: rgba(160, 120, 200, 0.1);
+  background: rgba(160, 120, 200, 0.04);
+  color: rgba(180, 150, 220, 0.7);
 }
 
 .modality-knowledge {
-  border-color: rgba(34, 197, 94, 0.25);
-  background: rgba(34, 197, 94, 0.08);
-  color: #6ee7a0;
+  border-color: rgba(60, 180, 100, 0.1);
+  background: rgba(60, 180, 100, 0.04);
+  color: rgba(100, 200, 140, 0.7);
 }
 
 .modality-memory {
-  border-color: rgba(251, 191, 36, 0.25);
-  background: rgba(251, 191, 36, 0.08);
-  color: #fcd474;
+  border-color: rgba(200, 160, 60, 0.1);
+  background: rgba(200, 160, 60, 0.04);
+  color: rgba(220, 190, 100, 0.7);
 }
 
 .modality-divider {
   display: inline-block;
   width: 1px;
-  height: 14px;
-  background: rgba(255, 255, 255, 0.12);
+  height: 12px;
+  background: rgba(255, 255, 255, 0.06);
   margin: 0 2px;
 }
 
@@ -765,43 +811,43 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 2px 7px;
+  padding: 2px 6px;
   border-radius: 4px;
-  font-size: 0.65rem;
+  font-size: 0.62rem;
   font-weight: 600;
   font-family: monospace;
   cursor: pointer;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--text-secondary);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-tertiary);
   transition: all var(--transition-fast);
   white-space: nowrap;
 }
 
 .citation-chip:hover {
-  background: rgba(59, 130, 246, 0.12);
-  border-color: rgba(59, 130, 246, 0.3);
-  color: var(--accent-blue);
+  background: rgba(130, 170, 220, 0.06);
+  border-color: rgba(130, 170, 220, 0.15);
+  color: var(--text-secondary);
 }
 
 .citation-knowledge {
-  border-color: rgba(34, 197, 94, 0.2);
+  border-color: rgba(60, 180, 100, 0.1);
 }
 
 .citation-knowledge:hover {
-  background: rgba(34, 197, 94, 0.12);
-  border-color: rgba(34, 197, 94, 0.4);
-  color: #6ee7a0;
+  background: rgba(60, 180, 100, 0.06);
+  border-color: rgba(60, 180, 100, 0.2);
+  color: rgba(100, 200, 140, 0.8);
 }
 
 .citation-memory {
-  border-color: rgba(251, 191, 36, 0.2);
+  border-color: rgba(200, 160, 60, 0.1);
 }
 
 .citation-memory:hover {
-  background: rgba(251, 191, 36, 0.12);
-  border-color: rgba(251, 191, 36, 0.4);
-  color: #fcd474;
+  background: rgba(200, 160, 60, 0.06);
+  border-color: rgba(200, 160, 60, 0.2);
+  color: rgba(220, 190, 100, 0.8);
 }
 
 /* --- Rating Buttons --- */
@@ -809,44 +855,44 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 0 18px 8px;
+  padding: 0 16px 6px;
 }
 
 .rating-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   border-radius: 6px;
   color: var(--text-tertiary);
   transition: all var(--transition-fast);
 }
 
 .rating-btn:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.04);
   color: var(--text-secondary);
 }
 
 .rating-btn.active {
-  background: rgba(59, 130, 246, 0.12);
-  color: var(--accent-blue);
+  background: rgba(130, 170, 220, 0.08);
+  color: rgba(160, 190, 230, 0.8);
 }
 
 /* --- Follow-ups --- */
 .card-followups {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  padding: 0 18px 12px;
+  gap: 5px;
+  padding: 0 16px 10px;
 }
 
 .followup-chip {
-  padding: 5px 12px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 4px 10px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.05);
   border-radius: 999px;
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   color: var(--text-secondary);
   transition: all var(--transition-fast);
   max-width: 200px;
@@ -856,24 +902,21 @@
 }
 
 .followup-chip:hover {
-  background: rgba(59, 130, 246, 0.1);
-  border-color: rgba(59, 130, 246, 0.3);
-  color: var(--accent-blue);
+  background: rgba(130, 170, 220, 0.06);
+  border-color: rgba(130, 170, 220, 0.12);
+  color: var(--text-primary);
 }
 
 
-/* --- Quick Actions (Cluely-style single-line chips) ---
-   BOTTOM ZONE (part 1): Anchored to the bottom of the card. Never
-   scrolls, never shrinks, never pushed off-screen by content above. */
+/* --- Quick Actions (stealth chips) --- */
 .card-quick-actions {
   display: flex;
   align-items: center;
   gap: 0;
-  padding: 4px 18px 12px;
+  padding: 4px 16px 10px;
   flex-wrap: wrap;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  border-top: 1px solid rgba(255, 255, 255, 0.03);
   margin-top: 0;
-  /* LAYOUT LOCK: Pin at bottom — never scrolls, never shrinks */
   flex-shrink: 0;
   flex-grow: 0;
 }
@@ -881,10 +924,10 @@
 .quick-action {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 6px 10px;
+  gap: 4px;
+  padding: 5px 9px;
   border-radius: 999px;
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   font-weight: 500;
   color: var(--text-secondary);
   transition: all var(--transition-fast);
@@ -893,51 +936,47 @@
 
 .quick-action:hover {
   color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .quick-action.active {
-  color: var(--accent-blue);
-  background: rgba(59, 130, 246, 0.1);
+  color: rgba(160, 190, 230, 0.8);
+  background: rgba(130, 170, 220, 0.06);
 }
 
 .quick-action + .quick-action::before {
   content: '•';
-  margin-right: 4px;
+  margin-right: 3px;
   color: var(--text-tertiary);
-  font-size: 0.6rem;
+  font-size: 0.55rem;
 }
 
 .qa-icon {
-  font-size: 0.8rem;
+  font-size: 0.75rem;
 }
 
 .qa-label {
-  font-size: 0.72rem;
+  font-size: 0.7rem;
 }
 
 
-/* --- Input Bar (Cluely-style clean input) ---
-   BOTTOM ZONE (part 2): Anchored to the absolute bottom of the card.
-   Always visible and accessible regardless of how much content is in
-   the middle scroll zone. */
+/* --- Input Bar (Stealth: minimal, no bright focus ring) --- */
 .card-input-bar {
-  padding: 0 14px 14px;
-  /* LAYOUT LOCK: Pin at bottom — always visible, never shrinks */
+  padding: 0 12px 12px;
   flex-shrink: 0;
   flex-grow: 0;
 }
 
 .input-wrapper {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 14px;
-  padding: 10px 14px;
-  transition: border-color var(--transition-fast);
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 9px 12px;
+  transition: border-color 0.15s ease;
 }
 
 .input-wrapper:focus-within {
-  border-color: rgba(59, 130, 246, 0.4);
+  border-color: rgba(130, 170, 220, 0.2);
 }
 
 .copilot-input {
@@ -946,175 +985,157 @@
   border: none;
   outline: none;
   color: var(--text-primary);
-  font-size: 0.82rem;
+  font-size: 0.8rem;
   font-family: var(--font-sans);
 }
 
 .copilot-input::placeholder {
   color: var(--text-tertiary);
-  font-size: 0.78rem;
+  font-size: 0.75rem;
 }
 
 .input-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 4px 0;
+  padding: 5px 4px 0;
 }
 
 .input-toolbar-left {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
 }
 
-/* Use Screen button (Cluely parity). Captures the current desktop and
-   sends it as image context for the next AI request. Sits to the left
-   of the Smart badge in the input toolbar. */
+/* Use Screen button — stealth */
 .use-screen-btn {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 4px 10px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.10);
+  gap: 4px;
+  padding: 3px 9px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 999px;
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   font-weight: 500;
-  color: var(--text-secondary, #cbd5e1);
+  color: var(--text-secondary);
   cursor: pointer;
-  transition: background-color 0.18s ease, color 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
   white-space: nowrap;
 }
 
 .use-screen-btn:hover {
-  background: rgba(255, 255, 255, 0.12);
-  border-color: rgba(255, 255, 255, 0.22);
-  color: var(--text-primary, #f8fafc);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
 }
 
+/* Active state — subtle, NO blue glow/box-shadow */
 .use-screen-btn.is-active {
-  background: rgba(96, 165, 250, 0.18);
-  border-color: rgba(96, 165, 250, 0.40);
-  color: #93c5fd;
-  box-shadow: 0 0 12px -3px rgba(96, 165, 250, 0.35);
+  background: rgba(130, 170, 220, 0.08);
+  border-color: rgba(130, 170, 220, 0.18);
+  color: rgba(160, 190, 230, 0.85);
+  box-shadow: none;
 }
 
 .use-screen-btn.is-active:hover {
-  background: rgba(96, 165, 250, 0.28);
-  border-color: rgba(96, 165, 250, 0.55);
-  color: #ffffff;
-  box-shadow: 0 0 16px -2px rgba(96, 165, 250, 0.5);
+  background: rgba(130, 170, 220, 0.12);
+  border-color: rgba(130, 170, 220, 0.25);
+  color: rgba(200, 215, 240, 0.9);
+  box-shadow: none;
 }
 
 .use-screen-btn:focus-visible {
-  outline: 2px solid rgba(96, 165, 250, 0.6);
+  outline: 2px solid rgba(130, 170, 220, 0.3);
   outline-offset: 2px;
 }
 
 .smart-badge {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 10px;
-  background: rgba(59, 130, 246, 0.08);
-  border: 1px solid rgba(59, 130, 246, 0.15);
+  gap: 3px;
+  padding: 2px 8px;
+  background: rgba(130, 170, 220, 0.04);
+  border: 1px solid rgba(130, 170, 220, 0.08);
   border-radius: 999px;
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   font-weight: 600;
-  color: #60a5fa;
+  color: rgba(150, 180, 220, 0.7);
 }
 
 .toolbar-more-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   color: var(--text-tertiary);
   transition: all var(--transition-fast);
 }
 
 .toolbar-more-btn:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.04);
   color: var(--text-secondary);
 }
 
 .toolbar-more-btn.recording {
-  color: #ef4444;
-  background: rgba(239, 68, 68, 0.1);
+  color: rgba(220, 80, 80, 0.8);
+  background: rgba(220, 80, 80, 0.06);
 }
 
 .input-send-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
-  background: #3b82f6;
-  color: white;
+  background: rgba(130, 170, 220, 0.2);
+  color: rgba(200, 215, 240, 0.9);
   transition: all var(--transition-fast);
-  box-shadow: 0 2px 10px rgba(59, 130, 246, 0.3);
+  box-shadow: none;
 }
 
 .input-send-btn:hover {
-  background: #2563eb;
-  transform: scale(1.05);
+  background: rgba(130, 170, 220, 0.3);
 }
 
 .input-send-btn:disabled {
-  opacity: 0.5;
+  opacity: 0.35;
   cursor: not-allowed;
   transform: none;
 }
 
-/* Stop control — occupies the send slot while a response is generating so the
-   user can cut the answer short and ask the next question straight away. */
+/* Stop button — muted red, no pulsing glow */
 .input-stop-btn {
-  background: #ef4444;
-  box-shadow: 0 2px 10px rgba(239, 68, 68, 0.35);
-  animation: stop-btn-pulse 1.6s ease-in-out infinite;
+  background: rgba(200, 60, 60, 0.2);
+  color: rgba(240, 120, 120, 0.9);
+  box-shadow: none;
+  animation: none;
 }
 
 .input-stop-btn:hover {
-  background: #dc2626;
-}
-
-@keyframes stop-btn-pulse {
-  0%,
-  100% {
-    box-shadow: 0 2px 10px rgba(239, 68, 68, 0.35);
-  }
-  50% {
-    box-shadow: 0 2px 16px rgba(239, 68, 68, 0.65);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .input-stop-btn {
-    animation: none;
-  }
+  background: rgba(200, 60, 60, 0.3);
 }
 
 
 /* ===== MARKDOWN ===== */
 .markdown-content {
-  line-height: 1.6;
+  line-height: 1.55;
 }
 .markdown-content p {
-  margin: 0 0 0.5em 0;
+  margin: 0 0 0.4em 0;
 }
 .markdown-content p:last-child {
   margin-bottom: 0;
 }
 .markdown-content ul, .markdown-content ol {
-  margin: 0.5em 0;
-  padding-left: 1.5em;
+  margin: 0.4em 0;
+  padding-left: 1.4em;
 }
 .markdown-content li {
-  margin-bottom: 0.25em;
+  margin-bottom: 0.2em;
 }
 .markdown-content strong {
   color: var(--text-primary);
@@ -1123,14 +1144,14 @@
 
 /* Code blocks */
 .markdown-content pre {
-  background: rgba(0, 0, 0, 0.4);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 8px;
-  padding: 12px 16px;
-  margin: 8px 0;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin: 6px 0;
   overflow-x: auto;
-  font-size: 0.82rem;
-  line-height: 1.5;
+  font-size: 0.8rem;
+  line-height: 1.45;
 }
 
 /* Copy response button */
@@ -1138,60 +1159,62 @@
   position: absolute;
   top: 8px;
   right: 8px;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 6px;
-  padding: 4px 6px;
-  color: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 5px;
+  padding: 3px 5px;
+  color: rgba(255, 255, 255, 0.35);
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.2s, background 0.2s, color 0.2s;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
 }
-.card-suggestion {
-  position: relative;
-}
+
 .card-suggestion:hover .copy-response-btn {
   opacity: 1;
 }
+
 .copy-response-btn:hover {
-  background: rgba(255, 255, 255, 0.15);
-  color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.7);
 }
+
 .markdown-content pre code {
   background: none;
   padding: 0;
   border-radius: 0;
   font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
   font-size: inherit;
-  color: #e2e8f0;
+  color: rgba(210, 220, 235, 0.85);
   white-space: pre;
   word-break: normal;
   overflow-wrap: normal;
 }
+
 /* Inline code */
 .markdown-content code {
-  background: rgba(255, 255, 255, 0.1);
-  padding: 2px 6px;
-  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 2px 5px;
+  border-radius: 3px;
   font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.85em;
-  color: #93c5fd;
+  font-size: 0.83em;
+  color: rgba(160, 190, 230, 0.8);
 }
 
 
-/* ===== SCANNING ===== */
+/* ===== SCANNING — NO BLUE GLOW, stealth pulsing only ===== */
 .control-capsule.scanning {
-  box-shadow: 0 0 10px rgba(59, 130, 246, 0.5), inset 0 0 10px rgba(59, 130, 246, 0.2);
-  animation: scanningGlow 2s infinite alternate;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+  border-color: rgba(255, 255, 255, 0.1);
+  animation: scanningPulse 3s infinite;
 }
 
-@keyframes scanningGlow {
-  0% { box-shadow: 0 0 5px rgba(59, 130, 246, 0.3), inset 0 0 5px rgba(59, 130, 246, 0.1); border-color: rgba(59, 130, 246, 0.2); }
-  100% { box-shadow: 0 0 15px rgba(59, 130, 246, 0.8), inset 0 0 10px rgba(59, 130, 246, 0.4); border-color: rgba(59, 130, 246, 0.6); }
+@keyframes scanningPulse {
+  0%, 100% { border-color: rgba(255, 255, 255, 0.06); }
+  50% { border-color: rgba(255, 255, 255, 0.12); }
 }
 
 
-/* --- Reduced Motion Support (Requirement 18.5) --- */
+/* --- Reduced Motion Support --- */
 @media (prefers-reduced-motion: reduce) {
   .copilot-overlay {
     animation: none !important;
@@ -1218,72 +1241,56 @@
 
 /* ============================================
    Native Overlay Mode (Electron BrowserWindow)
-   ============================================
-   Cluely-style layout: control bar centered at top, content card filling
-   below. The BrowserWindow is transparent and frameless — only the
-   control bar and card are visible. Background elements (Exit Copilot,
-   workspace simulation) are not rendered in this mode. */
+   Stealth: fills window, dark, minimal chrome
+   ============================================ */
 
 .native-overlay-mode {
-  /* Fill the overlay BrowserWindow */
   position: relative !important;
   left: 0 !important;
   top: 0 !important;
   width: 100% !important;
   height: 100% !important;
-  /* Center the control bar and card as a column */
   display: flex !important;
   flex-direction: column !important;
   align-items: center !important;
-  padding: 8px 0 0 !important;
+  padding: 6px 0 0 !important;
   box-sizing: border-box;
 }
 
-/* Card sits below the capsule in native overlay mode.
-   In EXPANDED mode: bottom: auto → card sizes to content (no empty space).
-   In MAXIMIZED mode: bottom: 8px → card fills window (definite height
-   for flex-grow on the scroll body). */
 .native-overlay-mode .suggestion-card {
   position: absolute;
-  top: 56px;
+  top: 50px;
   left: 50%;
   right: auto;
-  bottom: auto; /* Default: size to content (expanded mode) */
+  bottom: auto;
   transform: translateX(-50%);
   margin-top: 0;
-  width: calc(100% - 16px);
-  max-width: 470px;
+  width: calc(100% - 12px);
+  max-width: 440px;
   max-height: none !important;
   height: auto !important;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  /* JITTER FIX: only GPU-composited transitions — no layout reflow */
-  transition: opacity 0.28s cubic-bezier(0.4, 0, 0.2, 1),
-              transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: opacity 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+              transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
   will-change: opacity, transform;
 }
 
 .native-overlay-mode .suggestion-card.hidden {
   opacity: 0;
   pointer-events: none;
-  /* translate3d keeps the same compositor layer */
-  transform: translate3d(-50%, -6px, 0) scale(0.97);
-  /* Layout props snap instantly — no transition on these */
+  transform: translate3d(-50%, -4px, 0) scale(0.98);
   border-width: 1px;
   margin-top: 0;
 }
 
-/* Stagger the inner content's fade-in slightly behind the card frame.
-   The card background fades 0→1 starting at t=0; each child starts its
-   own 0.20s opacity+translateY fade at t=80ms so the buttons, chips,
-   and input box appear to slide into a card that's already fading in,
-   instead of all popping into existence at the same compositor frame. */
+/* Stagger inner content fade */
 .native-overlay-mode .suggestion-card > * {
   opacity: 0;
-  transform: translateY(-3px);
-  transition: opacity 0.20s cubic-bezier(0.4, 0, 0.2, 1) 0.08s,
-              transform 0.20s cubic-bezier(0.4, 0, 0.2, 1) 0.08s;
+  transform: translateY(-2px);
+  transition: opacity 0.18s cubic-bezier(0.4, 0, 0.2, 1) 0.06s,
+              transform 0.18s cubic-bezier(0.4, 0, 0.2, 1) 0.06s;
   will-change: opacity, transform;
 }
 
@@ -1292,35 +1299,23 @@
   transform: translateY(0);
 }
 
-/* On collapse, drop the child fade delay so children fade out as the
-   card frame fades out — no perceptible content "popping out" before
-   the frame disappears. */
 .native-overlay-mode .suggestion-card.hidden > * {
-  transition: opacity 0.18s cubic-bezier(0.4, 0, 0.2, 1),
-              transform 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: opacity 0.15s cubic-bezier(0.4, 0, 0.2, 1),
+              transform 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Compact suggestion preview in native mode — centered under the capsule,
-   fades on the same timing as the card so the two transitions are perceived
-   as one cohesive motion. */
 .native-overlay-mode .compact-suggestion-preview {
-  margin-top: 6px;
+  margin-top: 4px;
   text-align: center;
-  transition: opacity 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: opacity 0.22s cubic-bezier(0.4, 0, 0.2, 1);
   will-change: opacity;
 }
 
-/* Match the chevron rotation to the card timing so they finish together. */
 .native-overlay-mode .chevron-icon {
-  transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* ─── Expanded vs Maximized scroll body ────────────────────────────────
-   EXPANDED: Compact card — header + chips + input only. The scroll body
-   is collapsed so the card stays small (Cluely "ready to ask" panel).
-   MAXIMIZED: Full card — scroll body expands to show AI responses.
-   The mode transition is triggered by handleSubmit when the user sends
-   a message (expanded → maximized auto-grow). */
+/* Expanded vs Maximized scroll body */
 .overlay-expanded .card-scroll-body {
   flex: 0 0 0;
   min-height: 0;
@@ -1330,15 +1325,9 @@
   overflow: hidden;
 }
 
-/* In MAXIMIZED mode, pin card to window bottom so flex-grow works on
-   the scroll body (needs a definite parent height). The height override
-   MUST switch from auto to a stretch-to-fit value — otherwise the
-   `height: auto !important` from the base native-overlay rule prevents
-   the absolute top/bottom pinning from producing a definite height,
-   and the scroll body never overflows. */
 .overlay-maximized.native-overlay-mode .suggestion-card {
-  bottom: 8px;
-  height: calc(100% - 56px - 8px) !important;
+  bottom: 6px;
+  height: calc(100% - 50px - 6px) !important;
 }
 
 .overlay-maximized .card-scroll-body {
@@ -1349,13 +1338,6 @@
   overflow-y: auto;
 }
 
-/* Hide the maximize/restore corner button in expanded mode if there is
-   no answer to expand to. (Optional refinement — for now we keep it
-   visible so the user can manually maximize before asking.) */
-
-/* Disable the one-time fade-in animation on the overlay container in
-   native overlay mode — the BrowserWindow itself fades in via showInactive
-   so an extra CSS animation just adds noise. */
 .native-overlay-mode {
   animation: none !important;
 }
@@ -1363,30 +1345,7 @@
 
 /* ============================================
    Mode 2 Drag-Region Partitioning
-   ============================================
-   These rules implement the renderer half of the dual-mode overlay window
-   fix (Layer 3). They are scoped exclusively to the Mode 2 DOM tree via
-   the `.mode-2-card-root` class (which is rendered only when the
-   FloatingCopilot host is loaded inside the floating widget BrowserWindow,
-   i.e. `window.location.hash === '#overlay'` / `isNativeOverlay === true`).
-
-   Behavior:
-   - The card root surface declares `-webkit-app-region: drag` so dragging
-     anywhere on the styled card moves the underlying frameless Mode 2
-     `BrowserWindow`.
-   - Every interactive descendant (`button`, `a`, `input`, `[role="button"]`)
-     overrides that with `-webkit-app-region: no-drag` so clicks dispatch
-     to their normal handlers instead of starting a window drag.
-
-   Scope guarantees (preservation):
-   - No element in the Mode 1 dashboard DOM tree carries `.mode-2-card-root`,
-     so the Mode 1 component tree is unaffected by these rules.
-   - No global rule on `html`, `body`, `#root`, or `*` introduces a drag
-     region anywhere in the project CSS.
-   - These rules add ONLY drag-region declarations — visual styling
-     (colors, sizes, border radius, blur, transitions) is unchanged.
-
-   Validates: Requirements 2.4, 2.5, 3.4 */
+   ============================================ */
 
 .mode-2-card-root {
   -webkit-app-region: drag;
@@ -1402,15 +1361,7 @@
 
 /* ============================================
    Cursor Stealth (Mode 2 / Native Overlay)
-   ============================================
-   In the native overlay window, cursor shape changes (I-beam on inputs,
-   pointer on buttons) leak the presence of invisible UI elements to
-   anyone watching via a low-level screen recorder or observing the
-   user's cursor behavior during a screen share. Keep the native-overlay cursor
-   visually consistent; this is presentation hardening only and is not a claim
-   that the Electron process or overlay is undetectable.
-
-   Scoped to .mode-2-card-root so Mode 1 (dashboard) remains unaffected. */
+   ============================================ */
 
 .mode-2-card-root,
 .mode-2-card-root *,

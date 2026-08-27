@@ -82,7 +82,19 @@ export interface ElectronAPI {
   /** Listen for keystrokes from the low-level keyboard hook (IPC-based input). */
   onOverlayKey?: (callback: (key: { type: string; char?: string }) => void) => () => void;
   /** Capture screen using BitBlt (bypasses display affinity / capture protection). */
-  captureDesktopBitBlt?: () => Promise<{ ok: boolean; base64?: string; reason?: string }>;
+  /**
+   * Native BitBlt screen capture. `bytes`/`width`/`height` describe the encoded
+   * JPEG actually produced (downscaled to a 1600px longest edge) and exist so
+   * the dispatch's `[perf]` line can attribute latency to payload size.
+   */
+  captureDesktopBitBlt?: () => Promise<{
+    ok: boolean;
+    base64?: string;
+    reason?: string;
+    bytes?: number;
+    width?: number;
+    height?: number;
+  }>;
   /** Extract text from foreground window via accessibility API (bypasses display affinity). */
   extractForegroundText?: () => Promise<{ ok: boolean; text?: string; reason?: string }>;
 

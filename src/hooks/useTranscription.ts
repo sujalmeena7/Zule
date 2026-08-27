@@ -2,25 +2,26 @@
 // Zule AI — useTranscription Hook
 // ============================================
 //
-// React hook that wraps the WebSpeechProvider (and future Whisper provider)
+// React hook that wraps the WebSpeechProvider and WhisperProvider
 // into a clean interface for the Copilot_Engine / FloatingCopilot.
 //
-// Replaces `useSpeechRecognition.ts` with a provider-pluggable design.
+// In Electron, it uses WhisperProvider backed by the main-process
+// onnxruntime-node engine (offline, 100% reliable, no Google cloud dependency).
+// In standard browsers, it uses WebSpeechProvider (Web Speech API).
 //
 // Exposes: start, stop, pause, resume, isListening, isSupported, on(event, cb)
-//
-// Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 1.10
 
 import { useState, useRef, useCallback, useEffect } from 'react';
 import type { TranscriptionLine, TranscriptionProvider } from '../types/transcription';
 import type { ZuleError } from '../types/errors';
 import { WebSpeechProvider, type Off, type TranscriptionEvent, type TranscriptionEventCallback } from '../brain/transcription/webSpeech';
+import { WhisperProvider } from '../brain/transcription/whisper';
 
 export interface UseTranscriptionOptions {
   /** BCP-47 language tag. Default 'en-US'. */
   language?: string;
-  /** Transcription provider. Default 'web-speech'. */
-  provider?: TranscriptionProvider;
+  /** Transcription provider. Default 'auto'. */
+  provider?: TranscriptionProvider | 'auto';
   /** Confidence threshold for filtering low-quality finals. Default 0.30. */
   confidenceThreshold?: number;
   /** Initial speaker id. */
@@ -36,7 +37,7 @@ export interface UseTranscriptionResult {
   interimText: string;
   /** Whether the recognizer is currently active. */
   isListening: boolean;
-  /** Whether Web Speech API is supported in this browser. */
+  /** Whether transcription is supported in this environment. */
   isSupported: boolean;
   /** Start transcription. */
   start: () => Promise<void>;
@@ -55,7 +56,7 @@ export interface UseTranscriptionResult {
 export function useTranscription(opts: UseTranscriptionOptions = {}): UseTranscriptionResult {
   const {
     language = 'en-US',
-    provider: _providerType = 'web-speech',
+    provider: providerType = 'auto',
     confidenceThreshold = 0.30,
     speakerId = 'speaker-1',
     speakerRole = 'user',
@@ -64,13 +65,13 @@ export function useTranscription(opts: UseTranscriptionOptions = {}): UseTranscr
   const [transcript, setTranscript] = useState<TranscriptionLine[]>([]);
   const [interimText, setInterimText] = useState('');
   const [isListening, setIsListening] = useState(false);
-  const [isSupported, setIsSupported] = useState(
-    () =>
-      typeof window !== 'undefined' &&
-      ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition),
-  );
+  const [isSupported, setIsSupported] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    if (typeof (window as any).electronAPI?.whisperTranscribe === 'function') return true;
+    return !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
+  });
 
-  const providerRef = useRef<WebSpeechProvider | null>(null);
+  const providerRef = useRef<WebSpeechProvider | WhisperProvider | null>(null);
   const unsubscribesRef = useRef<Off[]>([]);
 
   // Cleanup provider subscriptions
@@ -88,29 +89,57 @@ export function useTranscription(opts: UseTranscriptionOptions = {}): UseTranscr
       cleanupSubscriptions();
     }
 
-    const webProvider = new WebSpeechProvider({
-      language,
-      confidenceThreshold,
-      speakerId,
-      speakerRole,
-    });
+    const bridge = typeof window !== 'undefined' ? (window as any).electronAPI : undefined;
+    const hasElectronWhisper = typeof bridge?.whisperTranscribe === 'function';
 
-    providerRef.current = webProvider;
-    setIsSupported(webProvider.isSupported);
+    const useWhisper =
+      providerType === 'local-whisper' ||
+      (providerType === 'auto' && hasElectronWhisper) ||
+      (providerType === 'web-speech' && hasElectronWhisper);
 
-    if (!webProvider.isSupported) {
+    let activeProvider: WebSpeechProvider | WhisperProvider;
+
+    if (useWhisper && hasElectronWhisper) {
+      try {
+        await bridge.whisperPreload?.({});
+      } catch (err) {
+        console.warn('[useTranscription] Whisper preload failed:', err);
+      }
+
+      activeProvider = new WhisperProvider({
+        language: language.startsWith('en') ? 'en' : language,
+        speakerId,
+        speakerRole,
+        transcribeFn: async (pcm) => {
+          const { text } = await bridge.whisperTranscribe(pcm, { language });
+          return text;
+        },
+      });
+    } else {
+      activeProvider = new WebSpeechProvider({
+        language,
+        confidenceThreshold,
+        speakerId,
+        speakerRole,
+      });
+    }
+
+    providerRef.current = activeProvider;
+    setIsSupported(activeProvider.isSupported);
+
+    if (!activeProvider.isSupported) {
       return;
     }
 
     // Subscribe to events
-    const offLine = webProvider.on('line', ((line: TranscriptionLine) => {
+    const offLine = activeProvider.on('line', ((line: TranscriptionLine) => {
       setTranscript((prev) => [...prev, line]);
       setInterimText('');
     }) as TranscriptionEventCallback);
-    const offInterim = webProvider.on('interim', ((text: string) => {
+    const offInterim = activeProvider.on('interim', ((text: string) => {
       setInterimText(text);
     }) as TranscriptionEventCallback);
-    const offError = webProvider.on('error', ((err: ZuleError) => {
+    const offError = activeProvider.on('error', ((err: ZuleError) => {
       if (err.kind === 'transcription.permission-denied' || err.kind === 'transcription.permission-revoked') {
         setIsListening(false);
       }
@@ -119,16 +148,20 @@ export function useTranscription(opts: UseTranscriptionOptions = {}): UseTranscr
         setIsListening(false);
       }
       if (err.kind === 'transcription.network') {
-        // Supervisor paused — surface recoverable error
         setIsListening(false);
       }
     }) as TranscriptionEventCallback);
 
     unsubscribesRef.current = [offLine, offInterim, offError];
 
-    await webProvider.start({ language, speakerId, speakerRole });
-    setIsListening(webProvider.isListening);
-  }, [language, confidenceThreshold, speakerId, speakerRole, cleanupSubscriptions]);
+    try {
+      await activeProvider.start({ language, speakerId, speakerRole });
+      setIsListening(activeProvider.isListening);
+    } catch (err) {
+      console.error('[useTranscription] Failed to start provider:', err);
+      setIsListening(false);
+    }
+  }, [language, providerType, confidenceThreshold, speakerId, speakerRole, cleanupSubscriptions]);
 
   const stop = useCallback((): TranscriptionLine | null => {
     if (!providerRef.current) return null;
