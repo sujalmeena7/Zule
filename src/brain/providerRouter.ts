@@ -122,6 +122,36 @@ export class NoVisionProviderError extends Error {
   }
 }
 
+/**
+ * Recorded when an adapter's stream ran to completion without ever handing the
+ * consumer a single character of answer.
+ *
+ * A fulfilled `streamGenerate` promise is not evidence that the User got an
+ * answer. A stream can open, deliver nothing but metadata frames, and close —
+ * and some adapters then call `onComplete` with an empty string and resolve. The
+ * router used to read that as success, log `✅`, and return: no failover, no
+ * error, and a card left spinning on "Thinking…" forever while the request was
+ * in fact already over. An empty answer is a failure of the same practical kind
+ * as a 500, so it is treated as one and the next provider gets its turn.
+ *
+ * Carries the mid-stream error the adapter reported through `onError`, when
+ * there was one — that is usually the real cause, and it would otherwise be
+ * dropped along with the empty completion.
+ */
+export class EmptyCompletionError extends Error {
+  readonly code = 'EMPTY_COMPLETION' as const;
+  readonly reportedError: unknown;
+  constructor(providerName: string, reportedError?: unknown) {
+    const detail =
+      reportedError instanceof Error ? ` Reported: ${reportedError.message}` : '';
+    super(
+      `AI_Provider_Router: provider '${providerName}' completed without producing any text.${detail}`,
+    );
+    this.name = 'EmptyCompletionError';
+    this.reportedError = reportedError;
+  }
+}
+
 // --- Router class --------------------------------------------------------
 
 export class AI_Provider_Router {
@@ -346,11 +376,58 @@ export class AI_Provider_Router {
         }
       }
 
+      // Whether anything the User can read actually arrived. Counted here rather
+      // than inferred from the resolved promise, because the two are not the
+      // same thing — see `EmptyCompletionError`.
+      let sawContent = false;
+      let reportedError: unknown = null;
+      const guarded: StreamCallbacks = {
+        ...cb,
+        onToken: (cumulativeText: string) => {
+          if (cumulativeText.length > 0) sawContent = true;
+          cb.onToken(cumulativeText);
+        },
+        onComplete: (response: ProviderResponse) => {
+          if (response.text.trim().length > 0) sawContent = true;
+          // An empty completion is withheld: it would tell the consumer the
+          // request has finished — closing the stream, stopping the spinner,
+          // rendering a blank card — moments before the next adapter starts
+          // producing the real answer into the same callbacks.
+          if (sawContent) cb.onComplete(response);
+        },
+        onError: (err: Error) => {
+          // Adapters report mid-stream errors through this callback and then
+          // *resolve*. Once text has already reached the consumer it needs to
+          // know the answer is truncated. Before that, this is just one adapter
+          // failing, and the one behind it may well succeed — so hold the error
+          // and let it travel with the failover instead.
+          if (sawContent) cb.onError(err);
+          else reportedError = err;
+        },
+      };
+
       try {
         console.log(`[Router] Trying adapter: ${adapter.name}...`);
-        await adapter.streamGenerate(prompt, cb, opts);
-        console.log(`[Router] ✅ Adapter ${adapter.name} succeeded`);
-        return; // Success — done.
+        await adapter.streamGenerate(prompt, guarded, opts);
+
+        if (sawContent) {
+          console.log(`[Router] ✅ Adapter ${adapter.name} succeeded`);
+          return; // Success — done.
+        }
+
+        // Nothing reached the consumer. An abort is the legitimate reason for
+        // that, and the request is genuinely over: resolving quietly is what
+        // this path has always done, and failing over would fire a fresh
+        // request at the next provider on behalf of a User who just cancelled.
+        if (opts.signal?.aborted) {
+          return;
+        }
+
+        console.warn(
+          `[Router] ⚠ Adapter ${adapter.name} completed with no text — treating as failure`,
+        );
+        lastError = new EmptyCompletionError(adapter.name, reportedError);
+        continue; // Try next adapter
       } catch (err) {
         console.error(`[Router] ❌ Adapter ${adapter.name} FAILED:`, err instanceof Error ? err.message : err);
         lastError = err;
@@ -459,6 +536,13 @@ export class AI_Provider_Router {
 
       try {
         const response = await adapter.complete(prompt, opts);
+        // Same rule as `stream`: an answer with no text in it is a failure the
+        // caller cannot do anything with, so let the next provider try rather
+        // than returning it as a success. See `EmptyCompletionError`.
+        if (response.text.trim().length === 0) {
+          lastError = new EmptyCompletionError(adapter.name);
+          continue;
+        }
         return response;
       } catch (err) {
         lastError = err;

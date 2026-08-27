@@ -184,6 +184,48 @@ function makeStopwatch(label: string) {
 }
 
 /**
+ * Copy text to the clipboard from the overlay, reporting whether it worked.
+ *
+ * The async Clipboard API is not usable from this window. The overlay is created
+ * `NOACTIVATE` and deliberately never takes focus — that is the entire point of
+ * the focusless design — and `navigator.clipboard.writeText` rejects with
+ * `NotAllowedError: Document is not focused` in exactly that situation. It does
+ * so by *rejecting*, not by throwing, so a synchronous `try/catch` around it
+ * catches nothing: the previous version of this handler set `copied = true` the
+ * instant the promise was created, never ran its `execCommand` fallback, showed
+ * a "Copied to clipboard" toast for an empty clipboard, and left an unhandled
+ * `NotAllowedError` in the console on every click.
+ *
+ * So the promise is awaited, and the synchronous `execCommand('copy')` path —
+ * which works without document focus because the selection it copies from is one
+ * this document owns — is the fallback rather than the dead branch.
+ */
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fall through to the execCommand path below.
+  }
+
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Shape returned by the native BitBlt capture bridge. Named so the
  * `raceTimeout` fallback literals can be cast to the full shape — casting them
  * to a narrower one silently hides the diagnostic fields from every use site.
@@ -2171,26 +2213,19 @@ export function FloatingCopilot() {
                   <button
                     className="copy-response-btn"
                     onClick={() => {
-                      let copied = false;
-                      try {
-                        if (navigator.clipboard && navigator.clipboard.writeText) {
-                          navigator.clipboard.writeText(msg.text);
-                          copied = true;
+                      void copyTextToClipboard(msg.text).then((ok) => {
+                        // Report what actually happened. A toast that says
+                        // "Copied" over an empty clipboard is worse than no
+                        // toast: the User pastes into their editor and finds
+                        // nothing, with no reason to suspect the copy.
+                        if (ok) {
+                          toast.success('Copied to clipboard', { duration: 1500 });
+                        } else {
+                          toast.error('Could not copy — select the text and press Ctrl+C', {
+                            duration: 2500,
+                          });
                         }
-                      } catch {}
-                      if (!copied) {
-                        try {
-                          const ta = document.createElement('textarea');
-                          ta.value = msg.text;
-                          ta.style.position = 'fixed';
-                          ta.style.left = '-9999px';
-                          document.body.appendChild(ta);
-                          ta.select();
-                          document.execCommand('copy');
-                          document.body.removeChild(ta);
-                        } catch {}
-                      }
-                      toast.success('Copied to clipboard', { duration: 1500 });
+                      });
                     }}
                     aria-label="Copy response"
                   >

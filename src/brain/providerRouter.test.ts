@@ -15,6 +15,7 @@ import {
   AI_Provider_Router,
   VaultLockedError,
   AllProvidersFailedError,
+  EmptyCompletionError,
   NoVisionProviderError,
 } from './providerRouter';
 import type {
@@ -433,6 +434,174 @@ describe('AI_Provider_Router', () => {
       await expect(
         router.stream(DEFAULT_PROMPT, callbacks),
       ).rejects.toBeInstanceOf(AllProvidersFailedError);
+    });
+  });
+
+  // A resolved `streamGenerate` promise is not evidence that the User got an
+  // answer: a stream can open, send only metadata frames, close, and have the
+  // adapter call `onComplete('')`. The router used to read that as success, so
+  // the overlay showed a card that spun on "Thinking…" indefinitely while the
+  // request was already over — no failover, no error. These pin the guard.
+  describe('empty-completion failover', () => {
+    /**
+     * An adapter whose stream runs to completion without producing any text.
+     * `reportMidStreamError` mimics the adapters that report a mid-stream
+     * problem through `cb.onError` and then *resolve* rather than throwing.
+     */
+    function createEmptyAdapter(
+      name: string,
+      opts: { callLog?: string[]; reportMidStreamError?: Error } = {},
+    ): ProviderAdapter {
+      const callLog = opts.callLog ?? [];
+      return {
+        name,
+        capabilities: DEFAULT_CAPABILITIES,
+        countTokens: (text: string) => Math.ceil(text.length / 4),
+        complete: vi.fn(async () => {
+          callLog.push(`complete:${name}`);
+          return { ...makeSuccessResponse(name), text: '' };
+        }),
+        streamGenerate: vi.fn(
+          async (_prompt: PromptInput, cb: StreamCallbacks, _opts: CallOpts) => {
+            callLog.push(`stream:${name}`);
+            if (opts.reportMidStreamError) cb.onError(opts.reportMidStreamError);
+            cb.onComplete({ ...makeSuccessResponse(name), text: '' });
+          },
+        ),
+      };
+    }
+
+    it('fails over to the next adapter when a stream produces no text', async () => {
+      const router = new AI_Provider_Router();
+      const callLog: string[] = [];
+      const tokens: string[] = [];
+
+      router.registerAdapter(createEmptyAdapter('empty', { callLog }));
+      router.registerAdapter(createMockAdapter('backup', { callLog }));
+      router.setPriority(['empty', 'backup']);
+      router.setVaultLocked(false);
+
+      await router.stream(DEFAULT_PROMPT, {
+        onToken: (t) => tokens.push(t),
+        onComplete: () => {},
+        onError: () => {},
+      });
+
+      expect(callLog).toEqual(['stream:empty', 'stream:backup']);
+      expect(tokens).toEqual(['Hello', 'Hello world']);
+    });
+
+    it('withholds the empty onComplete so the consumer only sees the real answer', async () => {
+      const router = new AI_Provider_Router();
+      const completions: string[] = [];
+
+      router.registerAdapter(createEmptyAdapter('empty'));
+      router.registerAdapter(createMockAdapter('backup'));
+      router.setPriority(['empty', 'backup']);
+      router.setVaultLocked(false);
+
+      await router.stream(DEFAULT_PROMPT, {
+        onToken: () => {},
+        onComplete: (r) => completions.push(r.providerId),
+        onError: () => {},
+      });
+
+      expect(completions).toEqual(['backup']);
+    });
+
+    it('holds a pre-content onError back and carries it with the failover', async () => {
+      const router = new AI_Provider_Router();
+      const errors: string[] = [];
+
+      router.registerAdapter(
+        createEmptyAdapter('empty', {
+          reportMidStreamError: new Error('stream closed early'),
+        }),
+      );
+      router.registerAdapter(createMockAdapter('backup'));
+      router.setPriority(['empty', 'backup']);
+      router.setVaultLocked(false);
+
+      await router.stream(DEFAULT_PROMPT, {
+        onToken: () => {},
+        onComplete: () => {},
+        onError: (e) => errors.push(e.message),
+      });
+
+      // The consumer heard nothing about the first adapter's failure — it got a
+      // complete answer from the second one instead.
+      expect(errors).toEqual([]);
+    });
+
+    it('throws AllProvidersFailedError naming the empty completion when every adapter is empty', async () => {
+      const router = new AI_Provider_Router();
+
+      router.registerAdapter(
+        createEmptyAdapter('a', { reportMidStreamError: new Error('closed early') }),
+      );
+      router.registerAdapter(createEmptyAdapter('b'));
+      router.setPriority(['a', 'b']);
+      router.setVaultLocked(false);
+
+      const failure = await router
+        .stream(DEFAULT_PROMPT, {
+          onToken: () => {},
+          onComplete: () => {},
+          onError: () => {},
+        })
+        .then(() => null)
+        .catch((e: unknown) => e);
+
+      expect(failure).toBeInstanceOf(AllProvidersFailedError);
+      expect((failure as AllProvidersFailedError).lastError).toBeInstanceOf(
+        EmptyCompletionError,
+      );
+    });
+
+    it('does not fail over when the empty stream was the User aborting', async () => {
+      const router = new AI_Provider_Router();
+      const controller = new AbortController();
+      const callLog: string[] = [];
+
+      const aborting: ProviderAdapter = {
+        name: 'aborting',
+        capabilities: DEFAULT_CAPABILITIES,
+        countTokens: (t: string) => Math.ceil(t.length / 4),
+        complete: async () => makeSuccessResponse('aborting'),
+        streamGenerate: async () => {
+          callLog.push('stream:aborting');
+          controller.abort();
+          // Requirement 4.7 — no callbacks after abort.
+        },
+      };
+
+      router.registerAdapter(aborting);
+      router.registerAdapter(createMockAdapter('backup', { callLog }));
+      router.setPriority(['aborting', 'backup']);
+      router.setVaultLocked(false);
+
+      await router.stream(
+        DEFAULT_PROMPT,
+        { onToken: () => {}, onComplete: () => {}, onError: () => {} },
+        { signal: controller.signal },
+      );
+
+      expect(callLog).toEqual(['stream:aborting']);
+    });
+
+    it('fails over on the non-streaming path too when the text is empty', async () => {
+      const router = new AI_Provider_Router();
+      const callLog: string[] = [];
+
+      router.registerAdapter(createEmptyAdapter('empty', { callLog }));
+      router.registerAdapter(createMockAdapter('backup', { callLog }));
+      router.setPriority(['empty', 'backup']);
+      router.setVaultLocked(false);
+
+      const result = await router.complete(DEFAULT_PROMPT);
+
+      expect(callLog).toEqual(['complete:empty', 'complete:backup']);
+      expect(result.providerId).toBe('backup');
     });
   });
 
