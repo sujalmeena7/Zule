@@ -423,8 +423,13 @@ export class AI_Provider_Router {
           return;
         }
 
+        // Carry the withheld `onError` into the log. Without it, an adapter that
+        // knew exactly why it had nothing to say — a gateway refusing inside a
+        // 200, say — looks identical to one that simply went quiet.
+        const reason =
+          reportedError instanceof Error ? ` — ${reportedError.message}` : '';
         console.warn(
-          `[Router] ⚠ Adapter ${adapter.name} completed with no text — treating as failure`,
+          `[Router] ⚠ Adapter ${adapter.name} completed with no text — treating as failure${reason}`,
         );
         lastError = new EmptyCompletionError(adapter.name, reportedError);
         continue; // Try next adapter

@@ -58,6 +58,26 @@ const API_KEY_HEADER = 'x-api-key';
 const DEFAULT_ANTHROPIC_VERSION = '2023-06-01';
 
 /**
+ * Host of the first-party API. Used only to decide whether this request is
+ * going to Anthropic itself or to a gateway standing in front of it — see
+ * `buildHeaders`.
+ */
+const OFFICIAL_API_HOST = 'api.anthropic.com';
+
+/**
+ * How much of an unrecognised response body to keep for the diagnostic.
+ *
+ * Only accumulated until the first frame this adapter understands, so a normal
+ * stream copies a few hundred bytes and then stops. The cap bounds the
+ * pathological case: an endpoint that answers 200 with a large body in a dialect
+ * we cannot read at all.
+ */
+const RAW_BODY_SAMPLE_LIMIT = 64 * 1024;
+
+/** Characters of that sample quoted in the diagnostic message. */
+const RAW_BODY_EXCERPT_CHARS = 300;
+
+/**
  * Anthropic requires `max_tokens` on every Messages request. We pick a
  * generous default that fits comfortably inside Claude 3.5 Sonnet's
  * output budget without truncating typical Copilot answers.
@@ -113,6 +133,8 @@ export class AnthropicAdapter implements ProviderAdapter {
   private readonly baseUrl: string;
   private readonly anthropicVersion: string;
   private readonly fetchImpl?: typeof fetch;
+  /** Whether `baseUrl` points at Anthropic itself rather than at a gateway. */
+  private readonly isOfficialHost: boolean;
 
   constructor(opts: AnthropicAdapterOptions) {
     if (!opts.apiKey || !opts.apiKey.trim()) {
@@ -124,6 +146,19 @@ export class AnthropicAdapter implements ProviderAdapter {
     this.baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
     this.anthropicVersion = opts.anthropicVersion ?? DEFAULT_ANTHROPIC_VERSION;
     this.fetchImpl = opts.fetchImpl;
+
+    // Host comparison rather than a substring test, so a gateway whose path or
+    // subdomain happens to contain the official host is still treated as a
+    // gateway. An unparseable URL is treated as a gateway: that is the
+    // permissive side for the auth header, and a malformed base URL fails at
+    // `fetch` anyway.
+    let host = '';
+    try {
+      host = new URL(this.baseUrl).host.toLowerCase();
+    } catch {
+      host = '';
+    }
+    this.isOfficialHost = host === OFFICIAL_API_HOST;
   }
 
   /**
@@ -261,13 +296,28 @@ export class AnthropicAdapter implements ProviderAdapter {
     // most recent value seen.
     let inputTokens: number | null = null;
     let outputTokens: number | null = null;
+    /**
+     * Copy of the response body kept only until a frame is understood, so a
+     * stream that produced nothing can say what it actually contained instead of
+     * resolving with an empty string.
+     */
+    let rawSample = '';
+    let recognisedAnyFrame = false;
+    /** An error the endpoint reported inside a 200 response. */
+    let gatewayError: string | null = null;
 
     try {
       while (true) {
         if (opts.signal?.aborted) return;
         const { done, value } = await reader.read();
         if (done) break;
-        if (value) buffer += decoder.decode(value, { stream: true });
+        if (value) {
+          const chunk = decoder.decode(value, { stream: true });
+          buffer += chunk;
+          if (!recognisedAnyFrame && rawSample.length < RAW_BODY_SAMPLE_LIMIT) {
+            rawSample += chunk;
+          }
+        }
 
         const { events, rest } = parseSseFrames(buffer);
         buffer = rest;
@@ -305,6 +355,7 @@ export class AnthropicAdapter implements ProviderAdapter {
               delta.type === 'text_delta' &&
               typeof delta.text === 'string'
             ) {
+              recognisedAnyFrame = true;
               cumulativeText += delta.text;
               cb.onToken(cumulativeText);
             } else if (
@@ -316,10 +367,12 @@ export class AnthropicAdapter implements ProviderAdapter {
               delta.type === 'thinking_delta' &&
               typeof delta.thinking === 'string'
             ) {
+              recognisedAnyFrame = true;
               cumulativeReasoning += delta.thinking;
               cb.onReasoning?.(cumulativeReasoning);
             }
           } else if (eventType === 'message_start') {
+            recognisedAnyFrame = true;
             const usage = (parsed as { message?: { usage?: unknown } })?.message
               ?.usage;
             if (usage && typeof usage === 'object') {
@@ -329,11 +382,38 @@ export class AnthropicAdapter implements ProviderAdapter {
               if (typeof outp === 'number' && outp >= 0) outputTokens = outp;
             }
           } else if (eventType === 'message_delta') {
+            recognisedAnyFrame = true;
             const usage = (parsed as { usage?: unknown })?.usage;
             if (usage && typeof usage === 'object') {
               const outp = (usage as { output_tokens?: unknown }).output_tokens;
               if (typeof outp === 'number' && outp >= 0) outputTokens = outp;
             }
+          } else if (eventType === 'error') {
+            // Anthropic's own mid-stream failure frame. Previously ignored,
+            // which turned a reported overload into a silent empty answer.
+            gatewayError = extractErrorMessage(parsed) ?? 'the endpoint sent an error frame';
+          } else {
+            // Not an event name this adapter knows. A gateway reselling Claude
+            // frequently answers in the OpenAI dialect regardless of the path it
+            // was asked on — the request is translated, the response is not — so
+            // an unlabelled `data:` frame carrying `choices[].delta.content` is
+            // the common case here, not an exotic one. Reading it costs one
+            // property lookup and is the difference between an answer and a
+            // spinner.
+            const openAi = extractOpenAiDelta(parsed);
+            if (openAi.text) {
+              recognisedAnyFrame = true;
+              cumulativeText += openAi.text;
+              cb.onToken(cumulativeText);
+            }
+            if (openAi.reasoning) {
+              recognisedAnyFrame = true;
+              cumulativeReasoning += openAi.reasoning;
+              cb.onReasoning?.(cumulativeReasoning);
+            }
+            if (openAi.promptTokens !== null) inputTokens = openAi.promptTokens;
+            if (openAi.completionTokens !== null) outputTokens = openAi.completionTokens;
+            if (!gatewayError) gatewayError = extractErrorMessage(parsed);
           }
           // `message_stop` is informational; we finalise after the reader
           // drains so any trailing usage frame is honoured.
@@ -359,6 +439,38 @@ export class AnthropicAdapter implements ProviderAdapter {
     // returning `done` and here, do not emit `onComplete`.
     if (opts.signal?.aborted) return;
 
+    // Last resort before giving up: some gateways ignore `stream: true` and
+    // answer with a single non-streamed JSON body. That body arrives with no
+    // `data:` framing, so the SSE parser correctly yields no events and the
+    // answer would be thrown away — even though it is sitting in the sample
+    // buffer, in a shape `extractText` already understands.
+    if (cumulativeText.length === 0) {
+      let salvaged = '';
+      try {
+        const body: unknown = JSON.parse(rawSample.trim());
+        salvaged = extractText(body);
+        // Same body, other outcome: a whole-body error envelope. Reading it here
+        // is what turns "could not read the response" into the gateway's own
+        // words about why it refused.
+        if (!salvaged && !gatewayError) gatewayError = extractErrorMessage(body);
+      } catch {
+        salvaged = '';
+      }
+      if (salvaged) {
+        cumulativeText = salvaged;
+        cb.onToken(cumulativeText);
+      }
+    }
+
+    // Still nothing. Resolving here would hand the router an empty answer, which
+    // is what left the overlay spinning on "Thinking…" with no text and no error
+    // to explain it. Report instead: the router withholds this while it fails
+    // over, and surfaces it if every provider comes back the same way.
+    if (cumulativeText.length === 0) {
+      cb.onError(new Error(this.describeEmptyStream(rawSample, gatewayError)));
+      return;
+    }
+
     const promptTokens =
       inputTokens ?? this.countTokens(prompt.fullPrompt || prompt.userText || '');
     const completionTokens =
@@ -378,11 +490,51 @@ export class AnthropicAdapter implements ProviderAdapter {
   // --- Internal --------------------------------------------------------
 
   private buildHeaders(): Record<string, string> {
-    return {
+    const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       [API_KEY_HEADER]: this.apiKey,
       'anthropic-version': this.anthropicVersion,
     };
+
+    // Gateways that resell Claude are overwhelmingly written against the OpenAI
+    // convention and authenticate on `Authorization: Bearer`; several ignore
+    // `x-api-key` entirely, and an unauthenticated request to one of those comes
+    // back as a 200 carrying an error envelope rather than a 401. So send both
+    // when the target is not Anthropic itself.
+    //
+    // Withheld for the first-party host on purpose: there, `Authorization` is
+    // the OAuth channel, and presenting an API key through it alongside a valid
+    // `x-api-key` invites a 401 on a request that works today.
+    if (!this.isOfficialHost) {
+      headers.Authorization = `Bearer ${this.apiKey}`;
+    }
+
+    return headers;
+  }
+
+  /**
+   * Human-readable account of a 200 response that produced no answer, for the
+   * `onError` the router carries into its failover log. This is the line that
+   * tells the User whether their gateway is speaking an unknown dialect, or
+   * refusing the request inside a success status.
+   */
+  private describeEmptyStream(rawSample: string, gatewayError: string | null): string {
+    const where = this.isOfficialHost ? this.baseUrl : `gateway ${this.baseUrl}`;
+    if (gatewayError) {
+      return maskSecret(
+        `AnthropicAdapter: ${where} answered HTTP 200 but reported an error instead of an answer — ${gatewayError}`,
+        this.apiKey,
+      );
+    }
+    const excerpt = rawSample.trim().slice(0, RAW_BODY_EXCERPT_CHARS);
+    return maskSecret(
+      `AnthropicAdapter: ${where} answered HTTP 200 with a body this adapter could not read as either ` +
+        `the Anthropic Messages stream or the OpenAI chat-completions stream. ` +
+        (excerpt
+          ? `First ${excerpt.length} characters: ${excerpt}`
+          : 'The body was empty. Check that the Base URL points at the Messages endpoint (…/v1/messages) and that the model id exists on this gateway.'),
+      this.apiKey,
+    );
   }
 }
 
@@ -470,23 +622,133 @@ async function throwIfNotOk(response: Response): Promise<Response> {
  * Concatenates every `text` block from `content` in a non-streaming
  * Messages response. Anthropic returns:
  *   { content: [{ type: 'text', text: '…' }, …], usage: { … } }
+ *
+ * Falls through to the OpenAI chat-completions shape
+ * (`choices[0].message.content`) when no Anthropic content block is present,
+ * because a gateway asked for Claude on an Anthropic path will often still
+ * answer in the dialect it was written for. Trying the second shape costs a
+ * property lookup; not trying it costs the whole answer.
  */
 function extractText(json: unknown): string {
   if (!json || typeof json !== 'object') return '';
   const content = (json as { content?: unknown }).content;
-  if (!Array.isArray(content)) return '';
-  let text = '';
-  for (const block of content) {
-    if (
-      block &&
-      typeof block === 'object' &&
-      (block as { type?: unknown }).type === 'text' &&
-      typeof (block as { text?: unknown }).text === 'string'
-    ) {
-      text += (block as { text: string }).text;
+  if (Array.isArray(content)) {
+    let text = '';
+    for (const block of content) {
+      if (
+        block &&
+        typeof block === 'object' &&
+        (block as { type?: unknown }).type === 'text' &&
+        typeof (block as { text?: unknown }).text === 'string'
+      ) {
+        text += (block as { text: string }).text;
+      }
+    }
+    if (text) return text;
+  }
+
+  // `content` as a plain string — some gateways flatten it.
+  if (typeof content === 'string') return content;
+
+  const choices = (json as { choices?: unknown }).choices;
+  if (Array.isArray(choices)) {
+    let text = '';
+    for (const choice of choices) {
+      const message = (choice as { message?: { content?: unknown } })?.message;
+      if (typeof message?.content === 'string') text += message.content;
+    }
+    if (text) return text;
+  }
+
+  return '';
+}
+
+/**
+ * Reads one OpenAI-dialect streaming frame: `choices[].delta.content`, the
+ * `reasoning` / `reasoning_content` field thinking models put their
+ * chain-of-thought in, and the usage block.
+ *
+ * Returns empty strings and `null` counts for anything that is not such a
+ * frame, so the caller can treat "not this dialect" and "nothing in it" alike.
+ */
+function extractOpenAiDelta(parsed: unknown): {
+  text: string;
+  reasoning: string;
+  promptTokens: number | null;
+  completionTokens: number | null;
+} {
+  const result = { text: '', reasoning: '', promptTokens: null as number | null, completionTokens: null as number | null };
+  if (!parsed || typeof parsed !== 'object') return result;
+
+  const choices = (parsed as { choices?: unknown }).choices;
+  if (Array.isArray(choices)) {
+    for (const choice of choices) {
+      const delta = (choice as { delta?: Record<string, unknown> })?.delta;
+      if (delta && typeof delta === 'object') {
+        if (typeof delta.content === 'string') result.text += delta.content;
+        const reasoning =
+          typeof delta.reasoning === 'string'
+            ? delta.reasoning
+            : typeof delta.reasoning_content === 'string'
+              ? delta.reasoning_content
+              : '';
+        result.reasoning += reasoning;
+      }
+      // A gateway that ignored `stream: true` but still framed its answer as
+      // one SSE event puts the whole reply under `message` instead of `delta`.
+      const message = (choice as { message?: { content?: unknown } })?.message;
+      if (typeof message?.content === 'string') result.text += message.content;
     }
   }
-  return text;
+
+  const usage = (parsed as { usage?: unknown }).usage;
+  if (usage && typeof usage === 'object') {
+    const inp = (usage as { prompt_tokens?: unknown }).prompt_tokens;
+    const outp = (usage as { completion_tokens?: unknown }).completion_tokens;
+    if (typeof inp === 'number' && inp >= 0) result.promptTokens = inp;
+    if (typeof outp === 'number' && outp >= 0) result.completionTokens = outp;
+  }
+
+  return result;
+}
+
+/**
+ * Pulls a human-readable message out of an error envelope, covering the shapes
+ * the gateways in use put one in: `{ error: { message } }`, `{ error: '…' }`,
+ * and a bare `{ message }`.
+ *
+ * Needed because an error delivered inside HTTP 200 never reaches
+ * `throwIfNotOk`. Gateways do this routinely — quota exhausted, unknown model,
+ * upstream refusal — and without this the whole event is indistinguishable from
+ * a model that had nothing to say.
+ */
+function extractErrorMessage(parsed: unknown): string | null {
+  if (!parsed || typeof parsed !== 'object') return null;
+
+  const error = (parsed as { error?: unknown }).error;
+  if (typeof error === 'string' && error.trim()) return error.trim();
+  if (error && typeof error === 'object') {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) return message.trim();
+    const type = (error as { type?: unknown }).type;
+    if (typeof type === 'string' && type.trim()) return type.trim();
+  }
+
+  const message = (parsed as { message?: unknown }).message;
+  if (typeof message === 'string' && message.trim()) return message.trim();
+
+  return null;
+}
+
+/**
+ * Literal (regex-free) masking of the credential before it can reach a log line.
+ * Mirrors `scrubSecret` in `./custom.ts`; kept local so this adapter does not
+ * pull the custom-provider module into its chunk for six lines of string work.
+ */
+function maskSecret(text: string, secret: string): string {
+  const trimmed = secret.trim();
+  if (trimmed.length < 8) return text;
+  return text.split(`Bearer ${trimmed}`).join('[REDACTED:APIKEY]').split(trimmed).join('[REDACTED:APIKEY]');
 }
 
 /**

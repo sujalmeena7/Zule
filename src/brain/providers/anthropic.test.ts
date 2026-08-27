@@ -487,3 +487,204 @@ describe('AnthropicAdapter — request body shape', () => {
     });
   });
 });
+
+// --- Anthropic-compatible gateways --------------------------------------
+//
+// The adapter is routinely pointed at a resale gateway rather than
+// api.anthropic.com. Those gateways translate the *request* into whatever
+// upstream they proxy but frequently do not translate the *response*, ignore
+// `stream: true`, or report failure inside HTTP 200. Each of those used to
+// degrade to an empty answer, which reached the UI as a spinner that never
+// resolved. These tests pin the tolerant behaviour.
+
+const GATEWAY_URL = 'https://api.lumosel.vip/v1/messages';
+
+describe('AnthropicAdapter — compatible gateways', () => {
+  let originalFetch: typeof globalThis.fetch;
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('sends Authorization: Bearer to a non-Anthropic host, alongside x-api-key', async () => {
+    const sse =
+      'data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n';
+    const { impl, calls } = makeRecordingFetch(() => makeStreamResponse([sse]));
+    const adapter = new AnthropicAdapter({
+      apiKey: TEST_API_KEY,
+      baseUrl: GATEWAY_URL,
+      fetchImpl: impl,
+    });
+
+    const { cb } = makeStreamCallbacks();
+    await adapter.streamGenerate(PROMPT, cb, NO_OPTS);
+
+    expect(String(calls[0].input)).toBe(GATEWAY_URL);
+    const headers = new Headers(calls[0].init?.headers);
+    expect(headers.get('authorization')).toBe(`Bearer ${TEST_API_KEY}`);
+    expect(headers.get('x-api-key')).toBe(TEST_API_KEY);
+  });
+
+  it('reads an OpenAI-dialect SSE stream from a gateway that did not translate the response', async () => {
+    const sse =
+      'data: {"choices":[{"delta":{"role":"assistant","content":""}}]}\n\n' +
+      'data: {"choices":[{"delta":{"content":"2 + 2 "}}]}\n\n' +
+      'data: {"choices":[{"delta":{"content":"= 4"}}]}\n\n' +
+      'data: {"choices":[{"delta":{}}],"usage":{"prompt_tokens":11,"completion_tokens":5}}\n\n' +
+      'data: [DONE]\n\n';
+    const { impl } = makeRecordingFetch(() => makeStreamResponse([sse]));
+    const adapter = new AnthropicAdapter({
+      apiKey: TEST_API_KEY,
+      baseUrl: GATEWAY_URL,
+      fetchImpl: impl,
+    });
+
+    const { cb, tokens, errors, result } = makeStreamCallbacks();
+    await adapter.streamGenerate(PROMPT, cb, NO_OPTS);
+
+    expect(errors).toHaveLength(0);
+    expect(tokens).toEqual(['2 + 2 ', '2 + 2 = 4']);
+    expect(result.value?.text).toBe('2 + 2 = 4');
+    expect(result.value?.promptTokens).toBe(11);
+    expect(result.value?.completionTokens).toBe(5);
+  });
+
+  it('salvages a gateway that ignored stream:true and returned one Anthropic JSON body', async () => {
+    const { impl } = makeRecordingFetch(() =>
+      makeJsonResponse({
+        content: [{ type: 'text', text: 'four' }],
+        usage: { input_tokens: 9, output_tokens: 1 },
+      }),
+    );
+    const adapter = new AnthropicAdapter({
+      apiKey: TEST_API_KEY,
+      baseUrl: GATEWAY_URL,
+      fetchImpl: impl,
+    });
+
+    const { cb, tokens, errors, result } = makeStreamCallbacks();
+    await adapter.streamGenerate(PROMPT, cb, NO_OPTS);
+
+    expect(errors).toHaveLength(0);
+    expect(tokens).toEqual(['four']);
+    expect(result.value?.text).toBe('four');
+  });
+
+  it('salvages a gateway that ignored stream:true and returned one OpenAI JSON body', async () => {
+    const { impl } = makeRecordingFetch(() =>
+      makeJsonResponse({
+        choices: [{ message: { role: 'assistant', content: 'four' } }],
+      }),
+    );
+    const adapter = new AnthropicAdapter({
+      apiKey: TEST_API_KEY,
+      baseUrl: GATEWAY_URL,
+      fetchImpl: impl,
+    });
+
+    const { cb, errors, result } = makeStreamCallbacks();
+    await adapter.streamGenerate(PROMPT, cb, NO_OPTS);
+
+    expect(errors).toHaveLength(0);
+    expect(result.value?.text).toBe('four');
+  });
+
+  it('reports an error frame delivered inside HTTP 200 instead of completing empty', async () => {
+    const sse =
+      'event: error\n' +
+      'data: {"type":"error","error":{"type":"insufficient_quota","message":"Your balance is exhausted"}}\n\n';
+    const { impl } = makeRecordingFetch(() => makeStreamResponse([sse]));
+    const adapter = new AnthropicAdapter({
+      apiKey: TEST_API_KEY,
+      baseUrl: GATEWAY_URL,
+      fetchImpl: impl,
+    });
+
+    const { cb, errors, result } = makeStreamCallbacks();
+    await adapter.streamGenerate(PROMPT, cb, NO_OPTS);
+
+    // onComplete withheld: handing the router `text: ''` is what produced a
+    // spinner with no answer and no explanation.
+    expect(result.value).toBeNull();
+    expect(errors).toHaveLength(1);
+    expect(errors[0].message).toContain('Your balance is exhausted');
+    expect(errors[0].message).toContain(GATEWAY_URL);
+  });
+
+  it('reports an error envelope returned as a plain 200 JSON body', async () => {
+    const { impl } = makeRecordingFetch(() =>
+      makeJsonResponse({ error: { message: 'model not found on this gateway' } }),
+    );
+    const adapter = new AnthropicAdapter({
+      apiKey: TEST_API_KEY,
+      baseUrl: GATEWAY_URL,
+      fetchImpl: impl,
+    });
+
+    const { cb, errors, result } = makeStreamCallbacks();
+    await adapter.streamGenerate(PROMPT, cb, NO_OPTS);
+
+    expect(result.value).toBeNull();
+    expect(errors[0]?.message).toContain('model not found on this gateway');
+  });
+
+  it('quotes an unreadable body so the failure is self-diagnosing, with the key masked', async () => {
+    const { impl } = makeRecordingFetch(
+      () =>
+        new Response(`<html><body>Forbidden ${TEST_API_KEY}</body></html>`, {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        }),
+    );
+    const adapter = new AnthropicAdapter({
+      apiKey: TEST_API_KEY,
+      baseUrl: GATEWAY_URL,
+      fetchImpl: impl,
+    });
+
+    const { cb, errors, result } = makeStreamCallbacks();
+    await adapter.streamGenerate(PROMPT, cb, NO_OPTS);
+
+    expect(result.value).toBeNull();
+    expect(errors).toHaveLength(1);
+    expect(errors[0].message).toContain('Forbidden');
+    expect(errors[0].message).not.toContain(TEST_API_KEY);
+  });
+
+  it('reports an empty 200 body with a hint about the Base URL', async () => {
+    const { impl } = makeRecordingFetch(
+      () => new Response('', { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+    );
+    const adapter = new AnthropicAdapter({
+      apiKey: TEST_API_KEY,
+      baseUrl: GATEWAY_URL,
+      fetchImpl: impl,
+    });
+
+    const { cb, errors, result } = makeStreamCallbacks();
+    await adapter.streamGenerate(PROMPT, cb, NO_OPTS);
+
+    expect(result.value).toBeNull();
+    expect(errors[0]?.message).toMatch(/v1\/messages/);
+  });
+
+  it('complete() reads the OpenAI non-streaming shape too', async () => {
+    const { impl } = makeRecordingFetch(() =>
+      makeJsonResponse({
+        choices: [{ message: { content: 'four' } }],
+        usage: { input_tokens: 4, output_tokens: 1 },
+      }),
+    );
+    const adapter = new AnthropicAdapter({
+      apiKey: TEST_API_KEY,
+      baseUrl: GATEWAY_URL,
+      fetchImpl: impl,
+    });
+
+    const res = await adapter.complete(PROMPT, NO_OPTS);
+    expect(res.text).toBe('four');
+  });
+});
