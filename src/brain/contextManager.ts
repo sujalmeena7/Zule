@@ -250,6 +250,7 @@ function toLegacyTranscriptionLine(line: TranscriptLine) {
  */
 const ANSWER_FIRST_DIRECTIVE = `ANSWER FORMAT — follow exactly:
 - Line 1 is the answer itself and nothing else. For a multiple-choice question, the option letter and its text (e.g. "B) 14"). For a coding problem, the approach in one short line.
+- Line 1 is final. Work out the answer before you write it — for multiple choice, check every option first. Never revise it later in the reply; a reader who acts on line 1 will not see the correction.
 - Never open by restating the question, describing the screenshot, or saying what you are about to do.
 - Put code, explanation, and complexity after line 1.`;
 

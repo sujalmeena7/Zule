@@ -1395,11 +1395,24 @@ export function FloatingCopilot() {
         {
           requireImageInput: imageIsOnlyGrounding,
           // A screen dispatch is the latency-critical case: the question is on
-          // screen right now, in front of someone waiting. Ask for the fast model
-          // and for no deliberation. Both degrade to today's behaviour when the
-          // provider has neither configured, so this is safe to set always.
+          // screen right now, in front of someone waiting. Ask for the fast model.
+          // Degrades to today's behaviour when the provider has none configured, so
+          // this is safe to set always.
           preferFastModel: useFastPath,
-          reasoningEffort: useFastPath ? 'none' : undefined,
+          // 'low' rather than 'none', and the distinction is the whole point of
+          // answer-first output.
+          //
+          // With deliberation switched off entirely, the directive to lead with the
+          // answer makes the model commit to a letter before it has computed
+          // anything, then do the arithmetic in the visible text and discover it was
+          // wrong. Measured on a protected-window MCQ: first line "B) 2", corrected
+          // to "A) 1" three paragraphs down. First token at 804ms, and worthless —
+          // in an interview the first line is the one that gets said out loud.
+          //
+          // A small budget buys the check before the commit. It is not free, but the
+          // thing being paid for is the first line meaning what it says, and there is
+          // room for it: 804ms of an 8.4s answer.
+          reasoningEffort: useFastPath ? 'low' : undefined,
         }
       );
     } catch (error) {
