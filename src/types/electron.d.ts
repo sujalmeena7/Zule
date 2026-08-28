@@ -146,10 +146,18 @@ export interface ElectronAPI {
   deferInstall?: () => Promise<void>;
   onUpdateState?: (cb: (state: UpdateState) => void) => () => void;
 
-  // Phone Camera Input (LAN server)
+  // Phone Camera Input & Live Answers (LAN server)
   startPhoneServer?: () => Promise<{ port: number; localIp: string; qrUrl: string }>;
   stopPhoneServer?: () => Promise<void>;
   onPhoneImage?: (callback: (data: { base64: string; mimeType: string }) => void) => () => void;
+  sendAnswerToPhone?: (data: {
+    id?: string;
+    text: string;
+    question?: string;
+    mode?: string;
+    model?: string;
+    timestamp?: number;
+  }) => Promise<{ sent: number; seq: number }>;
 }
 
 declare global {

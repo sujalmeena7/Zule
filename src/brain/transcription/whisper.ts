@@ -26,6 +26,8 @@ import type { TranscriptionLine } from '../../types/transcription';
 import type { ZuleError } from '../../types/errors';
 import { modelDownloadRegistry } from '../modelDownloadRegistry';
 import type { Off, TranscriptionEvent, TranscriptionEventCallback } from './webSpeech';
+import { createWorkletBlobUrl } from './pcmCaptureWorkletCode';
+
 // VAD gate (Requirements 6.1, 6.2, 6.3, 7.3, 7.4, 10.3) — energy-based
 // renderer-side gate inserted between PCM capture and the
 // `whisper:transcribe` IPC. The microphone path runs the gate
@@ -614,9 +616,29 @@ export class WhisperProvider {
 
     this.sourceNode = this.audioContext.createMediaStreamSource(this.mediaStream);
 
-    // Load the PCM capture worklet processor.
-    await this.audioContext.audioWorklet.addModule(getWorkletUrl());
+    // Load the PCM capture worklet processor via Blob URL (guaranteed to work in file:// and http://)
+    let workletLoaded = false;
+    try {
+      const blobUrl = createWorkletBlobUrl();
+      await this.audioContext.audioWorklet.addModule(blobUrl);
+      URL.revokeObjectURL(blobUrl);
+      workletLoaded = true;
+    } catch (blobErr) {
+      console.warn('[WhisperProvider] Blob URL addModule failed, trying static URL fallback:', blobErr);
+    }
+
+    if (!workletLoaded) {
+      try {
+        await this.audioContext.audioWorklet.addModule(getWorkletUrl());
+        workletLoaded = true;
+      } catch (staticErr) {
+        console.error('[WhisperProvider] Static addModule also failed:', staticErr);
+        throw staticErr;
+      }
+    }
+
     this.workletNode = new AudioWorkletNode(this.audioContext, 'pcm-capture-processor');
+
 
     // Configure the worklet with current settings.
     this.workletNode.port.postMessage({

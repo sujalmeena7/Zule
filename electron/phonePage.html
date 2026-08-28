@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Zule AI — Phone Camera</title>
+  <title>Zule AI — Phone Companion</title>
   <style>
     * {
       box-sizing: border-box;
@@ -12,16 +12,29 @@
       -webkit-tap-highlight-color: transparent;
     }
 
+    :root {
+      --bg-main: #090d16;
+      --bg-card: rgba(15, 23, 42, 0.75);
+      --bg-surface: rgba(255, 255, 255, 0.04);
+      --border-subtle: rgba(255, 255, 255, 0.08);
+      --border-accent: rgba(59, 130, 246, 0.35);
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+      --accent-blue: #3b82f6;
+      --accent-purple: #8b5cf6;
+      --accent-emerald: #10b981;
+    }
+
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      background: #090d16;
-      color: #f8fafc;
+      background: var(--bg-main);
+      color: var(--text-main);
       min-height: 100vh;
       display: flex;
       flex-direction: column;
       align-items: center;
-      justify-content: space-between;
-      padding: 20px 16px;
+      padding: 16px 12px;
       overflow-x: hidden;
     }
 
@@ -31,17 +44,19 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 18px;
+      gap: 14px;
+      flex: 1;
     }
 
+    /* ── Header ────────────────────────────────────────── */
     .header {
       width: 100%;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 12px 16px;
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 10px 14px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
       border-radius: 16px;
       backdrop-filter: blur(12px);
     }
@@ -51,7 +66,7 @@
       align-items: center;
       gap: 8px;
       font-weight: 700;
-      font-size: 1.05rem;
+      font-size: 1rem;
       letter-spacing: -0.02em;
     }
 
@@ -59,7 +74,7 @@
       width: 24px;
       height: 24px;
       border-radius: 6px;
-      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+      background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
       display: flex;
       align-items: center;
       justify-content: center;
@@ -67,26 +82,45 @@
       font-weight: 800;
     }
 
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
     .status-badge {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      font-size: 0.75rem;
+      font-size: 0.72rem;
       font-weight: 600;
-      padding: 4px 10px;
+      padding: 4px 9px;
       border-radius: 999px;
       background: rgba(16, 185, 129, 0.12);
       border: 1px solid rgba(16, 185, 129, 0.3);
       color: #34d399;
+      transition: all 0.2s ease;
+    }
+
+    .status-badge.disconnected {
+      background: rgba(239, 68, 68, 0.12);
+      border-color: rgba(239, 68, 68, 0.3);
+      color: #fca5a5;
     }
 
     .status-dot {
       width: 6px;
       height: 6px;
       border-radius: 50%;
-      background: #10b981;
+      background: var(--accent-emerald);
       box-shadow: 0 0 8px rgba(16, 185, 129, 0.8);
       animation: pulse 2s infinite ease-in-out;
+    }
+
+    .status-badge.disconnected .status-dot {
+      background: #ef4444;
+      box-shadow: 0 0 8px rgba(239, 68, 68, 0.8);
+      animation: none;
     }
 
     @keyframes pulse {
@@ -94,11 +128,108 @@
       50% { opacity: 0.5; transform: scale(0.85); }
     }
 
+    /* ── Tab Switcher ──────────────────────────────────── */
+    .tab-nav {
+      width: 100%;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid var(--border-subtle);
+      border-radius: 14px;
+      padding: 4px;
+    }
+
+    .tab-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px;
+      border-radius: 10px;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 0.88rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .tab-btn.active {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text-main);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    }
+
+    .unread-badge {
+      background: var(--accent-blue);
+      color: #fff;
+      font-size: 0.68rem;
+      font-weight: 700;
+      padding: 1px 6px;
+      border-radius: 999px;
+      display: none;
+    }
+
+    .unread-badge.visible {
+      display: inline-block;
+    }
+
+    /* ── Quick Tools Bar ───────────────────────────────── */
+    .tools-bar {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 0.78rem;
+      color: var(--text-muted);
+    }
+
+    .tool-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 7px 11px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 9px;
+      cursor: pointer;
+      color: var(--text-muted);
+      font-size: 0.78rem;
+      font-weight: 500;
+      transition: all 0.15s ease;
+    }
+
+    .tool-chip:active {
+      transform: scale(0.96);
+    }
+
+    .tool-chip.active {
+      background: rgba(59, 130, 246, 0.18);
+      border-color: rgba(59, 130, 246, 0.45);
+      color: #93c5fd;
+    }
+
+    /* ── Tab Panes ─────────────────────────────────────── */
+    .tab-content {
+      width: 100%;
+      display: none;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .tab-content.active {
+      display: flex;
+    }
+
+    /* ── Camera Tab Styles ─────────────────────────────── */
     .preview-card {
       width: 100%;
-      min-height: 280px;
-      background: rgba(15, 23, 42, 0.6);
-      border: 1.5px dashed rgba(255, 255, 255, 0.12);
+      min-height: 270px;
+      background: var(--bg-card);
+      border: 1.5px dashed var(--border-subtle);
       border-radius: 20px;
       display: flex;
       flex-direction: column;
@@ -111,7 +242,7 @@
 
     .preview-card.has-image {
       border-style: solid;
-      border-color: rgba(59, 130, 246, 0.4);
+      border-color: var(--border-accent);
       background: #020617;
     }
 
@@ -131,12 +262,12 @@
       gap: 12px;
       padding: 30px 20px;
       text-align: center;
-      color: #94a3b8;
+      color: var(--text-muted);
     }
 
     .placeholder-icon {
-      width: 56px;
-      height: 56px;
+      width: 54px;
+      height: 54px;
       border-radius: 50%;
       background: rgba(59, 130, 246, 0.12);
       border: 1px solid rgba(59, 130, 246, 0.25);
@@ -144,7 +275,7 @@
       align-items: center;
       justify-content: center;
       color: #60a5fa;
-      font-size: 26px;
+      font-size: 24px;
     }
 
     .placeholder-text {
@@ -155,31 +286,31 @@
 
     .placeholder-sub {
       font-size: 0.8rem;
-      color: #64748b;
+      color: var(--text-dim);
     }
 
     .controls {
       width: 100%;
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      gap: 10px;
     }
 
     .btn-capture {
       width: 100%;
-      padding: 16px;
-      border-radius: 16px;
+      padding: 15px;
+      border-radius: 15px;
       border: none;
       background: linear-gradient(135deg, #2563eb, #7c3aed);
       color: #ffffff;
-      font-size: 1.05rem;
+      font-size: 1rem;
       font-weight: 600;
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 10px;
-      box-shadow: 0 4px 20px rgba(37, 99, 235, 0.35);
+      gap: 8px;
+      box-shadow: 0 4px 18px rgba(37, 99, 235, 0.35);
       transition: transform 0.1s ease, box-shadow 0.2s ease, opacity 0.2s ease;
     }
 
@@ -227,18 +358,11 @@
       align-items: center;
       justify-content: space-between;
       padding: 10px 14px;
-      background: rgba(255, 255, 255, 0.03);
-      border: 1px solid rgba(255, 255, 255, 0.06);
+      background: var(--bg-surface);
+      border: 1px solid rgba(255, 255, 255, 0.05);
       border-radius: 12px;
       font-size: 0.85rem;
-      color: #94a3b8;
-    }
-
-    .toggle-label {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      cursor: pointer;
+      color: var(--text-muted);
     }
 
     .switch {
@@ -286,11 +410,182 @@
       transform: translateX(18px);
     }
 
+    /* ── Live Answers Feed Styles ──────────────────────── */
+    .answers-feed {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      min-height: 320px;
+    }
+
+    .empty-state {
+      width: 100%;
+      padding: 40px 20px;
+      text-align: center;
+      background: var(--bg-surface);
+      border: 1px dashed var(--border-subtle);
+      border-radius: 18px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      color: var(--text-muted);
+    }
+
+    .empty-icon {
+      font-size: 36px;
+      opacity: 0.8;
+    }
+
+    .empty-title {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: #cbd5e1;
+    }
+
+    .empty-desc {
+      font-size: 0.8rem;
+      color: var(--text-dim);
+      line-height: 1.4;
+      max-width: 280px;
+    }
+
+    .answer-card {
+      width: 100%;
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 18px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+      animation: cardSlideIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+      position: relative;
+    }
+
+    @keyframes cardSlideIn {
+      from { opacity: 0; transform: translateY(8px) scale(0.98); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .answer-card.latest {
+      border-color: rgba(59, 130, 246, 0.45);
+      box-shadow: 0 0 20px rgba(59, 130, 246, 0.15);
+    }
+
+    .answer-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.72rem;
+      color: var(--text-dim);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      padding-bottom: 6px;
+    }
+
+    .meta-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: rgba(59, 130, 246, 0.12);
+      color: #93c5fd;
+      padding: 2px 7px;
+      border-radius: 6px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+    }
+
+    .question-box {
+      font-size: 0.8rem;
+      font-style: italic;
+      color: #94a3b8;
+      background: rgba(255, 255, 255, 0.03);
+      padding: 8px 10px;
+      border-left: 2.5px solid var(--accent-blue);
+      border-radius: 4px 8px 8px 4px;
+      line-height: 1.35;
+      word-break: break-word;
+    }
+
+    .answer-body {
+      font-size: 0.92rem;
+      line-height: 1.5;
+      color: #f1f5f9;
+      word-break: break-word;
+      white-space: pre-wrap;
+    }
+
+    .answer-body code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      background: rgba(0, 0, 0, 0.4);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.85em;
+      color: #38bdf8;
+    }
+
+    .answer-body pre {
+      background: #020617;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      padding: 10px;
+      overflow-x: auto;
+      margin: 6px 0;
+    }
+
+    .answer-body pre code {
+      background: transparent;
+      padding: 0;
+      color: #e2e8f0;
+    }
+
+    .answer-body strong {
+      color: #fff;
+      font-weight: 700;
+    }
+
+    .answer-footer {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 4px;
+    }
+
+    .btn-copy {
+      padding: 6px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--border-subtle);
+      background: var(--bg-surface);
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      transition: all 0.15s ease;
+    }
+
+    .btn-copy:active {
+      transform: scale(0.96);
+    }
+
+    .btn-copy.copied {
+      background: rgba(16, 185, 129, 0.15);
+      border-color: rgba(16, 185, 129, 0.35);
+      color: #34d399;
+    }
+
+    /* ── Toast Feedback ────────────────────────────────── */
     .status-toast {
       width: 100%;
-      padding: 12px 16px;
+      padding: 10px 14px;
       border-radius: 12px;
-      font-size: 0.85rem;
+      font-size: 0.82rem;
       font-weight: 500;
       text-align: center;
       display: none;
@@ -323,64 +618,299 @@
       to { opacity: 1; transform: translateY(0); }
     }
 
-    .footer-note {
+    /* ── Lock Screen Push Modal ────────────────────────── */
+    .modal-backdrop {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.78);
+      backdrop-filter: blur(8px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      z-index: 1000;
+      animation: fadeIn 0.2s ease;
+    }
+
+    .modal-backdrop.open {
+      display: flex;
+    }
+
+    .alerts-modal {
+      width: 100%;
+      max-width: 400px;
+      background: #0f172a;
+      border: 1px solid rgba(59, 130, 246, 0.4);
+      border-radius: 20px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+      animation: modalSlide 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    @keyframes modalSlide {
+      from { opacity: 0; transform: translateY(20px) scale(0.95); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .modal-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: #f8fafc;
+    }
+
+    .modal-close {
+      background: rgba(255, 255, 255, 0.08);
+      border: none;
+      color: #94a3b8;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+    }
+
+    .modal-body {
+      font-size: 0.85rem;
+      color: #cbd5e1;
+      line-height: 1.45;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .modal-feature-box {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 12px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .feature-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      font-size: 0.8rem;
+    }
+
+    .feature-icon {
+      font-size: 1.1rem;
+    }
+
+    .btn-enable-push {
+      width: 100%;
+      padding: 14px;
+      border-radius: 14px;
+      border: none;
+      background: linear-gradient(135deg, #2563eb, #7c3aed);
+      color: #fff;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      box-shadow: 0 4px 20px rgba(37, 99, 235, 0.4);
+      transition: transform 0.1s ease;
+    }
+
+    .btn-enable-push:active {
+      transform: scale(0.98);
+    }
+
+    .modal-note {
       font-size: 0.75rem;
+      color: #94a3b8;
+      text-align: center;
+    }
+
+    .footer-note {
+      font-size: 0.72rem;
       color: #475569;
       text-align: center;
-      margin-top: 10px;
+      margin-top: 16px;
+      line-height: 1.4;
     }
   </style>
 </head>
 <body>
   <div class="container">
+    <!-- Header -->
     <div class="header">
       <div class="brand">
         <div class="brand-logo">Z</div>
-        <span>Zule Copilot</span>
+        <span>Zule Companion</span>
       </div>
-      <div class="status-badge">
-        <span class="status-dot"></span>
-        <span id="headerStatus">Connected</span>
+      <div class="header-actions">
+        <div class="status-badge" id="statusBadge">
+          <span class="status-dot"></span>
+          <span id="headerStatus">Live</span>
+        </div>
       </div>
     </div>
 
-    <div class="preview-card" id="previewCard">
-      <div class="placeholder-view" id="placeholderView">
-        <div class="placeholder-icon">📸</div>
-        <div class="placeholder-text">Point camera at screen or notes</div>
-        <div class="placeholder-sub">Tap button below to snap a photo</div>
+    <!-- Tab switcher -->
+    <div class="tab-nav">
+      <button class="tab-btn" id="tabBtnCamera">
+        <span>📸 Camera</span>
+      </button>
+      <button class="tab-btn active" id="tabBtnAnswers">
+        <span>💬 AI Answers</span>
+        <span class="unread-badge" id="unreadBadge">0</span>
+      </button>
+    </div>
+
+    <!-- Quick Tools -->
+    <div class="tools-bar">
+      <div class="tool-chip" id="btnWakeLock">
+        <span>👁️ Keep Screen On</span>
       </div>
-      <img id="previewImg" class="preview-image" alt="Captured question preview" />
+      <div class="tool-chip" id="btnEnableAlerts">
+        <span>🔔 Lock Screen Alerts</span>
+      </div>
     </div>
 
     <div id="statusToast" class="status-toast"></div>
 
-    <div class="controls">
-      <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display: none;" />
-      
-      <button class="btn-capture" id="btnCapture">
-        <span>📸 Take Photo</span>
-      </button>
+    <!-- ── TAB 1: Camera Input ────────────────────────── -->
+    <div class="tab-content" id="tabContentCamera">
+      <div class="preview-card" id="previewCard">
+        <div class="placeholder-view" id="placeholderView">
+          <div class="placeholder-icon">📸</div>
+          <div class="placeholder-text">Point camera at screen or notes</div>
+          <div class="placeholder-sub">Tap button below to snap a photo</div>
+        </div>
+        <img id="previewImg" class="preview-image" alt="Captured question preview" />
+      </div>
 
-      <button class="btn-send" id="btnSend">
-        <span>⚡ Send to Zule</span>
-      </button>
+      <div class="controls">
+        <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display: none;" />
+        
+        <button class="btn-capture" id="btnCapture">
+          <span>📸 Take Photo</span>
+        </button>
 
-      <div class="options-row">
-        <span>Auto-send on capture</span>
-        <label class="switch">
-          <input type="checkbox" id="autoSendToggle" checked />
-          <span class="slider"></span>
-        </label>
+        <button class="btn-send" id="btnSend">
+          <span>⚡ Send to Zule</span>
+        </button>
+
+        <div class="options-row">
+          <span>Auto-send on capture</span>
+          <label class="switch">
+            <input type="checkbox" id="autoSendToggle" checked />
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── TAB 2: Live AI Answers Feed ────────────────── -->
+    <div class="tab-content active" id="tabContentAnswers">
+      <div class="answers-feed" id="answersFeed">
+        <div class="empty-state" id="emptyState">
+          <div class="empty-icon">✨</div>
+          <div class="empty-title">Waiting for AI answers</div>
+          <div class="empty-desc">
+            When Zule generates an answer on your desktop, it will stream here in real time with vibration & lock screen alerts.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Lock Screen Alerts Modal -->
+  <!-- Lock Screen Alerts Modal -->
+  <div class="modal-backdrop" id="alertsModalBackdrop">
+    <div class="alerts-modal">
+      <div class="modal-header">
+        <div class="modal-title">🔔 Instant Lock Screen Push</div>
+        <button class="modal-close" id="btnAlertsModalClose">✕</button>
+      </div>
+      <div class="modal-body">
+        <p style="margin-bottom:12px;font-size:0.85rem;color:#cbd5e1;line-height:1.4">
+          Android/iOS sleep browser tabs when the screen is locked. For <strong>instant SMS-style popups (&lt; 1 sec)</strong> on your lock screen, subscribe using the free <strong>ntfy app</strong>:
+        </p>
+
+        <div class="modal-feature-box">
+          <div class="feature-item">
+            <span class="feature-icon">1️⃣</span>
+            <div><strong>Step 1</strong>: Install free <strong>ntfy</strong> app from Google Play Store.</div>
+          </div>
+          <div class="feature-item">
+            <span class="feature-icon">2️⃣</span>
+            <div><strong>Step 2</strong>: Tap <strong>"Auto-Subscribe in App"</strong> below (or add topic manually).</div>
+          </div>
+          <div class="feature-item">
+            <span class="feature-icon">⚡</span>
+            <div><strong>Instant Delivery</strong>: Push notifications pop up in &lt; 1 second even when locked!</div>
+          </div>
+        </div>
+
+        <div style="margin:12px 0 6px;padding:8px 12px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);border-radius:10px;display:flex;align-items:center;justify-content:space-between">
+          <div style="font-size:0.78rem;color:#94a3b8">Channel: <strong id="topicCodeDisplay" style="color:#38bdf8;font-family:monospace;font-size:0.85rem">...</strong></div>
+          <button id="btnCopyTopic" style="background:rgba(56,189,248,0.15);border:1px solid rgba(56,189,248,0.3);color:#38bdf8;padding:4px 10px;border-radius:6px;font-size:0.75rem;cursor:pointer;font-weight:600">Copy</button>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">
+          <button class="btn-enable-push" id="btnOpenNtfy">
+            <span>📲 Auto-Subscribe in ntfy App</span>
+          </button>
+          <button class="btn-enable-push" id="btnInstallNtfy" style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.15);color:#e2e8f0">
+            <span>📥 Install ntfy App (Play Store)</span>
+          </button>
+        </div>
+
+        <p class="modal-note" style="margin-top:10px">Tip: You can also keep this web page open and tap <strong>"👁️ Keep Screen On"</strong> for real-time live streaming with zero install.</p>
       </div>
     </div>
   </div>
 
   <div class="footer-note">
-    Direct LAN connection • Photos are processed in real time
+    Direct LAN Connection • Real-Time AI Streaming & Notifications
   </div>
 
   <script>
+    // ── Elements ──────────────────────────────────────────
+    const tabBtnCamera = document.getElementById('tabBtnCamera');
+    const tabBtnAnswers = document.getElementById('tabBtnAnswers');
+    const tabContentCamera = document.getElementById('tabContentCamera');
+    const tabContentAnswers = document.getElementById('tabContentAnswers');
+    const unreadBadge = document.getElementById('unreadBadge');
+    const statusBadge = document.getElementById('statusBadge');
+    const headerStatus = document.getElementById('headerStatus');
+    const statusToast = document.getElementById('statusToast');
+    const btnWakeLock = document.getElementById('btnWakeLock');
+    const btnEnableAlerts = document.getElementById('btnEnableAlerts');
+    const answersFeed = document.getElementById('answersFeed');
+    const emptyState = document.getElementById('emptyState');
+
+    // Modal elements
+    const alertsModalBackdrop = document.getElementById('alertsModalBackdrop');
+    const btnAlertsModalClose = document.getElementById('btnAlertsModalClose');
+    const btnOpenNtfy = document.getElementById('btnOpenNtfy');
+    const btnInstallNtfy = document.getElementById('btnInstallNtfy');
+    const btnCopyTopic = document.getElementById('btnCopyTopic');
+    const topicCodeDisplay = document.getElementById('topicCodeDisplay');
+
+    // Camera elements
     const cameraInput = document.getElementById('cameraInput');
     const btnCapture = document.getElementById('btnCapture');
     const btnSend = document.getElementById('btnSend');
@@ -388,21 +918,446 @@
     const placeholderView = document.getElementById('placeholderView');
     const previewImg = document.getElementById('previewImg');
     const autoSendToggle = document.getElementById('autoSendToggle');
-    const statusToast = document.getElementById('statusToast');
 
     let currentBlob = null;
     let isUploading = false;
+    let wakeLockSentinel = null;
+    let unreadCount = 0;
+    let isAnswersTabActive = true;
+    let lastEventId = 0;
+    let audioCtx = null;
+    let swRegistration = null;
+    let currentPushTopic = '';
 
-    function showStatus(text, type = 'info') {
+    // ── Tab Navigation ────────────────────────────────────
+    function switchTab(tab) {
+      if (tab === 'camera') {
+        isAnswersTabActive = false;
+        tabBtnCamera.classList.add('active');
+        tabBtnAnswers.classList.remove('active');
+        tabContentCamera.classList.add('active');
+        tabContentAnswers.classList.remove('active');
+      } else {
+        isAnswersTabActive = true;
+        unreadCount = 0;
+        updateUnreadBadge();
+        tabBtnAnswers.classList.add('active');
+        tabBtnCamera.classList.remove('active');
+        tabContentAnswers.classList.add('active');
+        tabContentCamera.classList.remove('active');
+      }
+    }
+
+    tabBtnCamera.addEventListener('click', () => switchTab('camera'));
+    tabBtnAnswers.addEventListener('click', () => switchTab('answers'));
+
+    function updateUnreadBadge() {
+      if (unreadCount > 0 && !isAnswersTabActive) {
+        unreadBadge.textContent = unreadCount > 9 ? '9+' : unreadCount;
+        unreadBadge.classList.add('visible');
+      } else {
+        unreadBadge.classList.remove('visible');
+      }
+    }
+
+    function showStatus(text, type = 'info', durationMs = 4000) {
       statusToast.className = 'status-toast ' + type;
       statusToast.textContent = text;
+      if (durationMs > 0) {
+        setTimeout(() => {
+          if (statusToast.textContent === text) {
+            statusToast.className = 'status-toast';
+            statusToast.textContent = '';
+          }
+        }, durationMs);
+      }
     }
 
-    function hideStatus() {
-      statusToast.className = 'status-toast';
-      statusToast.textContent = '';
+    // ── Fetch Server Status & Push Topic ──────────────────
+    async function fetchServerStatus() {
+      try {
+        const res = await fetch('/status');
+        const data = await res.json();
+        if (data.pushTopic) {
+          currentPushTopic = data.pushTopic;
+          if (topicCodeDisplay) topicCodeDisplay.textContent = currentPushTopic;
+        }
+      } catch (err) {
+        console.warn('Status fetch failed:', err);
+      }
     }
 
+    // ── Lock Screen & Web Notification Support ────────────
+    async function initServiceWorker() {
+      if ('serviceWorker' in navigator && window.isSecureContext) {
+        try {
+          swRegistration = await navigator.serviceWorker.register('/sw.js');
+          console.log('[PhoneCompanion] SW registered:', swRegistration.scope);
+        } catch (err) {
+          console.warn('[PhoneCompanion] SW registration failed:', err);
+        }
+      }
+    }
+
+    // ── Background Audio Keep-Alive (Zero Latency Lock Screen) ─
+    let keepAliveSource = null;
+
+    function enableBackgroundKeepAlive() {
+      try {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) return;
+        if (!audioCtx) audioCtx = new AudioContextClass();
+        if (audioCtx.state === 'suspended') {
+          audioCtx.resume();
+        }
+
+        if (keepAliveSource) return;
+
+        // 1-second silent buffer with sub-audible dither to prevent OS sleep
+        const buffer = audioCtx.createBuffer(1, audioCtx.sampleRate, audioCtx.sampleRate);
+        const channelData = buffer.getChannelData(0);
+        for (let i = 0; i < channelData.length; i++) {
+          channelData[i] = (Math.random() - 0.5) * 1e-6;
+        }
+
+        const source = audioCtx.createBufferSource();
+        source.buffer = buffer;
+        source.loop = true;
+
+        const gain = audioCtx.createGain();
+        gain.gain.value = 0.0001;
+
+        source.connect(gain);
+        gain.connect(audioCtx.destination);
+        source.start();
+        keepAliveSource = source;
+        console.log('[PhoneCompanion] Background audio keep-alive active');
+      } catch (err) {
+        console.warn('Keep-alive audio error:', err);
+      }
+    }
+
+    btnEnableAlerts.addEventListener('click', async () => {
+      // 1. Start background keep-alive
+      enableBackgroundKeepAlive();
+      if (navigator.vibrate) try { navigator.vibrate([120, 60, 120]); } catch {}
+
+      // 2. If running under HTTPS or localhost:
+      if (window.isSecureContext && 'Notification' in window) {
+        try {
+          const perm = await Notification.requestPermission();
+          if (perm === 'granted') {
+            btnEnableAlerts.classList.add('active');
+            btnEnableAlerts.innerHTML = '<span>🔔 Alerts Active</span>';
+            showStatus('✓ Lock screen alerts & vibration active', 'success');
+            return;
+          }
+        } catch {}
+      }
+
+      // 3. Under HTTP LAN connection, show the Push Alert modal to subscribe in 1 tap
+      if (!currentPushTopic) await fetchServerStatus();
+      alertsModalBackdrop.classList.add('open');
+    });
+
+    btnAlertsModalClose.addEventListener('click', () => {
+      alertsModalBackdrop.classList.remove('open');
+    });
+
+    alertsModalBackdrop.addEventListener('click', (e) => {
+      if (e.target === alertsModalBackdrop) {
+        alertsModalBackdrop.classList.remove('open');
+      }
+    });
+
+    btnInstallNtfy.addEventListener('click', () => {
+      window.open('https://play.google.com/store/apps/details?id=io.heckel.ntfy', '_blank');
+    });
+
+    btnCopyTopic.addEventListener('click', () => {
+      const topic = currentPushTopic || 'zule-copilot';
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(topic).then(() => {
+          btnCopyTopic.textContent = 'Copied!';
+          setTimeout(() => { btnCopyTopic.textContent = 'Copy'; }, 2000);
+          showStatus('✓ Channel code copied to clipboard', 'success');
+        }).catch(() => {
+          showStatus(`Channel: ${topic}`, 'info');
+        });
+      } else {
+        showStatus(`Channel: ${topic}`, 'info');
+      }
+    });
+
+    btnOpenNtfy.addEventListener('click', () => {
+      const topic = currentPushTopic || 'zule-copilot';
+      const appUrl = `ntfy://ntfy.sh/${topic}`;
+      const webUrl = `https://ntfy.sh/${topic}`;
+
+      // Try opening app directly via intent/deep link
+      window.location.href = appUrl;
+      setTimeout(() => {
+        window.open(webUrl, '_blank');
+      }, 600);
+
+      btnEnableAlerts.classList.add('active');
+      btnEnableAlerts.innerHTML = '<span>🔔 Alerts Linked</span>';
+      showStatus('✓ Subscribed! Notifications will pop up instantly on lock screen.', 'success', 6000);
+      alertsModalBackdrop.classList.remove('open');
+    });
+
+    function triggerLockScreenAlert(answer) {
+      // 1. Silent Vibration (No sound/chime)
+      if (navigator.vibrate) {
+        try {
+          navigator.vibrate([180, 90, 180]);
+        } catch {}
+      }
+
+      // 3. Web Notification (if secure context granted)
+      if (window.isSecureContext && 'Notification' in window && Notification.permission === 'granted') {
+        const title = 'Zule AI Answer';
+        const cleanText = (answer.text || '').replace(/[#*`_]/g, '').trim();
+        const snippet = cleanText.length > 140 ? cleanText.slice(0, 140) + '...' : cleanText;
+        const options = {
+          body: snippet,
+          tag: answer.id || String(answer.seq),
+          renotify: true,
+          vibrate: [200, 100, 200],
+        };
+
+        if (swRegistration && swRegistration.showNotification) {
+          swRegistration.showNotification(title, options).catch(() => {
+            try { new Notification(title, options); } catch {}
+          });
+        } else {
+          try { new Notification(title, options); } catch {}
+        }
+      }
+    }
+
+    // ── Wake Lock (Keep Screen On) ────────────────────────
+    async function toggleWakeLock() {
+      if (!('wakeLock' in navigator)) {
+        showStatus('Screen Wake Lock not supported on this browser', 'info');
+        return;
+      }
+
+      if (wakeLockSentinel) {
+        try {
+          await wakeLockSentinel.release();
+          wakeLockSentinel = null;
+          btnWakeLock.classList.remove('active');
+          btnWakeLock.innerHTML = '<span>👁️ Keep Screen On</span>';
+          showStatus('Screen lock restored to default', 'info');
+        } catch (err) {
+          console.warn('Wake lock release error:', err);
+        }
+      } else {
+        try {
+          enableBackgroundKeepAlive();
+          wakeLockSentinel = await navigator.wakeLock.request('screen');
+          btnWakeLock.classList.add('active');
+          btnWakeLock.innerHTML = '<span>👁️ Screen Kept Awake</span>';
+          showStatus('✓ Phone screen will stay awake', 'success');
+
+          wakeLockSentinel.addEventListener('release', () => {
+            wakeLockSentinel = null;
+            btnWakeLock.classList.remove('active');
+            btnWakeLock.innerHTML = '<span>👁️ Keep Screen On</span>';
+          });
+        } catch (err) {
+          console.warn('Wake lock request error:', err);
+          showStatus('Failed to acquire screen wake lock', 'error');
+        }
+      }
+    }
+
+    btnWakeLock.addEventListener('click', toggleWakeLock);
+
+    // Re-request wake lock on page visibility change
+    document.addEventListener('visibilitychange', async () => {
+      if (document.visibilityState === 'visible' && btnWakeLock.classList.contains('active') && !wakeLockSentinel) {
+        try {
+          wakeLockSentinel = await navigator.wakeLock.request('screen');
+        } catch {}
+      }
+    });
+
+    // ── Safe Markdown & Text Formatter (XSS Protected) ───
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str || '';
+      return div.innerHTML;
+    }
+
+    function formatMarkdown(rawText) {
+      if (!rawText) return '';
+      // Escape all HTML first
+      let html = escapeHtml(rawText);
+
+      // Code blocks ```code```
+      html = html.replace(/```([\s\S]*?)```/g, (match, code) => {
+        return '<pre><code>' + code.trim() + '</code></pre>';
+      });
+
+      // Inline code `code`
+      html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+      // Bold **text**
+      html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+
+      // Italic *text*
+      html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+
+      return html;
+    }
+
+    function formatTimestamp(ts) {
+      if (!ts) return 'Just now';
+      const diff = Math.floor((Date.now() - ts) / 1000);
+      if (diff < 15) return 'Just now';
+      if (diff < 60) return `${diff}s ago`;
+      if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+      const d = new Date(ts);
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+
+    // ── Answer Feed Management ────────────────────────────
+    const renderedAnswerIds = new Set();
+
+    function appendAnswerCard(answer, isHistoric = false) {
+      if (renderedAnswerIds.has(answer.id || String(answer.seq))) return;
+      renderedAnswerIds.add(answer.id || String(answer.seq));
+
+      if (answer.seq && answer.seq > lastEventId) {
+        lastEventId = answer.seq;
+      }
+
+      if (emptyState && emptyState.parentNode) {
+        emptyState.style.display = 'none';
+      }
+
+      // Remove latest glow on previous cards
+      document.querySelectorAll('.answer-card.latest').forEach(el => el.classList.remove('latest'));
+
+      const card = document.createElement('div');
+      card.className = 'answer-card' + (isHistoric ? '' : ' latest');
+      card.id = `answer-${answer.id || answer.seq}`;
+
+      const metaRow = document.createElement('div');
+      metaRow.className = 'answer-meta';
+
+      const tag = document.createElement('span');
+      tag.className = 'meta-tag';
+      tag.textContent = (answer.mode || 'AI Copilot').toUpperCase();
+
+      const timeSpan = document.createElement('span');
+      timeSpan.textContent = formatTimestamp(answer.timestamp);
+
+      metaRow.appendChild(tag);
+      metaRow.appendChild(timeSpan);
+      card.appendChild(metaRow);
+
+      if (answer.question && answer.question.trim()) {
+        const qBox = document.createElement('div');
+        qBox.className = 'question-box';
+        qBox.textContent = 'Q: ' + answer.question;
+        card.appendChild(qBox);
+      }
+
+      const body = document.createElement('div');
+      body.className = 'answer-body';
+      body.innerHTML = formatMarkdown(answer.text);
+      card.appendChild(body);
+
+      const footer = document.createElement('div');
+      footer.className = 'answer-footer';
+
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'btn-copy';
+      copyBtn.innerHTML = '<span>📋 Copy</span>';
+      copyBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(answer.text);
+          copyBtn.classList.add('copied');
+          copyBtn.innerHTML = '<span>✓ Copied</span>';
+          setTimeout(() => {
+            copyBtn.classList.remove('copied');
+            copyBtn.innerHTML = '<span>📋 Copy</span>';
+          }, 2000);
+        } catch {
+          showStatus('Could not copy to clipboard', 'error');
+        }
+      });
+
+      footer.appendChild(copyBtn);
+      card.appendChild(footer);
+
+      // Insert at the top (newest first)
+      if (answersFeed.firstChild) {
+        answersFeed.insertBefore(card, answersFeed.firstChild);
+      } else {
+        answersFeed.appendChild(card);
+      }
+
+      if (!isHistoric) {
+        if (!isAnswersTabActive) {
+          unreadCount++;
+          updateUnreadBadge();
+        }
+        triggerLockScreenAlert(answer);
+      }
+    }
+
+    // ── Fetch Initial History ─────────────────────────────
+    async function loadAnswerHistory() {
+      try {
+        const res = await fetch('/answers');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.ok && Array.isArray(data.answers)) {
+          for (const item of data.answers) {
+            appendAnswerCard(item, true);
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to load history:', err);
+      }
+    }
+
+    // ── SSE Stream Connection ─────────────────────────────
+    let sseSource = null;
+
+    function connectSSE() {
+      if (sseSource) {
+        sseSource.close();
+      }
+
+      const streamUrl = `/events${lastEventId > 0 ? `?lastEventId=${lastEventId}` : ''}`;
+      sseSource = new EventSource(streamUrl);
+
+      sseSource.addEventListener('connected', () => {
+        statusBadge.classList.remove('disconnected');
+        headerStatus.textContent = 'Live';
+      });
+
+      sseSource.addEventListener('answer', (event) => {
+        try {
+          const answer = JSON.parse(event.data);
+          appendAnswerCard(answer, false);
+        } catch (err) {
+          console.error('Error parsing SSE answer:', err);
+        }
+      });
+
+      sseSource.onerror = () => {
+        statusBadge.classList.add('disconnected');
+        headerStatus.textContent = 'Reconnecting';
+      };
+    }
+
+    // ── Camera Input Handlers ─────────────────────────────
     btnCapture.addEventListener('click', () => {
       cameraInput.click();
     });
@@ -446,7 +1401,7 @@
       isUploading = true;
       btnCapture.disabled = true;
       btnSend.disabled = true;
-      showStatus('Sending photo to desktop overlay...', 'info');
+      showStatus('Sending photo to desktop copilot...', 'info');
 
       try {
         const response = await fetch('/upload', {
@@ -465,11 +1420,16 @@
           try { navigator.vibrate([40, 30, 40]); } catch (e) {}
         }
 
-        showStatus('✓ Sent! Zule AI is answering on your desktop.', 'success');
+        showStatus('✓ Sent! Zule AI is answering...', 'success', 3000);
         btnSend.style.display = 'none';
+        
+        // Auto-switch to answers tab so user immediately sees the upcoming answer
+        setTimeout(() => {
+          switchTab('answers');
+        }, 600);
       } catch (err) {
         console.error('Upload failed:', err);
-        showStatus('Failed to send photo to Zule. Check Wi-Fi connection.', 'error');
+        showStatus('Failed to send photo. Check Wi-Fi connection.', 'error');
         btnSend.style.display = 'flex';
       } finally {
         isUploading = false;
@@ -518,6 +1478,18 @@
         img.onerror = reject;
         reader.readAsDataURL(file);
       });
+    }
+
+    // ── Bootstrapping ─────────────────────────────────────
+    fetchServerStatus();
+    initServiceWorker();
+    loadAnswerHistory();
+    connectSSE();
+
+    // Check if notifications are already granted
+    if (window.isSecureContext && 'Notification' in window && Notification.permission === 'granted') {
+      btnEnableAlerts.classList.add('active');
+      btnEnableAlerts.innerHTML = '<span>🔔 Alerts Active</span>';
     }
   </script>
 </body>

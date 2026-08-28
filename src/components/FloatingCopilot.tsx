@@ -43,7 +43,6 @@ import { QuickActions } from './copilot/QuickActions';
 import { InputBar } from './copilot/InputBar';
 import { PhoneCapture } from './copilot/PhoneCapture';
 import { useOverlayMode } from '../overlay/useOverlayMode';
-import { UpdateIndicator } from './UpdateIndicator';
 import { useAutoUpdate } from '../hooks/useAutoUpdate';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -525,6 +524,7 @@ export function FloatingCopilot() {
   const forceTextChainRef = useRef(false);
   const inputTextRef = useRef(inputText);
   inputTextRef.current = inputText;
+  const broadcastToPhoneRef = useRef<(text: string, question?: string) => void>(() => {});
 
   // Phone Camera Input: listen for photos sent from the phone browser
   useEffect(() => {
@@ -563,6 +563,28 @@ export function FloatingCopilot() {
 
     return cleanup;
   }, [isElectronEnv, electronAPI, setOverlayMode]);
+
+  // Phone Live Answers: broadcast successful answers to connected phone(s) if enabled
+  const broadcastToPhone = useCallback(async (text: string, question?: string) => {
+    if (!isElectronEnv || !electronAPI?.sendAnswerToPhone) return;
+    try {
+      const isEnabled = await knowledgeBase.getSetting<boolean>('phoneCompanionBroadcast', true);
+      if (!isEnabled) return;
+    } catch {
+      // Default to enabled on read error
+    }
+
+    electronAPI.sendAnswerToPhone({
+      id: generateId(),
+      text,
+      question: question || activeModeRef.current || 'AI Response',
+      mode: activeModeRef.current,
+      timestamp: Date.now(),
+    }).catch((err) => {
+      console.warn('[FloatingCopilot] Failed to send answer to phone:', err);
+    });
+  }, [isElectronEnv, electronAPI]);
+  broadcastToPhoneRef.current = broadcastToPhone;
 
   // Timer & Duration Limit Check
   useEffect(() => {
@@ -1181,6 +1203,9 @@ export function FloatingCopilot() {
         if (requestIdRef.current !== currentRequestId) return true;
         setAiResponse({ text, suggestions: [], followUps: [], isSimulated });
         setChatHistory(prev => [...prev, { id: generateId(), role: 'assistant', text, isSimulated }]);
+        if (!isSimulated && text.trim()) {
+          broadcastToPhoneRef.current(text, coreQuery);
+        }
         setIsLoading(false);
         isLoadingRef.current = false;
         setIsStreaming(false);
@@ -1370,6 +1395,9 @@ export function FloatingCopilot() {
             setAiResponse(response);
             // Append assistant message to chat history
             setChatHistory(prev => [...prev, { id: generateId(), role: 'assistant', text: response.text, isSimulated: response.isSimulated }]);
+            if (!response.isSimulated && response.text.trim()) {
+              broadcastToPhoneRef.current(response.text, coreQuery);
+            }
             setStreamingText('');
             setReasoningText('');
             setIsStreaming(false);
@@ -2058,8 +2086,7 @@ export function FloatingCopilot() {
             : { left: position.x, top: position.y }
         }
       >
-        {/* Update indicator — absolutely positioned, no layout impact (Req 7.1, 7.3) */}
-        {isNativeOverlay && <UpdateIndicator status={updateState.status} />}
+        {/* Main Control Capsule */}
 
         <ControlCapsule
           isHidden={isHidden}

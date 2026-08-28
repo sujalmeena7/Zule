@@ -8,7 +8,7 @@ import {
   Key, Palette, Keyboard, Database, Trash2, Plus, FileText,
   Sun, Moon, Shield, Upload, Eye, EyeOff, CheckCircle2, Wand2,
   ArrowUp, ArrowDown, Power, Server, ShieldCheck, Play, Clock,
-  Gauge, Lock, Globe, Mic, RefreshCw
+  Gauge, Lock, Globe, Mic, RefreshCw, Smartphone
 } from 'lucide-react';
 import { database as knowledgeBase, type KBDocument, type ProviderConfig } from '../data/database';
 import { encryptApiKey, decryptApiKey } from '../utils/secureKeyStorage';
@@ -382,8 +382,9 @@ export function Settings() {
   const notifyError = useZuleError();
 
   // Auto-Update State (task 10.2, Requirements 3.1–3.7)
-  const { state: updateState, check: checkForUpdate } = useAutoUpdate();
+  const { state: updateState, check: checkForUpdate, install: installUpdate } = useAutoUpdate();
   const [upToDate, setUpToDate] = useState(false);
+
   const [updateError, setUpdateError] = useState<string | null>(null);
   const prevStatusRef = useRef(updateState.status);
 
@@ -416,6 +417,26 @@ export function Settings() {
       }
     }
   }, [updateState.status, updateState.error]);
+
+  // Phone Companion Broadcast State
+  const [phoneBroadcastEnabled, setPhoneBroadcastEnabled] = useState<boolean>(true);
+
+  useEffect(() => {
+    knowledgeBase.getSetting<boolean>('phoneCompanionBroadcast', true)
+      .then((val) => setPhoneBroadcastEnabled(val !== false))
+      .catch(() => setPhoneBroadcastEnabled(true));
+  }, []);
+
+  const handlePhoneBroadcastChange = async (enabled: boolean) => {
+    setPhoneBroadcastEnabled(enabled);
+    try {
+      await knowledgeBase.setSetting('phoneCompanionBroadcast', enabled);
+      toast.success(enabled ? 'Phone companion answers enabled' : 'Phone companion answers disabled');
+    } catch (err) {
+      console.error('Failed to save phone companion setting:', err);
+      toast.error('Failed to save setting');
+    }
+  };
 
   const [localKey, setLocalKey] = useState(apiKey);
   const [showKey, setShowKey] = useState(false);
@@ -2790,6 +2811,50 @@ export function Settings() {
       {/* Spend */}
       <SpendPanel />
 
+      {/* Phone Companion */}
+      <section className="settings-section glass-card animate-slide-up" style={{ animationDelay: '0.31s' }}>
+        <div className="section-header">
+          <Smartphone size={18} />
+          <h2>Phone Companion</h2>
+        </div>
+        <p className="section-desc">
+          Configure how Zule communicates with connected smartphones over your local network.
+        </p>
+
+        <div className="setting-row">
+          <div className="setting-label">
+            <span className="setting-name">Send AI Answers to Phone</span>
+            <span className="setting-desc">
+              When enabled, real-time AI responses generated on desktop are automatically streamed to your connected phone with lock screen alerts, sound, and vibration.
+            </span>
+          </div>
+          <div
+            className="theme-toggle"
+            role="radiogroup"
+            aria-label="Send AI answers to phone"
+          >
+            <button
+              type="button"
+              role="radio"
+              aria-checked={phoneBroadcastEnabled}
+              className={`theme-btn ${phoneBroadcastEnabled ? 'active' : ''}`}
+              onClick={() => handlePhoneBroadcastChange(true)}
+            >
+              Enabled
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={!phoneBroadcastEnabled}
+              className={`theme-btn ${!phoneBroadcastEnabled ? 'active' : ''}`}
+              onClick={() => handlePhoneBroadcastChange(false)}
+            >
+              Disabled
+            </button>
+          </div>
+        </div>
+      </section>
+
       {/* Privacy */}
       <section className="settings-section glass-card animate-slide-up" style={{ animationDelay: '0.32s' }}>
         <div className="section-header">
@@ -2810,31 +2875,68 @@ export function Settings() {
       {/* Updates (task 10.2, Requirements 3.1–3.7) */}
       <section className="settings-section glass-card animate-slide-up" style={{ animationDelay: '0.34s' }}>
         <div className="section-header">
-          <RefreshCw size={18} />
-          <h2>Updates</h2>
+          <div className="settings-icon-chip cyan">
+            <RefreshCw size={16} className={updateState.status === 'checking' || updateState.status === 'downloading' ? 'animate-spin' : ''} />
+          </div>
+          <h2>Application Updates</h2>
         </div>
         <div className="setting-row">
           <div className="setting-label">
-            <span className="setting-name">Version {updateState.currentVersion}</span>
+            <span className="setting-name">
+              Zule AI v{updateState.currentVersion}
+              {updateState.status === 'ready' && (
+                <span className="setting-chip tone-good" style={{ marginLeft: 8 }}>
+                  v{updateState.availableVersion} Ready
+                </span>
+              )}
+            </span>
             <span className="setting-desc">
-              {upToDate && "You're up to date"}
-              {updateError && updateError}
-              {!upToDate && !updateError && 'Check if a newer version of Zule is available.'}
+              {updateState.status === 'ready' && `New version v${updateState.availableVersion} is downloaded and ready to apply.`}
+              {updateState.status === 'downloading' && `Downloading update in background… ${updateState.progress?.percent ?? 0}%`}
+              {updateState.status === 'checking' && 'Checking GitHub releases for latest updates…'}
+              {updateState.status === 'idle' && upToDate && "You're running the latest version of Zule."}
+              {updateState.status === 'idle' && updateError && updateError}
+              {updateState.status === 'idle' && !upToDate && !updateError && 'Updates download automatically in the background.'}
             </span>
           </div>
-          <button
-            className="btn-primary"
-            onClick={() => {
-              setUpdateError(null);
-              setUpToDate(false);
-              checkForUpdate();
-            }}
-            disabled={updateState.status === 'checking' || updateState.status === 'downloading'}
-          >
-            {updateState.status === 'checking' ? 'Checking...' : 'Check for updates'}
-          </button>
+
+          {updateState.status === 'ready' ? (
+            <button
+              className="btn-primary"
+              onClick={() => installUpdate()}
+              style={{ background: '#ffffff', color: '#09090b', fontWeight: 600 }}
+            >
+              <RefreshCw size={14} />
+              <span>Restart & Update</span>
+            </button>
+          ) : (
+            <button
+              className="btn-primary"
+              onClick={() => {
+                setUpdateError(null);
+                setUpToDate(false);
+                checkForUpdate();
+              }}
+              disabled={updateState.status === 'checking' || updateState.status === 'downloading'}
+            >
+              {updateState.status === 'checking' ? (
+                <>
+                  <RefreshCw size={14} className="animate-spin" />
+                  <span>Checking…</span>
+                </>
+              ) : updateState.status === 'downloading' ? (
+                <>
+                  <RefreshCw size={14} className="animate-spin" />
+                  <span>Downloading ({updateState.progress?.percent ?? 0}%)</span>
+                </>
+              ) : (
+                'Check for updates'
+              )}
+            </button>
+          )}
         </div>
       </section>
     </div>
   );
 }
+

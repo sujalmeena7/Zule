@@ -73,6 +73,14 @@ export function useAutoUpdate(): UseAutoUpdateReturn {
     };
   }, []);
 
+  // When update finishes downloading and becomes ready, ensure the prompt appears
+  useEffect(() => {
+    if (state.status === 'ready') {
+      setDismissed(false);
+    }
+  }, [state.status, state.availableVersion]);
+
+
   // ── Action dispatchers ────────────────────────────────────────────────────
 
   const check = useCallback(() => {

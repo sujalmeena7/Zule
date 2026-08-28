@@ -5419,3 +5419,105 @@ Refactored the entire Settings page with senior-designer grade aesthetics:
   - Recent session items (.session-row:active { scale: 0.985 })
   - Quick start preset cards (.quickstart-item:active { scale: 0.98 })
 - Build verification: tsc 0 errors, vite build 3.31s.
+
+---
+
+## Release v1.9.0 Published — 2026-08-28
+
+- Successfully built Windows Electron NSIS installer (ZuleAI-setup.exe)
+- Created git tag v1.9.0 and pushed to origin feat/focusless-overlay-v1.5.0
+- Published GitHub release v1.9.0: https://github.com/sujalmeena7/Zule/releases/tag/v1.9.0
+- Uploaded release assets: ZuleAI-setup.exe, ZuleAI-setup.exe.blockmap, latest.yml.
+
+---
+
+## Antigravity & Cursor Auto-Update Mechanism Established — 2026-08-28
+
+- Implemented Antigravity / Cursor-style background auto-update workflow:
+  - Silent startup and recurring periodic background checks (every 2 hours)
+  - Automatic background payload download without blocking the user
+  - Floating top-right obsidian notification card (UpdateNotification.tsx & UpdateNotification.css) with Framer Motion slide & blur entrance
+  - High-contrast 'Update & Restart' 1-click install action with smooth restart transition
+  - Integrated live status in Settings > Application Updates with 1-click 'Restart & Update'
+  - Dev mode simulation fully operational
+- Automated testing: all unit tests (autoUpdateService, updateStatePersistence, useAutoUpdate) passed 100%, tsc 0 errors, vite build clean.
+
+---
+
+## Live Transcription & Microphone Voice-to-Text in Built App Fixed — 2026-08-28
+
+- Identified and fixed 3 root causes preventing transcription / dictation from working in production packaged Electron builds:
+  1. Added dist/vendor/models/**/* to sarUnpack in electron-builder.yml and updated esolveModelsDir() in electron/whisperService.ts and electron/embeddingService.ts to read from pp.asar.unpacked, allowing native C++ onnxruntime to access ONNX model files on disk.
+  2. Inlined AudioWorklet processor in pcmCaptureWorkletCode.ts and loaded via Blob URL with static fallback in src/brain/transcription/whisper.ts, eliminating ile:// security and fetch blocking.
+  3. Added default-src 'self' and media-src 'self' blob: mediastream: data: to the CSP meta tag in index.html.
+- Verification: TypeScript 0 errors, transcription tests passed 100%, electron build clean.
+
+---
+
+## Phone Companion: Live AI Answer Delivery & Lock Screen Alerts — 2026-08-28
+
+- Implemented real-time streaming of AI-generated answers directly to connected mobile devices over local LAN.
+- **Server Architecture (`electron/phoneServer.ts`)**:
+  - Added Server-Sent Events (SSE) `/events` endpoint streaming real-time answers to connected smartphones with sequential event IDs and automatic client cleanup.
+  - Added ring buffer history (capped at 30 items with FIFO eviction) and `GET /answers` history hydration endpoint.
+  - Implemented `Last-Event-ID` support to replay missed answers when mobile devices reconnect or unlock.
+  - Added `GET /sw.js` endpoint serving Service Worker script for mobile background notifications and click focus.
+  - Added periodic keepalive heartbeat ping every 20s to prevent mobile carrier / router disconnects.
+- **IPC & Preload Bridge (`electron/main.ts`, `electron/preload.ts`, `src/types/electron.d.ts`)**:
+  - Registered `phone-send-answer` IPC handler in main process.
+  - Exposed `window.electronAPI.sendAnswerToPhone()` with full TypeScript definitions.
+- **Desktop Copilot Integration (`src/components/FloatingCopilot.tsx`)**:
+  - Wired `broadcastToPhone` helper into streaming completion (`onComplete`) and cache hits (`applyCachedAnswer`), filtering out error fallbacks and simulation messages.
+- **Mobile Companion UI (`electron/phonePage.html`)**:
+  - Implemented tabbed navigation: `📸 Camera` & `💬 AI Answers` with live unread badge.
+  - Designed modern iMessage-style AI answer cards with formatted typography, mode chips, relative timestamps, and 1-tap copy buttons.
+  - Integrated Web Audio API melodic synthesizer (two-tone 587Hz -> 880Hz chime) with zero external asset dependencies.
+  - Added Web Notifications API + Service Worker lock screen alerts with vibration patterns for Android devices.
+  - Added Screen Wake Lock toggle (`navigator.wakeLock`) to keep phone screen awake during study/interviews.
+  - Guaranteed XSS safety with `textContent` sanitization and safe regex markdown parsing.
+- **Testing & Verification**:
+  - Added 5 new unit tests in `electron/__tests__/phoneServer.test.ts` (11/11 passed).
+  - TypeScript compiler (`tsc --noEmit`) 0 errors.
+  - Electron production bundle (`vite build --config vite.electron.config.ts`) built cleanly.
+
+---
+
+## Phone Companion Settings Toggle & Overlay Dot Removal — 2026-08-28
+
+- **Overlay Green Dot Removed**:
+  - Removed `<UpdateIndicator />` (the green status dot in the top right of the overlay) from `src/components/FloatingCopilot.tsx`.
+- **Settings Toggle Added**:
+  - Added dedicated **Phone Companion** section in `src/components/Settings.tsx` with an `Enabled / Disabled` segmented toggle switch for "Send AI Answers to Phone".
+  - Persisted setting in IndexedDB under `phoneCompanionBroadcast`.
+  - Updated `broadcastToPhone` in `src/components/FloatingCopilot.tsx` to check `phoneCompanionBroadcast` setting before sending AI answers to connected devices.
+- **Verification**:
+  - `tsc --noEmit` 0 errors.
+  - Vitest 11/11 phone server unit tests passed.
+  - Electron build completed cleanly.
+
+---
+
+## Instant Lock Screen Push Notification Setup — 2026-08-28
+
+- **Instant FCM Push Delivery**:
+  - Upgraded push delivery headers in `electron/phoneServer.ts` with `Priority: 5` and `X-Priority: 5` (Urgent / Max) and direct app click URLs to force instant Firebase push wakeup without Android Doze delay.
+- **Enhanced Mobile Companion Modal (`electron/phonePage.html`)**:
+  - Added dedicated ntfy app auto-subscription flow with `ntfy://` deep links.
+  - Added channel code box with 1-tap clipboard copy and Play Store installation button.
+  - Retained local Web Audio keep-alive and Screen Wake Lock options for zero-install live streaming.
+- **Verification**:
+  - `tsc --noEmit` 0 errors.
+  - Vitest 11/11 phone server unit tests passed.
+  - Electron build completed cleanly.
+
+---
+
+## Removed Notification Chime Sound — 2026-08-28
+
+- **Completely Removed Notification Chime Sound**:
+  - Removed `playNotificationChime()` synthesis and execution from `electron/phonePage.html`.
+  - Alerts are now completely silent (vibration-only if supported by device).
+- **Verification**:
+  - `tsc --noEmit` 0 errors.
+  - Vitest 11/11 phone server unit tests passed.
+  - Electron build completed cleanly.

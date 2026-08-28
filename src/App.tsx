@@ -32,12 +32,16 @@ import { BlogPost } from './components/BlogPost';
 import { PricingPage } from './components/PricingPage';
 import { SubscriptionBadge } from './components/SubscriptionBadge';
 import { useIpcTelemetrySink } from './hooks/useIpcTelemetrySink';
+import { useAutoUpdate } from './hooks/useAutoUpdate';
+import { UpdateNotification } from './components/UpdateNotification';
 
 function AppContent() {
   const { state } = useZule();
   const { currentPage, isCopilotActive } = state;
   const { isOnline } = useOnlineStatus();
   const { user, loading, logout } = useAuth();
+  const update = useAutoUpdate();
+
 
   // Forward main-process telemetry events (auto-updater, vectorIndex) to
   // the renderer's TelemetryModule for IndexedDB persistence.
@@ -200,6 +204,16 @@ function AppContent() {
       </main>
 
 
+      {/* Antigravity / Cursor-style Top-Right Auto-Update Notification */}
+      <UpdateNotification
+        state={update.state}
+        dismissed={update.dismissed}
+        onInstall={update.install}
+        onDefer={update.defer}
+        onDismiss={update.dismiss}
+        onDownload={update.download}
+      />
+
       {/* Floating Copilot Overlay — only render inline in web mode.
           In Electron, the copilot runs in its own separate transparent
           always-on-top window that floats above ALL desktop windows. */}
@@ -211,6 +225,7 @@ function AppContent() {
     </div>
   );
 }
+
 
 function App() {
   const [hashRoute, setHashRoute] = useState(window.location.hash);

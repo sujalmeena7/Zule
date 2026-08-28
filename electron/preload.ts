@@ -335,6 +335,17 @@ const electronAPI = {
     ipcRenderer.on('phone-image-received', handler);
     return () => ipcRenderer.removeListener('phone-image-received', handler);
   },
+
+  /** Stream AI-generated answer to connected phone(s). */
+  sendAnswerToPhone: (data: {
+    id?: string;
+    text: string;
+    question?: string;
+    mode?: string;
+    model?: string;
+    timestamp?: number;
+  }): Promise<{ sent: number; seq: number }> =>
+    ipcRenderer.invoke('phone-send-answer', data),
 };
 
 // Expose the API to the renderer's window object

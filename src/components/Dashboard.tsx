@@ -11,8 +11,6 @@ import {
 import { useMemo, useState } from 'react';
 import { MODE_CONFIGS, type CopilotMode } from '../brain/modePrompts';
 import { formatDuration, formatRelativeTime } from '../utils/formatters';
-import { useAutoUpdate } from '../hooks/useAutoUpdate';
-import { UpdateBanner } from './UpdateBanner';
 import { useSubscription } from '../context/SubscriptionContext';
 import { UpgradeModal } from './UpgradeModal';
 import type { GatedFeature } from '../types/subscription';
@@ -40,9 +38,8 @@ export function Dashboard() {
   const { meetings, customModes } = state;
   const { startCopilot, viewMeeting, deleteMeeting } = actions;
 
-  const { state: updateState, dismissed, download, cancel, install, defer, dismiss } = useAutoUpdate();
-
   const { isFeatureAvailable, isLimitReached, incrementUsage, limits } = useSubscription();
+
   const [upgradeModal, setUpgradeModal] = useState<{
     reason: 'meeting-limit' | 'feature-locked';
     feature?: GatedFeature;
@@ -97,17 +94,6 @@ export function Dashboard() {
 
   return (
     <div className="dashboard">
-      {/* Auto-Update Notification */}
-      <UpdateBanner
-        state={updateState}
-        dismissed={dismissed}
-        onDownload={download}
-        onCancel={cancel}
-        onInstall={install}
-        onDefer={defer}
-        onDismiss={dismiss}
-      />
-
       {upgradeModal && (
         <UpgradeModal
           reason={upgradeModal.reason}
@@ -115,6 +101,7 @@ export function Dashboard() {
           onClose={() => setUpgradeModal(null)}
         />
       )}
+
 
       {/* ── Top Header ── */}
       <div className="dash-top-bar">

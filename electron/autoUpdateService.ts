@@ -355,9 +355,9 @@ export class AutoUpdateService {
       const { autoUpdater } = require('electron-updater');
       this.autoUpdater = autoUpdater;
 
-      // Configure: user-driven flow
-      autoUpdater.autoDownload = false;
-      autoUpdater.autoInstallOnAppQuit = false;
+      // Configure: Antigravity / Cursor-style silent background download
+      autoUpdater.autoDownload = true;
+      autoUpdater.autoInstallOnAppQuit = true;
 
       // Wire up events
       autoUpdater.on('error', (err: Error) => {
@@ -399,6 +399,9 @@ export class AutoUpdateService {
       });
 
       autoUpdater.on('download-progress', (progress: { percent: number; transferred: number; total: number }) => {
+        if (this.state.status !== 'downloading') {
+          this.state.status = 'downloading';
+        }
         const dp: DownloadProgress = {
           percent: Math.round(Math.min(100, Math.max(0, progress.percent))),
           bytesReceived: progress.transferred,
@@ -406,6 +409,7 @@ export class AutoUpdateService {
         };
         this.progressThrottle.push(dp);
       });
+
 
       autoUpdater.on('update-downloaded', () => {
         this.progressThrottle.flush();
@@ -439,6 +443,7 @@ export class AutoUpdateService {
   }
 
   // ── State Management ───────────────────────────────────────────────────
+
 
   private transitionTo(status: UpdateStatus): void {
     this.state = {
@@ -539,25 +544,52 @@ export class AutoUpdateService {
   }
 
   /**
-   * Check for updates. In dev mode, short-circuits to idle.
+   * Check for updates. In dev mode, simulates the complete background download flow.
    * For startup checks, ensures at most one per launch.
    */
   async checkForUpdate(trigger: 'startup' | 'manual' = 'manual'): Promise<UpdateState> {
-    // Dev mode simulation for testing update UI (Requirement 2.6)
+    // Dev mode simulation for testing Antigravity / Cursor update UI
     if (!this.isPackaged) {
       this.transitionTo('checking');
       setTimeout(() => {
+        // Automatically start background download
         this.state = {
           ...this.state,
-          status: 'available',
-          availableVersion: '1.4.0',
+          status: 'downloading',
+          availableVersion: '1.9.1',
           currentVersion: this.state.currentVersion,
-          releaseNotes: '### What\'s New in v1.4.0\n- Apple & Cursor style update popup\n- Refactored glassmorphic navbar',
-          progress: null,
+          releaseNotes: '### What\'s New in v1.9.1\n- Antigravity & Cursor-style background auto-update\n- Top-right floating update popup\n- 1-click seamless restart',
+          progress: { percent: 15, bytesReceived: 7_500_000, totalBytes: 50_000_000 },
           error: null,
         };
         this.broadcast();
-      }, 800);
+
+        let currentPct = 15;
+        const downloadTimer = setInterval(() => {
+          currentPct += 25;
+          if (currentPct < 100) {
+            this.state = {
+              ...this.state,
+              status: 'downloading',
+              progress: {
+                percent: currentPct,
+                bytesReceived: (currentPct / 100) * 50_000_000,
+                totalBytes: 50_000_000,
+              },
+            };
+            this.broadcast();
+          } else {
+            clearInterval(downloadTimer);
+            this.state = {
+              ...this.state,
+              status: 'ready',
+              progress: null,
+              error: null,
+            };
+            this.broadcast();
+          }
+        }, 400);
+      }, 700);
       return this.getState();
     }
 
@@ -570,8 +602,8 @@ export class AutoUpdateService {
       this.startupCheckDone = true;
     }
 
-    // Cannot check while already in a non-idle state (except idle or available)
-    if (this.state.status !== 'idle' && this.state.status !== 'available') {
+    // Cannot check while already in downloading, ready, or installing state
+    if (this.state.status === 'downloading' || this.state.status === 'ready' || this.state.status === 'installing') {
       return this.getState();
     }
 
@@ -594,12 +626,14 @@ export class AutoUpdateService {
     return this.getState();
   }
 
+
   /**
    * Start downloading the available update.
-   * Only valid when status is 'available'.
+   * Valid when status is 'available' or 'downloading'.
    */
   async downloadUpdate(): Promise<void> {
     if (!this.isPackaged) {
+      if (this.state.status === 'downloading') return;
       if (this.state.status !== 'available') return;
       this.transitionTo('downloading');
       let pct = 0;
@@ -617,6 +651,7 @@ export class AutoUpdateService {
             ...this.state,
             status: 'ready',
             progress: null,
+            error: null,
           };
           this.broadcast();
         }
@@ -624,9 +659,13 @@ export class AutoUpdateService {
       return;
     }
     if (!this.autoUpdater) return;
+    if (this.state.status === 'downloading') {
+      return;
+    }
     if (this.state.status !== 'available') {
       throw new Error('No update available to download');
     }
+
 
     this.downloadStartTime = Date.now();
     this.progressThrottle.reset();
@@ -673,7 +712,14 @@ export class AutoUpdateService {
    * Only valid when status is 'ready'.
    */
   async installUpdate(): Promise<void> {
-    if (!this.isPackaged || !this.autoUpdater) return;
+    if (!this.isPackaged) {
+      this.transitionTo('installing');
+      setTimeout(() => {
+        this.transitionTo('idle');
+      }, 2000);
+      return;
+    }
+    if (!this.autoUpdater) return;
     if (this.state.status !== 'ready') {
       throw new Error('No update ready to install');
     }
@@ -686,12 +732,13 @@ export class AutoUpdateService {
     });
 
     try {
-      // isSilent = true, isForceRunAfter = true
-      this.autoUpdater.quitAndInstall(true, true);
+      // isSilent = false (allows NSIS to launch properly), isForceRunAfter = true
+      this.autoUpdater.quitAndInstall(false, true);
     } catch (err) {
       this.handleError(err instanceof Error ? err : new Error(String(err)));
     }
   }
+
 
   /**
    * Defer installation to next quit.

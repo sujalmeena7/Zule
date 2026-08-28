@@ -1119,7 +1119,7 @@ function registerIpcHandlers(): void {
     service.deferInstall();
   });
 
-  // ── Phone Camera Input IPC Handlers ─────────────────────────────────────
+  // ── Phone Camera Input & Answer IPC Handlers ────────────────────────────
   ipcMain.handle('phone-server-start', async () => {
     try {
       if (!phoneServerModule) {
@@ -1144,6 +1144,25 @@ function registerIpcHandlers(): void {
       phoneServerModule?.stopPhoneServer();
     } catch (err) {
       console.warn('[main] phone-server-stop failed:', err);
+    }
+  });
+
+  ipcMain.handle('phone-send-answer', async (_e, data: {
+    id?: string;
+    text: string;
+    question?: string;
+    mode?: string;
+    model?: string;
+    timestamp?: number;
+  }) => {
+    try {
+      if (!phoneServerModule || !phoneServerModule.isPhoneServerRunning()) {
+        return { sent: 0, seq: 0 };
+      }
+      return phoneServerModule.broadcastAnswer(data);
+    } catch (err) {
+      console.warn('[main] phone-send-answer failed:', err);
+      return { sent: 0, seq: 0 };
     }
   });
 }
@@ -1239,6 +1258,11 @@ app.whenReady().then(() => {
         service.checkForUpdate('startup').catch(() => {
           // Silently ignore — offline-first (Requirement 8.1)
         });
+
+        // Periodic background check every 2 hours (Antigravity / Cursor model)
+        setInterval(() => {
+          service.checkForUpdate('startup').catch(() => {});
+        }, 2 * 60 * 60 * 1000);
       } catch (err) {
         console.warn(
           `[main] autoUpdateService init failed: ${
@@ -1251,6 +1275,7 @@ app.whenReady().then(() => {
     }, 3000); // 3s delay keeps it within the 5s budget (Req 2.1)
   });
 });
+
 
 // Quit when all windows are closed (Windows behavior)
 app.on('window-all-closed', () => {

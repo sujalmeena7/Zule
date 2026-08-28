@@ -23,6 +23,7 @@
 // bundled as ESM, so obtain `app` via createRequire (see electron/main.ts).
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
@@ -56,22 +57,28 @@ let inferenceChain: Promise<unknown> = Promise.resolve();
  * model files from disk under `env.localModelPath`.
  *
  * - Dev: the source tree's `public/vendor/models`.
- * - Packaged: `<app>/dist/vendor/models` (Vite copies `public/` → `dist/`,
- *   which is packaged). Model files are read with `fs.readFile`, which Electron
- *   transparently serves from inside the asar.
+ * - Packaged: `<app>/dist/vendor/models` or unpacked `<app.asar.unpacked>/dist/vendor/models`.
  */
 function resolveModelsDir(): string {
-  // `__dirname` resolves to `dist-electron/` at runtime for the bundled main.
-  // Guard `app` access: outside a real Electron main process (e.g. tests/Node)
-  // `app` may be undefined — default to the packaged layout.
   const packaged = app?.isPackaged ?? true;
-  const base = packaged
+  let base = packaged
     ? path.join(__dirname, '..', 'dist', 'vendor', 'models')
     : path.join(__dirname, '..', 'public', 'vendor', 'models');
+
+  // When packaged with asarUnpack, ONNX native binary cannot read directly from inside asar.
+  // Check if unpacked counterpart exists and prefer it.
+  if (packaged && base.includes('app.asar') && !base.includes('app.asar.unpacked')) {
+    const unpacked = base.replace('app.asar', 'app.asar.unpacked');
+    if (fs.existsSync(unpacked)) {
+      base = unpacked;
+    }
+  }
+
   // Transformers appends `<modelId>/<file>`; a trailing separator keeps the
   // join correct on all platforms.
   return base + path.sep;
 }
+
 
 /** Load (once) and return the ASR pipeline. Concurrent callers share one load. */
 async function ensurePipeline(modelId: string): Promise<WhisperPipeline> {
