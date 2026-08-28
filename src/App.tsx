@@ -113,47 +113,56 @@ function AppContent() {
       <nav className="side-nav">
         <div className="nav-logo">
           <div className="logo-icon" />
-          <span>Zule AI</span>
-        </div>
-
-        <div className="nav-links">
-          <a href="#dashboard" className={`nav-link ${currentPage === 'dashboard' ? 'active' : ''}`}>
-            <LayoutDashboard size={18} />
-            Dashboard
-          </a>
-          <a href="#settings" className={`nav-link ${currentPage === 'settings' ? 'active' : ''}`}>
-            <SettingsIcon size={18} />
-            Settings
-          </a>
-          <a href="#diagnostics" className={`nav-link ${currentPage === 'diagnostics' ? 'active' : ''}`}>
-            <Activity size={18} />
-            Diagnostics
-          </a>
-
-          {/* Subscription badge */}
-          <div style={{ marginTop: 16 }}>
-            <SubscriptionBadge />
+          <div className="logo-text-wrap">
+            <span className="logo-title">Zule AI</span>
+            <span className="logo-badge">Stealth</span>
           </div>
         </div>
 
-        {/* User Profile */}
+        <div className="nav-section">
+          <span className="nav-section-title">Menu</span>
+          <div className="nav-links">
+            <a href="#dashboard" className={`nav-link ${currentPage === 'dashboard' ? 'active' : ''}`}>
+              <LayoutDashboard size={16} />
+              <span>Dashboard</span>
+            </a>
+            <a href="#settings" className={`nav-link ${currentPage === 'settings' ? 'active' : ''}`}>
+              <SettingsIcon size={16} />
+              <span>Settings</span>
+            </a>
+            <a href="#diagnostics" className={`nav-link ${currentPage === 'diagnostics' ? 'active' : ''}`}>
+              <Activity size={16} />
+              <span>Diagnostics</span>
+            </a>
+          </div>
+        </div>
+
+        {/* Subscription section */}
+        <div className="nav-sub-wrap">
+          <SubscriptionBadge />
+        </div>
+
+        {/* User Profile Capsule */}
         {user && (
           <div className="nav-profile">
             <div className="nav-profile-info">
-              {user.photoURL ? (
-                <img src={user.photoURL} alt="" className="nav-profile-avatar" referrerPolicy="no-referrer" />
-              ) : (
-                <div className="nav-profile-avatar nav-profile-avatar-fallback">
-                  {(user.displayName || user.email || '?')[0].toUpperCase()}
-                </div>
-              )}
+              <div className="nav-avatar-wrap">
+                {user.photoURL ? (
+                  <img src={user.photoURL} alt="" className="nav-profile-avatar" referrerPolicy="no-referrer" />
+                ) : (
+                  <div className="nav-profile-avatar nav-profile-avatar-fallback">
+                    {(user.displayName || user.email || '?')[0].toUpperCase()}
+                  </div>
+                )}
+                <span className="nav-avatar-online" />
+              </div>
               <div className="nav-profile-details">
                 <span className="nav-profile-name">{user.displayName || 'User'}</span>
                 <span className="nav-profile-email">{user.email}</span>
               </div>
             </div>
             <button className="nav-logout-btn" onClick={() => logout()} title="Sign out">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
                 <polyline points="16 17 21 12 16 7" />
                 <line x1="21" y1="12" x2="9" y2="12" />
@@ -163,20 +172,33 @@ function AppContent() {
         )}
       </nav>
 
+
       {/* Main Content Area */}
       <main className="main-content">
         {/* Offline banner — non-blocking, shown above main content */}
         {!isOnline && <OfflineBanner />}
         <ErrorBoundary>
-          {currentPage === 'dashboard' && <Dashboard />}
-          {currentPage === 'settings' && <Settings />}
-          {currentPage === 'diagnostics' && <DiagnosticsPanel />}
-          {currentPage === 'pricing' && <PricingPage />}
-          {currentPage === 'meeting-detail' && state.selectedMeeting && (
-            <MeetingDetail />
-          )}
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              key={currentPage}
+              initial={{ opacity: 0, y: 10, filter: 'blur(4px)' }}
+              animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+              exit={{ opacity: 0, y: -6, filter: 'blur(4px)' }}
+              transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+              style={{ width: '100%' }}
+            >
+              {currentPage === 'dashboard' && <Dashboard />}
+              {currentPage === 'settings' && <Settings />}
+              {currentPage === 'diagnostics' && <DiagnosticsPanel />}
+              {currentPage === 'pricing' && <PricingPage />}
+              {currentPage === 'meeting-detail' && state.selectedMeeting && (
+                <MeetingDetail />
+              )}
+            </motion.div>
+          </AnimatePresence>
         </ErrorBoundary>
       </main>
+
 
       {/* Floating Copilot Overlay — only render inline in web mode.
           In Electron, the copilot runs in its own separate transparent
@@ -256,14 +278,34 @@ function App() {
             <Toaster
               position="bottom-right"
               toastOptions={{
+                duration: 3000,
                 style: {
-                  background: '#1e293b',
-                  color: '#f8fafc',
-                  border: '1px solid rgba(255, 255, 255, 0.1)',
-                  backdropFilter: 'blur(10px)',
+                  background: '#0e0e14',
+                  color: '#ffffff',
+                  border: '1px solid #242432',
+                  boxShadow: '0 12px 36px -4px rgba(0, 0, 0, 0.7)',
+                  borderRadius: '12px',
+                  fontSize: '0.84rem',
+                  fontWeight: 500,
+                  padding: '12px 16px',
+                  letterSpacing: '-0.01em',
+                  backdropFilter: 'blur(16px)',
+                },
+                success: {
+                  iconTheme: {
+                    primary: '#10b981',
+                    secondary: '#0e0e14',
+                  },
+                },
+                error: {
+                  iconTheme: {
+                    primary: '#ef4444',
+                    secondary: '#0e0e14',
+                  },
                 },
               }}
             />
+
           </MotionConfig>
         </ZuleProvider>
       </SubscriptionProvider>

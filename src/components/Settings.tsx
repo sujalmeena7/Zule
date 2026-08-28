@@ -439,6 +439,7 @@ export function Settings() {
   const [providerKeys, setProviderKeys] = useState<Record<string, string>>({});
   const [showProviderKey, setShowProviderKey] = useState<Record<string, boolean>>({});
   const [providersSaving, setProvidersSaving] = useState(false);
+  const [providersSaved, setProvidersSaved] = useState(false);
   // Custom (OpenAI-compatible) provider draft state (task 11.2).
   // `customBaseUrlError` drives `aria-invalid` plus the inline message on the
   // Base_URL control (Requirement 1.8); the save path (task 11.3) sets it.
@@ -469,18 +470,15 @@ export function Settings() {
   // listing) both leave the fields as ordinary free text.
   const [customModelCatalog, setCustomModelCatalog] = useState<string[] | null>(null);
   const [customCatalogLoading, setCustomCatalogLoading] = useState(false);
-  /** The same, for the Anthropic panel's two model fields. */
+  // Separate status for each slot so timing one doesn't clobber the other's result
+  const [customSpeedStatus, setCustomSpeedStatus] = useState<{
+    modelId?: { state: 'testing' | 'ok' | 'failed'; message?: string };
+    fastModelId?: { state: 'testing' | 'ok' | 'failed'; message?: string };
+  }>({});
+
+  // Anthropic dynamic model discovery
   const [anthropicModelCatalog, setAnthropicModelCatalog] = useState<string[] | null>(null);
   const [anthropicCatalogLoading, setAnthropicCatalogLoading] = useState(false);
-  /**
-   * Latest speed measurement per model slot. Keyed by the field it describes so
-   * the two buttons cannot overwrite each other's result — the whole point is
-   * comparing the two numbers side by side.
-   */
-  const [customSpeedStatus, setCustomSpeedStatus] = useState<
-    Partial<Record<'modelId' | 'fastModelId', { state: 'testing' | 'ok' | 'failed'; message?: string }>>
-  >({});
-
 
   // Performance Profile & Ephemeral Mode State
   type Profile = 'speed' | 'balanced' | 'cost' | 'privacy';
@@ -488,11 +486,14 @@ export function Settings() {
   const [privacyMode, setPrivacyMode] = useState<PrivacyMode>('normal');
 
   // Redaction Rules State
-  const [enabledEntities, setEnabledEntities] = useState<Set<RedactionEntity>>(new Set());
+  const [enabledEntities, setEnabledEntities] = useState<Set<RedactionEntity>>(
+    () => new Set(['email', 'credit-card', 'us-ssn'])
+  );
   const [regexRules, setRegexRules] = useState<Array<{ pattern: string; flags: string; replacement: string }>>([]);
+  const [redactionSaving, setRedactionSaving] = useState(false);
+  const [redactionSaved, setRedactionSaved] = useState(false);
   const [redactionTestInput, setRedactionTestInput] = useState('');
   const [redactionTestOutput, setRedactionTestOutput] = useState<string | null>(null);
-  const [redactionSaving, setRedactionSaving] = useState(false);
 
   // Subscription State
   const { limits } = useSubscription();
@@ -505,6 +506,7 @@ export function Settings() {
   const [meetingMaxAgeDays, setMeetingMaxAgeDays] = useState(DEFAULT_MEETING_MAX_AGE_DAYS);
   const [transcriptMaxLines, setTranscriptMaxLines] = useState(DEFAULT_TRANSCRIPT_MAX_LINES);
   const [retentionSaving, setRetentionSaving] = useState(false);
+  const [retentionSaved, setRetentionSaved] = useState(false);
   const [sweepRunning, setSweepRunning] = useState(false);
 
   // Language State
@@ -1228,6 +1230,8 @@ export function Settings() {
       } else {
         toast.success('Provider configuration saved!');
       }
+      setProvidersSaved(true);
+      setTimeout(() => setProvidersSaved(false), 2000);
     } catch (error) {
       console.error('[Settings] Failed to save providers:', error);
       toast.error('Failed to save provider configuration.');
@@ -1304,6 +1308,8 @@ export function Settings() {
     try {
       await knowledgeBase.setSetting('retention', { meetingMaxAgeDays, transcriptMaxLines });
       toast.success('Retention settings saved!');
+      setRetentionSaved(true);
+      setTimeout(() => setRetentionSaved(false), 2000);
     } catch (error) {
       console.error('[Settings] Failed to save retention settings:', error);
       toast.error('Failed to save retention settings.');
@@ -1375,6 +1381,8 @@ export function Settings() {
       const rules = buildRedactionRules();
       await knowledgeBase.setSetting('redactionRules', rules);
       toast.success('Redaction rules saved!');
+      setRedactionSaved(true);
+      setTimeout(() => setRedactionSaved(false), 2000);
     } catch (error) {
       console.error('[Settings] Failed to save redaction rules:', error);
       toast.error('Failed to save redaction rules.');
@@ -2119,14 +2127,22 @@ export function Settings() {
           style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}
         >
           <button
-            className="btn-primary"
+            className={`btn-primary ${providersSaved ? 'saved' : ''}`}
             onClick={handleSaveProviders}
             disabled={providersSaving}
+            style={{ minWidth: '170px' }}
           >
-            {providersSaving ? 'Saving...' : 'Save Provider Config'}
+            {providersSaving ? (
+              <><RefreshCw size={14} className="animate-spin" /> Saving Config...</>
+            ) : providersSaved ? (
+              <><CheckCircle2 size={14} /> Saved!</>
+            ) : (
+              'Save Provider Config'
+            )}
           </button>
         </div>
       </section>
+
 
       {/* Knowledge Base */}
       <section className="settings-section glass-card animate-slide-up" style={{ animationDelay: '0.1s' }}>
@@ -2682,12 +2698,18 @@ export function Settings() {
         {/* Save Button */}
         <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'flex-end' }}>
           <button
-            className="btn-primary"
+            className={`btn-primary ${redactionSaved ? 'saved' : ''}`}
             onClick={handleSaveRedactionRules}
             disabled={redactionSaving}
-            style={{ padding: '8px 20px', fontSize: '0.82rem' }}
+            style={{ padding: '8px 20px', fontSize: '0.82rem', minWidth: '170px' }}
           >
-            {redactionSaving ? 'Saving...' : 'Save Redaction Rules'}
+            {redactionSaving ? (
+              <><RefreshCw size={14} className="animate-spin" /> Saving Rules...</>
+            ) : redactionSaved ? (
+              <><CheckCircle2 size={14} /> Saved!</>
+            ) : (
+              'Save Redaction Rules'
+            )}
           </button>
         </div>
       </section>
@@ -2736,12 +2758,18 @@ export function Settings() {
 
         <div className="form-actions" style={{ marginTop: '16px' }}>
           <button
-            className="btn-primary"
+            className={`btn-primary ${retentionSaved ? 'saved' : ''}`}
             onClick={handleSaveRetention}
             disabled={retentionSaving}
-            style={{ padding: '8px 20px', fontSize: '0.82rem' }}
+            style={{ padding: '8px 20px', fontSize: '0.82rem', minWidth: '180px' }}
           >
-            {retentionSaving ? 'Saving...' : 'Save Retention Settings'}
+            {retentionSaving ? (
+              <><RefreshCw size={14} className="animate-spin" /> Saving Settings...</>
+            ) : retentionSaved ? (
+              <><CheckCircle2 size={14} /> Saved!</>
+            ) : (
+              'Save Retention Settings'
+            )}
           </button>
           <button
             className="btn-secondary"
@@ -2749,10 +2777,15 @@ export function Settings() {
             disabled={sweepRunning}
             style={{ padding: '8px 20px', fontSize: '0.82rem' }}
           >
-            {sweepRunning ? 'Running...' : <><Play size={14} /> Run Sweep Now</>}
+            {sweepRunning ? (
+              <><RefreshCw size={14} className="animate-spin" /> Running Sweep...</>
+            ) : (
+              <><Play size={14} /> Run Sweep Now</>
+            )}
           </button>
         </div>
       </section>
+
 
       {/* Spend */}
       <SpendPanel />

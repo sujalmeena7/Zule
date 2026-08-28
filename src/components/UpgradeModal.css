@@ -1,40 +1,61 @@
-/* ============================================
-   ZULE AI — Upgrade Modal Styles
-   ============================================ */
+/* ==========================================================================
+   ZULE AI — Ultra-Premium Upgrade Modal Styles
+   Senior Staff UI Design • Deep Obsidian Glassmorphism • Precision Micro-Physics
+   ========================================================================== */
 
 .upgrade-modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(8px);
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 9999;
-  animation: fadeIn 0.2s ease;
+  animation: modalBackdropFade 0.25s ease forwards;
 }
 
-@keyframes fadeIn {
+@keyframes modalBackdropFade {
   from { opacity: 0; }
   to { opacity: 1; }
 }
 
 .upgrade-modal {
-  background: var(--bg-secondary);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-lg);
-  padding: 36px 32px;
+  background: #0e0e14;
+  border: 1px solid #22222e;
+  border-radius: 20px;
+  padding: 38px 34px;
   max-width: 440px;
   width: 90%;
   position: relative;
-  box-shadow: var(--shadow-lg);
-  animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.85);
+  animation: modalScaleUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  overflow: hidden;
 }
 
-@keyframes slideUp {
+/* Top Subtle Specular Light Edge */
+.upgrade-modal::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(99, 102, 241, 0.3) 30%,
+    rgba(255, 255, 255, 0.4) 50%,
+    rgba(59, 130, 246, 0.3) 70%,
+    transparent 100%
+  );
+}
+
+@keyframes modalScaleUp {
   from {
     opacity: 0;
-    transform: translateY(20px) scale(0.96);
+    transform: translateY(16px) scale(0.96);
   }
   to {
     opacity: 1;
@@ -44,46 +65,55 @@
 
 .upgrade-modal-close {
   position: absolute;
-  top: 16px;
-  right: 16px;
-  background: none;
-  border: none;
-  color: var(--text-tertiary);
+  top: 18px;
+  right: 18px;
+  background: #14141c;
+  border: 1px solid #22222c;
+  color: #71717a;
   cursor: pointer;
-  padding: 4px;
-  border-radius: var(--radius-sm);
-  transition: color 0.2s;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  transition: all 0.15s ease;
 }
 
 .upgrade-modal-close:hover {
-  color: var(--text-primary);
+  background: #1c1c26;
+  color: #ffffff;
+  border-color: #323242;
 }
 
 .upgrade-modal-icon {
-  font-size: 2.5rem;
-  margin-bottom: 16px;
+  font-size: 2.2rem;
+  margin-bottom: 14px;
   display: block;
 }
 
 .upgrade-modal-title {
   font-family: var(--font-display);
-  font-size: 1.4rem;
+  font-size: 1.45rem;
   font-weight: 700;
-  color: var(--text-primary);
+  color: #ffffff;
+  letter-spacing: -0.025em;
   margin: 0 0 8px;
 }
 
 .upgrade-modal-message {
-  color: var(--text-secondary);
-  font-size: 0.92rem;
-  line-height: 1.6;
-  margin: 0 0 24px;
+  color: #8e8e96;
+  font-size: 0.88rem;
+  line-height: 1.55;
+  margin: 0 0 22px;
 }
 
 .upgrade-modal-feature-list {
   list-style: none;
-  padding: 0;
-  margin: 0 0 28px;
+  padding: 16px 0;
+  margin: 0 0 24px;
+  border-top: 1px solid #181822;
+  border-bottom: 1px solid #181822;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -93,49 +123,61 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 0.88rem;
-  color: var(--text-secondary);
+  font-size: 0.84rem;
+  color: #d4d4d8;
 }
 
 .upgrade-modal-feature .icon {
-  color: var(--accent-green);
+  color: #10b981;
   flex-shrink: 0;
 }
 
 .upgrade-modal-actions {
   display: flex;
-  gap: 12px;
+  gap: 10px;
 }
 
 .upgrade-modal-btn {
   flex: 1;
-  padding: 12px 20px;
-  border-radius: var(--radius-md);
-  font-size: 0.9rem;
+  padding: 11px 20px;
+  border-radius: 10px;
+  font-size: 0.86rem;
   font-weight: 600;
   cursor: pointer;
   border: none;
-  transition: all 0.2s;
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+}
+
+.upgrade-modal-btn:active {
+  transform: scale(0.97);
 }
 
 .upgrade-modal-btn.primary {
-  background: var(--accent-gradient);
-  color: white;
-  box-shadow: 0 4px 16px rgba(59, 130, 246, 0.3);
+  background: #ffffff;
+  color: #09090b;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
 }
 
 .upgrade-modal-btn.primary:hover {
-  box-shadow: 0 6px 24px rgba(59, 130, 246, 0.4);
+  background: #f4f4f5;
   transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(255, 255, 255, 0.15);
 }
 
 .upgrade-modal-btn.secondary {
-  background: var(--bg-elevated);
-  color: var(--text-secondary);
-  border: 1px solid var(--glass-border);
+  background: #14141a;
+  color: #a1a1aa;
+  border: 1px solid #22222c;
 }
 
 .upgrade-modal-btn.secondary:hover {
-  color: var(--text-primary);
-  border-color: var(--glass-border-hover);
+  background: #1a1a24;
+  color: #ffffff;
+  border-color: #343444;
 }
+

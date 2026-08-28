@@ -5251,3 +5251,171 @@ queries, this always held stale text from the PREVIOUS question, causing:
 - 2026-08-28: Brought the Anthropic adapter to latency parity with the custom OpenAI-compatible one — fastModelId + preferFastModel resolution (explicit > fast > default) on both call paths, an onMetrics frame so the overlay perf line attributes Anthropic answers to a model, wiring through aiProvider registration, and a Fast model field in the Anthropic Settings panel.
 - 2026-08-28: Added model discovery to the Anthropic Settings panel (Load models button + shared datalist for both model fields) via a new messagesEndpointToApiRoot helper, because the Anthropic Base URL is a full Messages endpoint and GET /models lives one segment higher; user had put claude-sonnet-5 in the fast slot so ttft stayed ~4.4s.
 - 2026-08-28: Replaced the <datalist> model dropdown in Settings with a scrollable, styled ModelCombobox (keyboard nav, filter-as-you-type, match highlighting, :free badge) so the Load models list can actually be scrolled and read.
+
+---
+
+## Dashboard Premium Redesign — 2026-08-28
+
+Completely refactored Dashboard UI to a Cluely-inspired premium design:
+
+### CSS (Dashboard.css)
+- Rewrote all styles from scratch (~720 lines)
+- New sections: greeting bar, hero v2, stat strip, main grid, sessions panel, quick-start panel
+- Glassmorphism hero with animated radial gradient mesh + 3 floating orbs (blue/purple/green)
+- Top shimmer line on hero via ::before
+- Glowing primary CTA button with pulse-ring animation
+- Ghost secondary button for Quick Assist
+- 4 stat cards with colored glow icon backgrounds (blue/purple/green/amber)
+- Session cards with animated left accent bar on hover (::after)
+- Session actions hidden, slide in on hover
+- Quick-start cards with section labels (Custom / Templates), arrow reveal on hover
+- Responsive grid (4->2->1 col) at 900px and 600px
+
+### TSX (Dashboard.tsx)
+- Added getGreeting() helper (morning/afternoon/evening)
+- Greeting bar with eyebrow text + pulsing 'AI Ready' status pill
+- Hero uses new class names: dash-hero, dash-hero-bg, hero-orbs, dash-hero-content, hero-eyebrow, dash-hero-title, hero-gradient, hero-cta-row, hero-start-btn, hero-ghost-btn
+- Stats strip: stat-card + stat-icon-bg.{blue|purple|green|amber} + stat-number/stat-label
+- Sessions: dash-panel > session-list > session-card (no bento grid)
+- Quick-start: qs-section-label + qs-card + qs-icon/qs-info/qs-arrow
+- Added Zap icon from lucide for Quick Assist button
+
+Build: tsc --noEmit = 0 errors, vite build = success 2.35s
+
+---
+
+## Dashboard Hero Section Big-Tech Level Revamp — 2026-08-28
+
+Revamped hero section to match high-tier senior designer / big-tech (Linear/Raycast/Cluely) standards:
+- Two-column balanced split grid with precision layout
+- Micro-matrix dot canvas background + ambient soft violet/indigo glow backlighting
+- Top specular edge highlight line
+- Left column: Stealth pill tag, luxury display typography with silver/liquid gradient, high-finish primary CTA with inset specular lighting + shortcut tag [↵], secondary glass button, trust badges
+- Right column: Live Stealth HUD interactive preview card featuring live system audio feed, animated 6-bar equalizer visualizer, simulated interviewer speech bubble, instant AI whisper response box with 99.4% confidence match, and telemetry chips
+- Telemetry stats cards with upward trend indicators and inset icon depth
+- Build: tsc passes 0 errors, vite build passes.
+
+---
+
+## Cluely-Inspired Minimal Dark Aesthetic Overhaul — 2026-08-28
+
+Refactored Dashboard to an ultra-clean, minimal, dark aesthetic in the style of Cluely / Linear:
+- Removed all purple gradients, saturated blue glowing orbs, and rainbow icon boxes
+- Pure dark obsidian background (#09090b / #0d0d11) with razor-thin zinc borders (#1f1f24)
+- Crisp monochrome typography: pure white titles (#ffffff) and clean muted zinc subtext (#a1a1aa)
+- Signature solid white primary button with dark text ([ ▶ Start Copilot ↵ ]) + dark zinc secondary button
+- Refined stealth HUD mockup in dark obsidian with monochrome audio visualizer and minimal green match tag
+- Telemetry stats cards redesigned with neutral dark zinc icon containers (#15151a)
+- Clean monochrome preset items and session list
+- Build: tsc passes with 0 errors, vite build passes.
+
+---
+
+## Minimal Classy Cluely-Style Hero & Dashboard Simplification — 2026-08-28
+
+Removed excessive clutter from the hero section and unified the entire dashboard around a minimal, classy dark aesthetic:
+- Removed fake interview mockup card, cluttered trust checkmarks, and excessive badges from hero
+- Created a spacious, elegant hero card with a bold pure-white title ('Your AI Meeting Copilot'), clean subtext, and a signature crisp white pill CTA button + dark glass Quick Assist button
+- Clean 4-card stats row (Sessions, Time Guided, AI Suggestions, Avg Confidence) with unified dark zinc icon containers
+- Refined 2-column bottom layout: Recent Sessions with clean hover rows + Quick Start mode templates
+- Build verification: tsc 0 errors, vite build passes.
+
+---
+
+## Subtle Visual Color & Sidebar Luxury Refactor — 2026-08-28
+
+- Added tasteful, muted visual color accents to Dashboard:
+  - Ambient soft aura glow behind hero card
+  - Muted ambient tints for stat icons (soft blue, purple, green, amber)
+  - Muted color accents for Quick Start mode preset icons
+  - Subtle blue suggestion tag in recent meetings
+- Completely refactored Sidebar for a premium professional finish:
+  - Brand section with favicon mark, 'Zule AI' title and 'Stealth' version chip
+  - Clean section headers ('Menu') and streamlined nav links with inset active state
+  - Luxury subscription badge chip
+  - Refined bottom profile capsule with avatar, online indicator dot, and clean logout button
+- Build verification: tsc 0 errors, vite build 2.79s.
+
+---
+
+## Settings Page Senior UI Designer Complete Overhaul — 2026-08-28
+
+Refactored the entire Settings page with senior-designer grade aesthetics:
+- Precision obsidian cards (#0d0d12) with 1px border (#1c1c24) and top specular highlight line
+- High-finish section header chips with glowing ambient icon containers
+- Redesigned form inputs (.input-glass) with deep obsidian background and soft focus glow rings
+- Clean segmented controls for Theme & VAD sensitivity
+- Elevated AI Providers list with priority cards, reorder arrows, and status pills
+- Luxury document cards and dropzone for Knowledge Base
+- Refined Performance Profile selector cards and iOS-style Ephemeral Mode toggle switch
+- Polished Spend Panel tokens & cost telemetry tables
+- Build verification: tsc 0 errors, vite build 3.00s.
+
+---
+
+## Settings Micro-interactions, Button Transitions & Toast Polish — 2026-08-28
+
+- Implemented dynamic button state handling across Settings:
+  - Provider Config save button: morphs between idle, spinning loader ('Saving Config...'), and spring-animated saved state ('✓ Saved!')
+  - Retention Settings save button: smooth spinner and '✓ Saved!' feedback
+  - Redaction Rules save button: smooth spinner and '✓ Saved!' feedback
+  - Sweep button: animated spinner ('Running Sweep...')
+- Upgraded button micro-interactions in Settings.css:
+  - Active physical spring compression (scale 0.97)
+  - Button success pop spring animation
+  - Smooth hover elevation and shadow expansion
+- Upgraded global Toaster notification in App.tsx to luxury obsidian glass (#0e0e14, #242432 border, blur 16px, custom green/red icons).
+- Build verification: tsc 0 errors, vite build 2.94s.
+
+---
+
+## Subscription & Upgrade Modal Senior UI Redesign — 2026-08-28
+
+- Completely overhauled Pricing Page (PricingPage.css):
+  - Ambient backdrop radial glow with clean back button navigation
+  - Sleek segmented billing interval toggle with -20% annual discount badge
+  - 3 luxury tier cards (Free, Pro [featured with specular shine and solid white CTA], Ultra with amber crown chip)
+  - Feature checklist with crisp green checkmarks and subtle highlight typography
+  - Subscription management panel for active subscribers with renewal dates, status dot, and billing actions
+  - Stealth comparison section showcasing cost advantages over Cluely
+- Completely overhauled Upgrade Modal (UpgradeModal.css):
+  - Frosted 16px blur backdrop with obsidian modal container (#0e0e14)
+  - Top specular highlight edge and micro-spring button transitions
+- Build verification: tsc 0 errors, vite build 3.02s.
+
+---
+
+## Pricing Toggle & Comparison Banner Polish — 2026-08-28
+
+- Fixed billing interval toggle slider misalignment / overlap across Monthly and Annual (SAVE 20%)
+- Converted toggle into clean segmented buttons (.billing-toggle-btn) with individual active state and smooth transitions
+- Fixed spacing on 'Why choose Zule over Cluely?' banner:
+  - Added 64px top margin and 40px bottom margin with 36px internal padding
+  - Added stealth advantage badge and top specular highlight
+- Build verification: tsc 0 errors, vite build 3.17s.
+
+---
+
+## Pricing Page Bottom Spacing & Comparison Card Polish — 2026-08-28
+
+- Completed full CSS rules for 'Why choose Zule over Cluely?' comparison card (.pricing-comparison)
+- Increased bottom spacing:
+  - Page container bottom padding: 140px
+  - Comparison card margins: 72px top, 60px bottom
+  - Comparison card padding: 38px 44px
+- Build verification: tsc 0 errors, vite build 2.94s.
+
+---
+
+## Global Framer Motion Page Transitions & Interactive Physics — 2026-08-28
+
+- Added Framer Motion AnimatePresence page transitions in App.tsx across Dashboard, Settings, Diagnostics, Pricing, and Meeting Detail
+- Smooth blur + slide motion easing: initial opacity 0, y 10, blur 4px -> opacity 1, y 0, blur 0px
+- Added global smooth scrolling (scroll-behavior: smooth) in html and custom smooth scrollbars
+- Added unified tactile active spring click physics across:
+  - Sidebar nav links (.nav-link:active { scale: 0.97 })
+  - Buttons (.btn-primary, .btn-secondary:active { scale: 0.97 })
+  - Stat cards (.stat-box hover elevation)
+  - Recent session items (.session-row:active { scale: 0.985 })
+  - Quick start preset cards (.quickstart-item:active { scale: 0.98 })
+- Build verification: tsc 0 errors, vite build 3.31s.
