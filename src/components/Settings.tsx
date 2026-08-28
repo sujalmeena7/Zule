@@ -233,6 +233,7 @@ const CUSTOM_FIELD_LABEL_STYLE: CSSProperties = {
 
 /** DOM id of the `<datalist>` shared by both Custom_Provider model inputs. */
 const CUSTOM_MODEL_LIST_ID = 'custom-provider-model-options';
+const ANTHROPIC_MODEL_LIST_ID = 'anthropic-provider-model-options';
 
 /** Shared styling for the small helper / result lines under a model input. */
 const CUSTOM_FIELD_HINT_STYLE: CSSProperties = {
@@ -475,6 +476,9 @@ export function Settings() {
   // listing) both leave the fields as ordinary free text.
   const [customModelCatalog, setCustomModelCatalog] = useState<string[] | null>(null);
   const [customCatalogLoading, setCustomCatalogLoading] = useState(false);
+  /** The same, for the Anthropic panel's two model fields. */
+  const [anthropicModelCatalog, setAnthropicModelCatalog] = useState<string[] | null>(null);
+  const [anthropicCatalogLoading, setAnthropicCatalogLoading] = useState(false);
   /**
    * Latest speed measurement per model slot. Keyed by the field it describes so
    * the two buttons cannot overwrite each other's result — the whole point is
@@ -927,6 +931,65 @@ export function Settings() {
       return '';
     }
   }, [providers, providerKeys]);
+
+  /** The same resolution for any other provider entry. */
+  const resolveProviderApiKey = useCallback(
+    async (providerId: string): Promise<string> => {
+      const draft = (providerKeys[providerId] ?? '').trim();
+      if (draft.length > 0) return draft;
+      const entry = providers.find((p) => p.id === providerId);
+      if (!entry?.apiKeyCipher) return '';
+      try {
+        return await decryptApiKey(entry.apiKeyCipher);
+      } catch (error) {
+        console.error(`[Settings] Stored ${providerId} credential could not be read:`, error);
+        return '';
+      }
+    },
+    [providers, providerKeys],
+  );
+
+  /**
+   * Ask the Anthropic gateway which models it serves.
+   *
+   * Same probe as the Custom provider's, pointed one path segment higher: the
+   * Anthropic Base URL is a full Messages endpoint, so the listing route sits
+   * under its parent. Without this the User is typing model ids blind — which is
+   * how a "fast model" slot ends up holding the same large model as the default
+   * one, and the latency does not move.
+   */
+  const handleLoadAnthropicModels = useCallback(async () => {
+    const entry = providers.find((p) => p.id === 'anthropic');
+    const configured = (entry?.baseUrl ?? '').trim();
+    // Blank means the adapter's own default, and Anthropic itself serves
+    // `/v1/models`, so there is still something useful to ask.
+    const baseUrl = configured.length > 0 ? configured : 'https://api.anthropic.com/v1/messages';
+
+    setAnthropicCatalogLoading(true);
+    try {
+      const apiKey = await resolveProviderApiKey('anthropic');
+      const { listGatewayModels, messagesEndpointToApiRoot } = await import(
+        '../brain/providers/modelCatalog'
+      );
+      const result = await listGatewayModels({
+        baseUrl: messagesEndpointToApiRoot(baseUrl),
+        apiKey,
+      });
+      if (result.ok) {
+        setAnthropicModelCatalog(result.models);
+        toast.success(`Found ${result.models.length} models on this endpoint.`);
+      } else {
+        setAnthropicModelCatalog(null);
+        toast.error(`Could not list models: ${result.detail}`);
+      }
+    } catch (error) {
+      console.error('[Settings] Anthropic model listing could not run:', error);
+      setAnthropicModelCatalog(null);
+      toast.error('Could not list models.');
+    } finally {
+      setAnthropicCatalogLoading(false);
+    }
+  }, [providers, resolveProviderApiKey]);
 
   /**
    * Ask the gateway what models it serves and use the answer to populate the
@@ -1924,6 +1987,11 @@ export function Settings() {
                                 placeholder="claude-sonnet-4-20250514"
                                 value={provider.modelId || ''}
                                 onChange={(e) => handleProviderModelChange(provider.id, e.target.value)}
+                                list={
+                                  anthropicModelCatalog && anthropicModelCatalog.length > 0
+                                    ? ANTHROPIC_MODEL_LIST_ID
+                                    : undefined
+                                }
                               />
                             </div>
                             {looksLikeThinkingModel(provider.modelId || '') && (
@@ -1948,10 +2016,44 @@ export function Settings() {
                                 placeholder="claude-3-5-haiku-20241022"
                                 value={provider.fastModelId || ''}
                                 onChange={(e) => handleProviderFastModelChange(provider.id, e.target.value)}
+                                list={
+                                  anthropicModelCatalog && anthropicModelCatalog.length > 0
+                                    ? ANTHROPIC_MODEL_LIST_ID
+                                    : undefined
+                                }
                               />
                             </div>
                             <span style={CUSTOM_FIELD_HINT_STYLE}>
                               Screen questions go to this model. Leave empty to use the model above.
+                              Pick a smaller one than above — the same model in both slots changes nothing.
+                            </span>
+                          </div>
+
+                          {/* Shared completion source for both fields above. */}
+                          {anthropicModelCatalog !== null && anthropicModelCatalog.length > 0 && (
+                            <datalist id={ANTHROPIC_MODEL_LIST_ID}>
+                              {anthropicModelCatalog.map((id) => (
+                                <option key={id} value={id} />
+                              ))}
+                            </datalist>
+                          )}
+
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              style={{ padding: '4px 10px', fontSize: '0.7rem' }}
+                              onClick={handleLoadAnthropicModels}
+                              disabled={anthropicCatalogLoading}
+                              aria-busy={anthropicCatalogLoading}
+                              title="Ask this endpoint which models it serves, then pick from the list."
+                            >
+                              {anthropicCatalogLoading ? 'Loading…' : 'Load models'}
+                            </button>
+                            <span style={CUSTOM_FIELD_HINT_STYLE}>
+                              {anthropicModelCatalog === null
+                                ? 'Optional — fills both fields with the models this gateway offers.'
+                                : `${anthropicModelCatalog.length} models available — start typing to filter.`}
                             </span>
                           </div>
                         </div>

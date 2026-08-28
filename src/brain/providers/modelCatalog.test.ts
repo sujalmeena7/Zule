@@ -20,6 +20,7 @@ import {
   formatSpeedSample,
   listGatewayModels,
   measureModelSpeed,
+  messagesEndpointToApiRoot,
 } from './modelCatalog';
 
 const BASE = 'https://gw.example.com/v1';
@@ -284,5 +285,33 @@ describe('formatSpeedSample', () => {
     expect(formatSpeedSample({ ...SAMPLE, thinking: true, thinkingMs: 31_200 })).toBe(
       'first word 0.9s · 145 words/sec · thought for 31.2s first',
     );
+  });
+});
+
+describe('messagesEndpointToApiRoot', () => {
+  // The Anthropic Base URL is a full endpoint the adapter POSTs verbatim, unlike
+  // the Custom provider's API root. Handing it to `listGatewayModels` unchanged
+  // would ask for `…/v1/messages/models`.
+  it('drops a trailing /messages segment', () => {
+    expect(messagesEndpointToApiRoot('https://gw.example.com/v1/messages')).toBe(
+      'https://gw.example.com/v1',
+    );
+    expect(messagesEndpointToApiRoot('https://api.anthropic.com/v1/messages/')).toBe(
+      'https://api.anthropic.com/v1',
+    );
+    expect(messagesEndpointToApiRoot('  https://gw.example.com/v1/MESSAGES  ')).toBe(
+      'https://gw.example.com/v1',
+    );
+  });
+
+  it('leaves any other layout alone', () => {
+    expect(messagesEndpointToApiRoot('https://gw.example.com/v1')).toBe(
+      'https://gw.example.com/v1',
+    );
+    // `/messages` only as a whole final segment — not as a suffix of one.
+    expect(messagesEndpointToApiRoot('https://gw.example.com/v1/allmessages')).toBe(
+      'https://gw.example.com/v1/allmessages',
+    );
+    expect(messagesEndpointToApiRoot('')).toBe('');
   });
 });

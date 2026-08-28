@@ -141,6 +141,25 @@ export function extractModelIds(body: unknown): string[] {
 }
 
 /**
+ * Turns an Anthropic Messages endpoint into the API root its `/models` listing
+ * lives under: `https://gw.example/v1/messages` → `https://gw.example/v1`.
+ *
+ * Needed because the two providers mean different things by "Base URL". The
+ * OpenAI-compatible adapter is configured with an API root and appends
+ * `/chat/completions` itself, so that value can be handed to
+ * `listGatewayModels` unchanged. The Anthropic adapter is configured with the
+ * full endpoint it POSTs verbatim, so passing it through would ask for
+ * `…/v1/messages/models`, which no gateway serves.
+ *
+ * Only a trailing `/messages` segment is removed, so any other layout — a
+ * gateway that mounts the API under a prefix, say — is left for
+ * `normalizeBaseUrl` to judge.
+ */
+export function messagesEndpointToApiRoot(baseUrl: string): string {
+  return baseUrl.trim().replace(/\/+$/, '').replace(/\/messages$/i, '');
+}
+
+/**
  * `GET {normalised baseUrl}/models` — the standard OpenAI-compatible listing
  * endpoint.
  *
