@@ -43,6 +43,7 @@ import { useAutoUpdate } from '../hooks/useAutoUpdate';
 import type { RedactionRule, RedactionEntity } from '../types/redaction';
 import { apply as applyRedaction } from '../brain/redaction';
 import { SpendPanel } from './SpendPanel';
+import { ModelCombobox } from './settings/ModelCombobox';
 import { getSupportedLocales, setLocale, type LocaleCode } from '../i18n';
 import {
   DEFAULT_MEETING_MAX_AGE_DAYS,
@@ -231,10 +232,6 @@ const CUSTOM_FIELD_LABEL_STYLE: CSSProperties = {
   color: 'var(--text-tertiary)',
 };
 
-/** DOM id of the `<datalist>` shared by both Custom_Provider model inputs. */
-const CUSTOM_MODEL_LIST_ID = 'custom-provider-model-options';
-const ANTHROPIC_MODEL_LIST_ID = 'anthropic-provider-model-options';
-
 /** Shared styling for the small helper / result lines under a model input. */
 const CUSTOM_FIELD_HINT_STYLE: CSSProperties = {
   fontSize: '0.7rem',
@@ -255,7 +252,7 @@ const THINKING_MODEL_HINT =
 
 /**
  * One Custom_Provider model input, with its optional-model help text, its
- * `<datalist>` binding, its Test speed button, and the measurement result.
+ * catalog dropdown, its Test speed button, and the measurement result.
  *
  * Extracted because there are two of these — the default model and the fast one
  * — and they differ only in label, placeholder, and which slot they measure.
@@ -286,20 +283,16 @@ function CustomModelField(props: {
         {props.label}
       </label>
       <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-        <div className="api-key-input provider-key-input" style={{ flex: '1 1 auto' }}>
-          <input
-            id={props.id}
-            type="text"
-            maxLength={MAX_MODEL_ID_LENGTH}
-            className="input-glass"
-            placeholder={props.placeholder}
-            value={props.value}
-            onChange={(e) => props.onChange(e.target.value)}
-            // Only bind the list once it has entries: an empty `<datalist>`
-            // renders as a dead dropdown arrow in Chromium.
-            list={props.catalog && props.catalog.length > 0 ? CUSTOM_MODEL_LIST_ID : undefined}
-          />
-        </div>
+        <ModelCombobox
+          id={props.id}
+          className="provider-key-input"
+          style={{ flex: '1 1 auto', maxWidth: 'none' }}
+          maxLength={MAX_MODEL_ID_LENGTH}
+          placeholder={props.placeholder}
+          value={props.value}
+          onChange={props.onChange}
+          options={props.catalog}
+        />
         <button
           type="button"
           className="btn-secondary"
@@ -1855,16 +1848,6 @@ export function Settings() {
                             )}
                           </div>
 
-                          {/* Shared completion source for both model inputs.
-                              Rendered once, referenced by `list=` from each. */}
-                          {customModelCatalog !== null && customModelCatalog.length > 0 && (
-                            <datalist id={CUSTOM_MODEL_LIST_ID}>
-                              {customModelCatalog.map((id) => (
-                                <option key={id} value={id} />
-                              ))}
-                            </datalist>
-                          )}
-
                           <CustomModelField
                             id="custom-provider-model-id"
                             label="Model ID"
@@ -1907,7 +1890,7 @@ export function Settings() {
                             <span style={CUSTOM_FIELD_HINT_STYLE}>
                               {customModelCatalog === null
                                 ? 'Optional — fills both fields with the models your endpoint offers.'
-                                : `${customModelCatalog.length} models available — start typing to filter.`}
+                                : `${customModelCatalog.length} models loaded — open the list with the arrow in either field, or type to filter.`}
                             </span>
                           </div>
                         </div>
@@ -1979,21 +1962,15 @@ export function Settings() {
                             <label htmlFor="anthropic-model-id" style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
                               Model ID <span style={{ fontWeight: 400, opacity: 0.7 }}>(optional — default: claude-3-5-sonnet)</span>
                             </label>
-                            <div className="api-key-input provider-key-input">
-                              <input
-                                id="anthropic-model-id"
-                                type="text"
-                                className="input-glass"
-                                placeholder="claude-sonnet-4-20250514"
-                                value={provider.modelId || ''}
-                                onChange={(e) => handleProviderModelChange(provider.id, e.target.value)}
-                                list={
-                                  anthropicModelCatalog && anthropicModelCatalog.length > 0
-                                    ? ANTHROPIC_MODEL_LIST_ID
-                                    : undefined
-                                }
-                              />
-                            </div>
+                            <ModelCombobox
+                              id="anthropic-model-id"
+                              className="provider-key-input"
+                              maxLength={MAX_MODEL_ID_LENGTH}
+                              placeholder="claude-sonnet-4-20250514"
+                              value={provider.modelId || ''}
+                              onChange={(next) => handleProviderModelChange(provider.id, next)}
+                              options={anthropicModelCatalog}
+                            />
                             {looksLikeThinkingModel(provider.modelId || '') && (
                               <span style={CUSTOM_FIELD_HINT_STYLE}>{THINKING_MODEL_HINT}</span>
                             )}
@@ -2008,35 +1985,20 @@ export function Settings() {
                             <label htmlFor="anthropic-fast-model-id" style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
                               Fast model for screen questions <span style={{ fontWeight: 400, opacity: 0.7 }}>(optional)</span>
                             </label>
-                            <div className="api-key-input provider-key-input">
-                              <input
-                                id="anthropic-fast-model-id"
-                                type="text"
-                                className="input-glass"
-                                placeholder="claude-3-5-haiku-20241022"
-                                value={provider.fastModelId || ''}
-                                onChange={(e) => handleProviderFastModelChange(provider.id, e.target.value)}
-                                list={
-                                  anthropicModelCatalog && anthropicModelCatalog.length > 0
-                                    ? ANTHROPIC_MODEL_LIST_ID
-                                    : undefined
-                                }
-                              />
-                            </div>
+                            <ModelCombobox
+                              id="anthropic-fast-model-id"
+                              className="provider-key-input"
+                              maxLength={MAX_MODEL_ID_LENGTH}
+                              placeholder="claude-3-5-haiku-20241022"
+                              value={provider.fastModelId || ''}
+                              onChange={(next) => handleProviderFastModelChange(provider.id, next)}
+                              options={anthropicModelCatalog}
+                            />
                             <span style={CUSTOM_FIELD_HINT_STYLE}>
                               Screen questions go to this model. Leave empty to use the model above.
                               Pick a smaller one than above — the same model in both slots changes nothing.
                             </span>
                           </div>
-
-                          {/* Shared completion source for both fields above. */}
-                          {anthropicModelCatalog !== null && anthropicModelCatalog.length > 0 && (
-                            <datalist id={ANTHROPIC_MODEL_LIST_ID}>
-                              {anthropicModelCatalog.map((id) => (
-                                <option key={id} value={id} />
-                              ))}
-                            </datalist>
-                          )}
 
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                             <button
@@ -2053,7 +2015,7 @@ export function Settings() {
                             <span style={CUSTOM_FIELD_HINT_STYLE}>
                               {anthropicModelCatalog === null
                                 ? 'Optional — fills both fields with the models this gateway offers.'
-                                : `${anthropicModelCatalog.length} models available — start typing to filter.`}
+                                : `${anthropicModelCatalog.length} models loaded — open the list with the arrow in either field, or type to filter.`}
                             </span>
                           </div>
                         </div>
