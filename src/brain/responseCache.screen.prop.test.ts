@@ -77,28 +77,6 @@ const queryArb = fc.string({ minLength: 1, maxLength: 50 });
 /** Generate a Hamming distance threshold between 0 and 64. */
 const thresholdArb = fc.integer({ min: 0, max: 64 });
 
-/**
- * Generate a stored hash that is within a specified Hamming distance of
- * a given hash by flipping exactly `distance` random bits.
- */
-function hashAtDistance(baseHash: Uint8Array, distance: number): fc.Arbitrary<Uint8Array> {
-  // We need to select `distance` unique bit positions out of 64 to flip
-  return fc
-    .shuffledSubarray(
-      Array.from({ length: 64 }, (_, i) => i),
-      { minLength: distance, maxLength: distance },
-    )
-    .map((bitsToFlip) => {
-      const result = new Uint8Array(baseHash);
-      for (const bit of bitsToFlip) {
-        const byteIdx = bit >> 3;
-        const mask = 1 << (bit & 7);
-        result[byteIdx] ^= mask;
-      }
-      return result;
-    });
-}
-
 // ---------------------------------------------------------------------------
 // Property 7: Screen-aware cache correctness
 // **Validates: Requirements 6.1, 6.2, 6.3, 6.4, 6.5**

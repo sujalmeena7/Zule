@@ -152,6 +152,7 @@ function createFakeFfi() {
 vi.mock('../../win32/ffi', () => ({
   getFfi: () => createFakeFfi(),
   isWin32: () => true,
+  normalizeHwnd: (h: unknown) => h,
 }));
 
 vi.mock('../../nativeStealth', () => ({

@@ -17,7 +17,6 @@ import type {
   BuildInput,
   KnowledgeChunk,
   MemoryChunk,
-  ContextBuilderSettings,
 } from './contextBuilder';
 import type { TranscriptionLine } from '../types/transcription';
 

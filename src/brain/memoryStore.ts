@@ -15,8 +15,6 @@
 //   { id, text (redacted), embedding, source: { meetingId, meetingIds, date }, createdAt }
 
 import type { RedactionRule } from '../types/redaction';
-import { apply as redact } from './redaction';
-import { cosineSimilarity } from './vectorMath';
 
 // --- Interfaces ---
 
@@ -76,7 +74,6 @@ export class MemoryStore {
   private readonly redactFn: (text: string, rules: RedactionRule[]) => string;
   private readonly dedupThreshold: number;
   private readonly persist: boolean;
-  private readonly defaultRedactionRules: RedactionRule[];
 
   constructor(opts: MemoryStoreOptions) {
     this.generateEmbedding = opts.generateEmbedding;
@@ -84,7 +81,6 @@ export class MemoryStore {
     this.redactFn = opts.redact;
     this.dedupThreshold = opts.dedupThreshold ?? DEFAULT_DEDUP_THRESHOLD;
     this.persist = opts.persist ?? true;
-    this.defaultRedactionRules = [];
   }
 
   /**

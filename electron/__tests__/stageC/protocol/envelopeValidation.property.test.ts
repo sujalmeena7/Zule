@@ -439,7 +439,9 @@ describe('Stage C Protocol — Property Tests', () => {
         fc.property(
           fc.array(
             fc.string({ minLength: 1, maxLength: 15 }).filter(
-              (f) => !['protocolVersion', 'messageId', 'type', 'payload'].includes(f) && /^[a-z_][a-z0-9_]*$/.test(f),
+              (f) =>
+                !['protocolVersion', 'messageId', 'type', 'payload', '__proto__', 'prototype', 'constructor'].includes(f) &&
+                /^[a-z_][a-z0-9_]*$/.test(f),
             ),
             { minLength: 1, maxLength: 3 },
           ),

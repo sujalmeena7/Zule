@@ -18,7 +18,6 @@ import type {
   OverlayStateSnapshot,
   OverlayStatePatch,
   OverlayRenderState,
-  OperationResult,
   OverlayAction,
   AIAction,
   AudioAction,
@@ -122,7 +121,7 @@ export function useBridge(): UseBridgeResult {
     });
 
     // Subscribe to operation results (intent acknowledgements)
-    bridge.onOperationResult((_result: OperationResult) => {
+    bridge.onOperationResult(() => {
       // Operation results can be used for optimistic update rollback
       // or confirmation UI. Currently a no-op placeholder.
     });

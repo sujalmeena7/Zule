@@ -67,7 +67,7 @@ vi.mock('../../utils/ringBuffer', () => ({
 /**
  * Creates a mock video element with controllable readyState and events.
  */
-function createMockVideoElement(readyState = 0): HTMLVideoElement {
+function createMockVideoElement(readyState = 0): HTMLVideoElement & { _emit: (event: string) => void } {
   const listeners: Record<string, Array<() => void>> = {};
 
   const video = {
@@ -142,10 +142,10 @@ describe('waitForFrameReady', () => {
     mockVideo = createMockVideoElement(0);
 
     // Mock document.createElement to return our mock video element
-    vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+    vi.spyOn(document, 'createElement').mockImplementation(((tag: string) => {
       if (tag === 'video') return mockVideo as unknown as HTMLElement;
       return realCreateElement(tag);
-    });
+    }) as unknown as typeof document.createElement);
 
     // Mock document.body.appendChild
     vi.spyOn(document.body, 'appendChild').mockImplementation((node) => node);
@@ -238,10 +238,10 @@ describe('waitForFrameReady', () => {
     mockVideo = createMockVideoElement(2);
 
     // Re-mock createElement so the hook uses our new video with readyState=2
-    vi.mocked(document.createElement).mockImplementation((tag: string) => {
+    vi.mocked(document.createElement).mockImplementation(((tag: string) => {
       if (tag === 'video') return mockVideo as unknown as HTMLElement;
       return realCreateElement(tag);
-    });
+    }) as unknown as typeof document.createElement);
 
     const { result } = renderHook(() => useScreenCapture());
 

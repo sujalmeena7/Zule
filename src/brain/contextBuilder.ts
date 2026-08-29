@@ -448,8 +448,8 @@ function priorityDrop(input: PriorityDropInput): PriorityDropResult {
     countTokens: countFn,
   } = input;
 
-  let knowledge = [...input.knowledge];
-  let memory = [...input.memory];
+  const knowledge = [...input.knowledge];
+  const memory = [...input.memory];
   let transcript = { ...input.transcript };
   let screen = input.screen ? { ...input.screen } : null;
   const droppedSections: string[] = [];

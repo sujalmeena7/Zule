@@ -41,7 +41,7 @@ import { useFocusTrap } from '../overlay/focusTrap';
  */
 export function OverlayShell() {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [isDragging, setIsDragging] = useState(false);
+  const [isDragging] = useState(false);
   const [isModalOpen] = useState(false);
   const [isFocusTrapEnabled, setIsFocusTrapEnabled] = useState(false);
 
@@ -74,10 +74,6 @@ export function OverlayShell() {
       document.body.style.overflow = '';
     };
   }, []);
-
-  // Track drag state via mousedown/mouseup on the drag region
-  const handleDragStart = () => setIsDragging(true);
-  const handleDragEnd = () => setIsDragging(false);
 
   // Activate focus trap when user clicks or focuses inside the overlay
   const handleInteractionStart = () => setIsFocusTrapEnabled(true);

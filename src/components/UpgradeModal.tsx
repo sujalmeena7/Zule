@@ -7,8 +7,6 @@
 
 import { useCallback } from 'react';
 import { X, Check, Zap } from 'lucide-react';
-import { useSubscription } from '../context/SubscriptionContext';
-import { useZule } from '../context/ZuleContext';
 import { type GatedFeature, getMinimumPlan, getPlanConfig } from '../types/subscription';
 import './UpgradeModal.css';
 
@@ -71,20 +69,12 @@ const REASON_CONFIG: Record<string, { icon: string; title: string; message: stri
 };
 
 export function UpgradeModal({ reason, feature, message, onClose }: UpgradeModalProps) {
-  const { upgradeTo } = useSubscription();
-  const { actions } = useZule();
   const config = REASON_CONFIG[reason] ?? REASON_CONFIG['feature-locked'];
 
   // If a specific feature is locked, customize the title
   const title = feature
     ? `Upgrade to ${getPlanConfig(getMinimumPlan(feature) ?? 'pro').name}`
     : config.title;
-
-  const handleUpgrade = useCallback(() => {
-    onClose();
-    actions.navigateTo('settings'); // Navigate to pricing from settings
-    void upgradeTo('pro', 'monthly');
-  }, [onClose, actions, upgradeTo]);
 
   const handleViewPricing = useCallback(() => {
     onClose();

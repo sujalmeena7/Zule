@@ -201,6 +201,15 @@ const REFERENCE_PRELOAD_CHANNELS_NON_SWITCH = new Set<string>([
   'whisper:preload',
   'whisper:release',
   'whisper:transcribe',
+  'capture-desktop-bitblt',
+  'extract-foreground-text',
+  'overlay-blur',
+  'overlay-key',
+  'overlay-request-focus',
+  'phone-image-received',
+  'phone-send-answer',
+  'phone-server-start',
+  'phone-server-stop',
 ]);
 
 const REFERENCE_MAIN_CHANNELS_NON_SWITCH = new Set<string>([
@@ -239,6 +248,11 @@ const REFERENCE_MAIN_CHANNELS_NON_SWITCH = new Set<string>([
   'whisper:preload',
   'whisper:release',
   'whisper:transcribe',
+  'capture-desktop-bitblt',
+  'extract-foreground-text',
+  'phone-send-answer',
+  'phone-server-start',
+  'phone-server-stop',
 ]);
 
 // Unfixed createMainWindow uses width: 1280, height: 800, default OS frame,

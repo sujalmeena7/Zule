@@ -71,7 +71,9 @@ export function useZoneDetector(options: UseZoneDetectorOptions): void {
   // Keep options in a ref so the RAF callback always sees the latest values
   // without needing to re-create the listener on every option change.
   const optionsRef = useRef<UseZoneDetectorOptions>(options);
-  optionsRef.current = options;
+  useEffect(() => {
+    optionsRef.current = options;
+  }, [options]);
 
   const evaluate = useCallback(() => {
     rafHandleRef.current = null;

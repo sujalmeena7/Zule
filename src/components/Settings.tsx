@@ -221,9 +221,6 @@ function describeConnectionTestResult(
   };
 }
 
-/** Explanation attached to the Test connection button while it is disabled. */
-const CUSTOM_TEST_DISABLED_HINT =
-  'Enter a Base URL, an API key, and a Model ID to test the connection.';
 
 /** Shared styling for the Custom_Provider field labels. */
 const CUSTOM_FIELD_LABEL_STYLE: CSSProperties = {
@@ -2068,58 +2065,56 @@ export function Settings() {
                       )}
 
                       {/* Per-provider Connection Test */}
-                      {provider.id !== 'simulation' && (
-                        <div
+                      <div
+                        style={{
+                          marginTop: '8px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '8px',
+                          flexWrap: 'wrap',
+                        }}
+                      >
+                        <button
+                          className="btn-secondary"
+                          onClick={() => handleTestProviderConnection(provider.id)}
+                          disabled={
+                            !canTestProviderConnection(provider.id) ||
+                            providerTestStatus[provider.id]?.state === 'testing'
+                          }
+                          aria-busy={providerTestStatus[provider.id]?.state === 'testing'}
+                          aria-label={`Test connection to ${PROVIDER_LABELS[provider.id] ?? provider.id}`}
                           style={{
-                            marginTop: '8px',
-                            display: 'flex',
+                            padding: '4px 10px',
+                            fontSize: '0.75rem',
+                            display: 'inline-flex',
                             alignItems: 'center',
-                            gap: '8px',
-                            flexWrap: 'wrap',
+                            gap: '4px',
                           }}
                         >
-                          <button
-                            className="btn-secondary"
-                            onClick={() => handleTestProviderConnection(provider.id)}
-                            disabled={
-                              !canTestProviderConnection(provider.id) ||
-                              providerTestStatus[provider.id]?.state === 'testing'
+                          <Play size={11} aria-hidden="true" />
+                          {providerTestStatus[provider.id]?.state === 'testing'
+                            ? 'Testing…'
+                            : 'Test connection'}
+                        </button>
+                        {providerTestStatus[provider.id] && (
+                          <span
+                            role="status"
+                            aria-live="polite"
+                            className={
+                              providerTestStatus[provider.id]?.state === 'ok'
+                                ? 'pill pill-green'
+                                : providerTestStatus[provider.id]?.state === 'failed'
+                                  ? 'pill pill-red'
+                                  : 'pill pill-yellow'
                             }
-                            aria-busy={providerTestStatus[provider.id]?.state === 'testing'}
-                            aria-label={`Test connection to ${PROVIDER_LABELS[provider.id] ?? provider.id}`}
-                            style={{
-                              padding: '4px 10px',
-                              fontSize: '0.75rem',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '4px',
-                            }}
+                            style={{ fontSize: '0.72rem' }}
                           >
-                            <Play size={11} aria-hidden="true" />
                             {providerTestStatus[provider.id]?.state === 'testing'
-                              ? 'Testing…'
-                              : 'Test connection'}
-                          </button>
-                          {providerTestStatus[provider.id] && (
-                            <span
-                              role="status"
-                              aria-live="polite"
-                              className={
-                                providerTestStatus[provider.id]?.state === 'ok'
-                                  ? 'pill pill-green'
-                                  : providerTestStatus[provider.id]?.state === 'failed'
-                                    ? 'pill pill-red'
-                                    : 'pill pill-yellow'
-                              }
-                              style={{ fontSize: '0.72rem' }}
-                            >
-                              {providerTestStatus[provider.id]?.state === 'testing'
-                                ? 'Testing connection…'
-                                : (providerTestStatus[provider.id] as { message?: string } | undefined)?.message}
-                            </span>
-                          )}
-                        </div>
-                      )}
+                              ? 'Testing connection…'
+                              : (providerTestStatus[provider.id] as { message?: string } | undefined)?.message}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>

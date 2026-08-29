@@ -131,13 +131,13 @@ describe('FramePrepWorker Property Tests', () => {
     (globalThis as unknown as Record<string, unknown>).ImageData = MockImageData;
 
     // Mock document.createElement to intercept canvas creation
-    vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+    vi.spyOn(document, 'createElement').mockImplementation(((tag: string) => {
       if (tag === 'canvas') {
         return createMockCanvasElement() as unknown as HTMLCanvasElement;
       }
       // For non-canvas elements, create a minimal stub
       return { tagName: tag.toUpperCase() } as unknown as HTMLElement;
-    });
+    }) as unknown as typeof document.createElement);
   });
 
   afterEach(() => {

@@ -92,7 +92,12 @@ export async function generateSummaryWithTimeout(
   }
 
   try {
-    const summaryPromise = generateMeetingSummary(meeting.transcript, apiKey, controller.signal);
+    const transcriptLines = (meeting.transcript || []).map((l) => ({
+      ...l,
+      speaker: (l.speaker === 'user' ? 'user' : 'other') as 'user' | 'other',
+      isInterim: false,
+    }));
+    const summaryPromise = generateMeetingSummary(transcriptLines, apiKey, controller.signal);
 
     // Timeout race (Requirement 27.3)
     const timeoutPromise = new Promise<'timeout'>((resolve) => {
@@ -201,7 +206,7 @@ async function saveKeyFactsToMemory(facts: string[], meetingId: string): Promise
     const rules = await db.getSetting<import('../types/redaction').RedactionRule[]>('redactionRules', []);
 
     const memoryStore = new MemoryStore({
-      generateEmbedding: (text: string) => vectorStore.generateEmbedding(text),
+      generateEmbedding: async (text: string) => Float32Array.from(await vectorStore.generateEmbedding(text)),
       cosineSimilarity,
       redact,
     });

@@ -325,9 +325,8 @@ describe('AI_Provider_Router', () => {
         signal: controller.signal,
       });
 
-      // Since the adapter internally handles abort, onComplete may or may not
-      // be called depending on timing. The key guarantee is at the router level.
-      // The test verifies the router doesn't throw and respects adapter's abort handling.
+      // Verify onComplete was not called after abort
+      expect(onCompleteCalled).toBe(false);
     });
   });
 

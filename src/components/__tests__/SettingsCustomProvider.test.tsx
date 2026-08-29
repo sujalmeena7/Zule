@@ -311,9 +311,9 @@ const apiKeyArb: fc.Arbitrary<string> = fc
 
 /** The "Save Provider Config" button, whatever its transient label. */
 function saveProvidersButton(): HTMLButtonElement {
-  const button = Array.from(document.querySelectorAll('button')).find((el) => {
+  const button = document.querySelector('.provider-actions button') ?? Array.from(document.querySelectorAll('button')).find((el) => {
     const label = (el.textContent ?? '').trim();
-    return label === 'Save Provider Config' || label === 'Saving...';
+    return label.includes('Provider') || label === 'Save Provider Config' || label === 'Saving Config...' || label === 'Saved!';
   });
   if (!(button instanceof HTMLButtonElement)) {
     throw new Error('the "Save Provider Config" button is not rendered');

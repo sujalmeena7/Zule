@@ -14,12 +14,11 @@
 //   text field has been passed through redaction.
 //   **Validates: Requirements 10.5**
 
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach } from 'vitest';
 import * as fc from 'fast-check';
 import {
   MemoryStore,
   DEFAULT_DEDUP_THRESHOLD,
-  type MemoryFact,
   type MemorySource,
 } from './memoryStore';
 import type { RedactionRule } from '../types/redaction';
@@ -126,7 +125,7 @@ function noopRedact(text: string): string {
 }
 
 /** A redaction function that uppercases all emails. */
-function emailRedact(text: string, rules: RedactionRule[]): string {
+function emailRedact(text: string, _rules?: RedactionRule[]): string {
   // Simple: replace anything that looks like an email
   return text.replace(
     /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,

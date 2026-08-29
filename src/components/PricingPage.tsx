@@ -14,6 +14,7 @@ import {
   type BillingInterval,
   PLAN_CONFIGS,
 } from '../types/subscription';
+import toast from 'react-hot-toast';
 import './PricingPage.css';
 
 // --- Feature list for each tier ---
@@ -203,15 +204,8 @@ function SubscriptionManagementPanel() {
           <button
             className="sub-mgmt-action-btn sub-mgmt-invoice-btn"
             onClick={() => {
-              // Open Razorpay subscription management portal
-              // Usually handled by customer portal link. We'll use a generic support link for this example or if you have a specific portal URL you can put it here.
-              // For Razorpay, merchants typically create a customer portal link or handle it via API.
-              // If you don't have a direct portal link, this button can just say "Contact Support to Manage" or point to a specific route.
-              // For now, we'll open the external URL if it exists, or just alert.
               if (typeof window !== 'undefined' && window.electronAPI?.openExternal) {
-                // If you have a specific Razorpay Hosted Page URL or Customer Portal URL, put it here.
-                // For this demo, let's just show an alert or open a dummy URL.
-                 window.alert("To cancel or modify your payment method, please contact support or check your email for the Razorpay subscription link.");
+                toast("To cancel or modify your payment method, please contact support or check your email for the Razorpay subscription link.");
               }
             }}
           >

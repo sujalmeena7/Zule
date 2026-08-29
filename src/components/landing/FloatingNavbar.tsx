@@ -327,10 +327,7 @@ export function FloatingNavbar({
   // Requirements: 2.1, 2.3, 2.4, 2.7
   // ----------------------------------------------------------------
   const shellRef = useRef<HTMLDivElement | null>(null);
-  // Indicator geometry is committed before paint by the useLayoutEffect below.
-  // It will be consumed by ActiveIndicator once task 3.1 refactors it.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const [indicatorGeometry, setIndicatorGeometry] =
+  const [, setIndicatorGeometry] =
     useState<IndicatorGeometry | null>(null);
 
   // ----------------------------------------------------------------

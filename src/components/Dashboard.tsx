@@ -6,7 +6,7 @@
 import {
   Play, Clock, Sparkles, Mic, Code, Briefcase, Target,
   ShoppingCart, BarChart3, FileText, ChevronRight, Wand2, Zap,
-  Lock, Trash2, Shield
+  Lock, Trash2
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { MODE_CONFIGS, type CopilotMode } from '../brain/modePrompts';

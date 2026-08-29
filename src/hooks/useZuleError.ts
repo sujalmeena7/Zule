@@ -118,7 +118,7 @@ export function describeZuleError(e: ZuleError): ToastSpec {
         };
       }
       return {
-        message: '',
+        message: 'Screen text recognition encountered an error. Restarting…',
         severity: 'status',
         silent: true,
       };
@@ -236,6 +236,11 @@ export function describeZuleError(e: ZuleError): ToastSpec {
     case 'unhandled-rejection':
       return {
         message: `An unexpected error occurred (${e.name}).`,
+        severity: 'status',
+      };
+    default:
+      return {
+        message: 'An unexpected error occurred.',
         severity: 'status',
       };
   }

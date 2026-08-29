@@ -140,7 +140,7 @@ export function useSpeechRecognition(): SpeechRecognitionHook {
 
     try {
       recognition.start();
-    } catch (e) {
+    } catch (_e) {
       toast.error('Failed to start speech recognition. Please try again.');
       setIsListening(false);
       isListeningRef.current = false;

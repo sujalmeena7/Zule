@@ -10,7 +10,7 @@
 //     originating provider id, model id, rating, and createdAt.
 //   - 26.2 — Aggregate ratings per provider, per mode, per modality.
 
-import { database, STORE_RATINGS } from '../data/database';
+import { database } from '../data/database';
 
 // --- Types ---
 

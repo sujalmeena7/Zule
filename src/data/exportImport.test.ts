@@ -119,7 +119,7 @@ describe('validateExport — happy path', () => {
     const result = validateExport(payload as unknown);
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect((result.value as Record<string, unknown>).extra).toBeUndefined();
+      expect((result.value as unknown as Record<string, unknown>).extra).toBeUndefined();
     }
   });
 

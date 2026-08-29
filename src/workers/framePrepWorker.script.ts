@@ -114,7 +114,6 @@ async function encodeJpeg(
 
   let currentWidth = width;
   let currentHeight = height;
-  let currentPixels = pixelData;
   let quality = initialQuality;
   let reEncodeCount = 0;
 
@@ -125,7 +124,7 @@ async function encodeJpeg(
     if (!ctx) {
       throw new Error('framePrepWorker: failed to get 2d context on OffscreenCanvas');
     }
-    const imageData = new ImageData(pixels, w, h);
+    const imageData = new ImageData(pixels as unknown as ImageDataArray, w, h);
     ctx.putImageData(imageData, 0, 0);
     return canvas;
   }
@@ -149,7 +148,7 @@ async function encodeJpeg(
     return { canvas: dstCanvas, pixels: dstPixels, width: newW, height: newH };
   }
 
-  let canvas = createCanvas(currentPixels, currentWidth, currentHeight);
+  let canvas = createCanvas(pixelData, currentWidth, currentHeight);
 
   while (reEncodeCount <= MAX_REENCODE_PASSES) {
     const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality });
@@ -192,7 +191,6 @@ async function encodeJpeg(
       const scaled = downscaleCanvas(canvas, currentWidth, currentHeight, DIMENSION_SCALE_FACTOR);
       currentWidth = scaled.width;
       currentHeight = scaled.height;
-      currentPixels = scaled.pixels;
       canvas = scaled.canvas;
       // Reset quality to allow another round of quality reduction at the new size
       quality = initialQuality;
@@ -221,7 +219,11 @@ function downscalePixels(
     throw new Error('framePrepWorker: failed to get 2d context for source canvas');
   }
 
-  const srcImageData = new ImageData(new Uint8ClampedArray(sourceData.buffer, sourceData.byteOffset, sourceData.byteLength), srcWidth, srcHeight);
+  const srcImageData = new ImageData(
+    new Uint8ClampedArray(sourceData.buffer, sourceData.byteOffset, sourceData.byteLength) as unknown as ImageDataArray,
+    srcWidth,
+    srcHeight,
+  );
   srcCtx.putImageData(srcImageData, 0, 0);
 
   const dstCanvas = new OffscreenCanvas(dstWidth, dstHeight);

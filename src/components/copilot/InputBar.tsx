@@ -236,16 +236,17 @@ export function InputBar({
 
     // Browser fallback: Web Speech API (web mode only).
     try {
-      // @ts-ignore - SpeechRecognition is not fully typed
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (!SpeechRecognition) {
+      const SpeechRecognitionClass =
+        (window as unknown as { SpeechRecognition?: new () => any; webkitSpeechRecognition?: new () => any }).SpeechRecognition ||
+        (window as unknown as { SpeechRecognition?: new () => any; webkitSpeechRecognition?: new () => any }).webkitSpeechRecognition;
+      if (!SpeechRecognitionClass) {
         // Replaces previous `alert(...)` with the central toast pipeline
         // (Requirement 18.7).
         notifyError({ kind: 'transcription.unsupported' });
         return;
       }
 
-      const recognition = new SpeechRecognition();
+      const recognition = new SpeechRecognitionClass();
       recognition.continuous = true;
       recognition.interimResults = true;
 
