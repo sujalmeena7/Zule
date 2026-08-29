@@ -101,18 +101,25 @@ export function useTranscription(opts: UseTranscriptionOptions = {}): UseTranscr
 
     if (useWhisper && hasElectronWhisper) {
       try {
-        await bridge.whisperPreload?.({});
+        await bridge.whisperPreload?.({ pipeline: 'microphone' });
       } catch (err) {
         console.warn('[useTranscription] Whisper preload failed:', err);
       }
 
       activeProvider = new WhisperProvider({
+        pipelineId: 'microphone',
         language: language.startsWith('en') ? 'en' : language,
         speakerId,
         speakerRole,
-        transcribeFn: async (pcm) => {
-          const { text } = await bridge.whisperTranscribe(pcm, { language });
-          return text;
+        transcribeFn: async (pcm, opts) => {
+          const result = await bridge.whisperTranscribe(pcm, {
+            language: opts.language ?? (language.startsWith('en') ? 'en' : language),
+            kind: opts.kind,
+            seq: opts.seq,
+            pipeline: 'microphone',
+            modelId: opts.modelId,
+          });
+          return result;
         },
       });
     } else {
@@ -208,6 +215,7 @@ export function useTranscription(opts: UseTranscriptionOptions = {}): UseTranscr
       if (providerRef.current) {
         providerRef.current.destroy();
       }
+      (window as any).electronAPI?.whisperRelease?.({ pipeline: 'microphone' })?.catch?.(() => undefined);
       cleanupSubscriptions();
     };
   }, [cleanupSubscriptions]);

@@ -4,89 +4,50 @@
 //
 // Runs on the dedicated audio rendering thread. Captures 16 kHz mono PCM from
 // an AudioWorkletNode, performs lightweight energy-based voice activity
-// detection per 128-sample frame, and posts complete speech chunks to the main
-// thread via MessagePort when:
+// detection per 128-sample frame, and posts speech chunks to the main thread:
 //
-//   1. Speech ends (trailing silence exceeds HANGOVER_FRAMES), OR
-//   2. The buffer exceeds MAX_BUFFER_SAMPLES (hard cap for sustained speech).
+//   1. Speech ends (trailing silence exceeds hangoverFrames), OR
+//   2. The buffer exceeds maxBufferSamples (hard cap for sustained speech),
+//      retaining an overlap tail to prevent cutting words mid-syllable, OR
+//   3. Partial interim frames (when partialsEnabled is true and speech >= 700ms).
 //
-// Chunks shorter than MIN_CHUNK_SAMPLES are discarded (Whisper hallucinates on
-// sub-200ms audio).
-//
-// This replaces the deprecated ScriptProcessorNode which ran on the main
-// thread and blocked rendering.
-//
-// ── Constraints ──────────────────────────────────────────────────────────────
-// AudioWorkletProcessor.process() runs in a real-time audio context with no
-// access to setTimeout, Date.now(), fetch, or any async API. All timing is
-// derived from frame counts (128 samples = 8 ms at 16 kHz).
+// Discards silent frames without allocating or posting empty buffers.
+// Maintains a 300 ms pre-roll circular buffer to prevent clipping the first word.
 // ============================================================================
 
-// ── Constants (16 kHz mono, 128-sample frames = 8 ms per process() call) ────
-
-/** Samples per process() invocation (Web Audio spec). */
 const RENDER_QUANTUM = 128;
-
-/** Sample rate — must match the AudioContext that loads this processor. */
 const SAMPLE_RATE = 16000;
-
-/** Milliseconds per render quantum at 16 kHz. */
 const MS_PER_FRAME = (RENDER_QUANTUM / SAMPLE_RATE) * 1000; // 8 ms
 
-/**
- * Per-frame RMS below this is silence. Lower than vad.ts's SPEECH_FLOOR
- * (0.02) because this is a per-frame check, not median-of-frames.
- */
 let silenceFloor = 0.008;
+let hangoverFrames = Math.ceil(300 / MS_PER_FRAME); // 38 frames ≈ 304 ms
+let maxBufferSamples = Math.ceil(2000 / MS_PER_FRAME) * RENDER_QUANTUM; // 2000 ms = 32000 samples
+const MIN_CHUNK_SAMPLES = Math.ceil(120 / MS_PER_FRAME) * RENDER_QUANTUM; // 15 frames = 1920 samples (~120 ms)
 
-/**
- * Trailing silence frames before flushing. 300 ms ÷ 8 ms = 37.5 → 38 frames.
- * Short enough to feel responsive, long enough that natural mid-sentence
- * pauses (commas, thinking) don't cause premature flushes.
- */
-let hangoverFrames = Math.ceil(300 / MS_PER_FRAME); // 38
+// Pre-roll: ~300 ms circular buffer
+const PRE_ROLL_SAMPLES = Math.ceil(300 / MS_PER_FRAME) * RENDER_QUANTUM; // ~4864 samples
+const preRollBuffer = new Float32Array(PRE_ROLL_SAMPLES);
+let preRollWritePos = 0;
+let preRollCount = 0;
 
-/**
- * Hard cap on buffer duration. 3000 ms ÷ 8 ms = 375 frames × 128 = 48000
- * samples. Prevents unbounded accumulation during sustained speech.
- */
-let maxBufferSamples = Math.ceil(3000 / MS_PER_FRAME) * RENDER_QUANTUM; // 48000
+// Overlap tail on hard-cap drain only: ~250 ms
+const OVERLAP_TAIL_SAMPLES = Math.ceil(250 / MS_PER_FRAME) * RENDER_QUANTUM; // ~4000 samples
 
-/**
- * Minimum chunk size worth sending. 200 ms ÷ 8 ms = 25 frames × 128 = 3200
- * samples. Whisper hallucinates on sub-200 ms audio.
- */
-const MIN_CHUNK_SAMPLES = Math.ceil(200 / MS_PER_FRAME) * RENDER_QUANTUM; // 3200
+// Partials config & state
+let partialsEnabled = false;
+let partialIntervalMs = 600;
+let minPartialMs = 700;
+let framesSinceLastPartial = 0;
+let partialSeq = 0;
 
-// ── Ring buffer ─────────────────────────────────────────────────────────────
-
-/**
- * Pre-allocated ring buffer. 5 seconds at 16 kHz = 80000 samples — enough
- * headroom above maxBufferSamples (48000) to avoid reallocation.
- */
 let ringBuffer = new Float32Array(80000);
-/** Write cursor into ringBuffer. */
 let writePos = 0;
-
-// ── VAD state ───────────────────────────────────────────────────────────────
-
-/** Consecutive silence frames since last speech frame. */
 let silenceCount = 0;
-/** Whether the previous frame was classified as speech. */
 let wasSpeech = false;
-/** Whether we've seen at least one speech frame in the current buffer. */
 let bufferHasSpeech = false;
-/** Whether capture is paused (main thread can toggle). */
 let paused = false;
-/** Whether a flush was requested (teardown path). */
 let flushRequested = false;
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
-
-/**
- * RMS energy of a 128-sample frame. Inlined for real-time performance — no
- * function call overhead in the hot path.
- */
 function frameRms(samples, offset, length) {
   let sumSq = 0;
   const end = offset + length;
@@ -97,21 +58,17 @@ function frameRms(samples, offset, length) {
   return Math.sqrt(sumSq / length);
 }
 
-/**
- * Extract the buffered PCM as a new Float32Array and reset the write cursor.
- * Returns null if the buffer is empty.
- */
 function drainBuffer() {
   if (writePos === 0) return null;
-  // Slice out the written region — this allocates a new buffer.
   const chunk = ringBuffer.slice(0, writePos);
   writePos = 0;
   bufferHasSpeech = false;
   silenceCount = 0;
+  preRollCount = 0;
+  preRollWritePos = 0;
+  framesSinceLastPartial = 0;
   return chunk;
 }
-
-// ── Processor ───────────────────────────────────────────────────────────────
 
 class PcmCaptureProcessor extends AudioWorkletProcessor {
   constructor() {
@@ -122,7 +79,6 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
   _handleMessage(msg) {
     switch (msg.type) {
       case 'config':
-        // Live reconfiguration from the main thread (e.g. Settings change).
         if (typeof msg.silenceFloor === 'number' && msg.silenceFloor > 0) {
           silenceFloor = msg.silenceFloor;
         }
@@ -131,69 +87,98 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
         }
         if (typeof msg.maxBufferMs === 'number' && msg.maxBufferMs > 0) {
           maxBufferSamples = Math.ceil(msg.maxBufferMs / MS_PER_FRAME) * RENDER_QUANTUM;
-          // Resize ring buffer if needed.
-          const needed = maxBufferSamples + RENDER_QUANTUM * 50; // headroom
+          const needed = maxBufferSamples + RENDER_QUANTUM * 50;
           if (ringBuffer.length < needed) {
             const newBuf = new Float32Array(needed);
             newBuf.set(ringBuffer.subarray(0, writePos));
             ringBuffer = newBuf;
           }
         }
+        if (typeof msg.partialsEnabled === 'boolean') {
+          partialsEnabled = msg.partialsEnabled;
+        }
+        if (typeof msg.partialIntervalMs === 'number' && msg.partialIntervalMs > 0) {
+          partialIntervalMs = msg.partialIntervalMs;
+        }
+        if (typeof msg.minPartialMs === 'number' && msg.minPartialMs > 0) {
+          minPartialMs = msg.minPartialMs;
+        }
         break;
-
       case 'flush':
-        // Teardown: drain whatever is in the buffer and signal completion.
         flushRequested = true;
         break;
-
       case 'pause':
         paused = true;
         break;
-
       case 'resume':
         paused = false;
         break;
     }
   }
 
-  /**
-   * Called by the audio rendering thread for every 128-sample quantum.
-   * Returns `true` to keep the processor alive.
-   */
   process(inputs) {
-    // Handle flush request (teardown path).
     if (flushRequested) {
       flushRequested = false;
-      const chunk = drainBuffer();
-      if (chunk && chunk.length >= MIN_CHUNK_SAMPLES) {
-        // Transfer ownership — zero-copy move to main thread.
-        this.port.postMessage({ type: 'chunk', pcm: chunk }, [chunk.buffer]);
+      if (bufferHasSpeech && writePos >= MIN_CHUNK_SAMPLES) {
+        const chunk = drainBuffer();
+        if (chunk) {
+          this.port.postMessage({ type: 'chunk', pcm: chunk }, [chunk.buffer]);
+        }
+      } else {
+        drainBuffer();
       }
       this.port.postMessage({ type: 'flush-done' });
       return true;
     }
 
     if (paused) return true;
-
-    // Guard: no input connected or empty channel.
     const input = inputs[0];
     if (!input || !input[0] || input[0].length === 0) return true;
 
-    const samples = input[0]; // mono channel, 128 samples
-
-    // ── Per-frame energy check ────────────────────────────────────────────
+    const samples = input[0];
     const energy = frameRms(samples, 0, samples.length);
     const isSpeech = energy > silenceFloor;
 
-    // Emit VAD state transitions so the UI can show a speaking indicator.
     if (isSpeech !== wasSpeech) {
-      // Small message — no Transferable needed.
       this.port.postMessage({ type: 'vad', isSpeech: isSpeech, energy: energy });
       wasSpeech = isSpeech;
     }
 
-    // ── Accumulate into ring buffer ───────────────────────────────────────
-    // Ensure capacity (defensive — ring buffer is pre-allocated with headroom).
+    // ── Pre-roll / Speech onset ──
+    if (!bufferHasSpeech) {
+      if (isSpeech) {
+        bufferHasSpeech = true;
+        silenceCount = 0;
+        framesSinceLastPartial = 0;
+
+        // Copy circular pre-roll buffer to head of ring buffer
+        if (preRollCount > 0) {
+          const startIdx = (preRollWritePos - preRollCount + PRE_ROLL_SAMPLES) % PRE_ROLL_SAMPLES;
+          if (startIdx + preRollCount <= PRE_ROLL_SAMPLES) {
+            ringBuffer.set(preRollBuffer.subarray(startIdx, startIdx + preRollCount), 0);
+          } else {
+            const firstPart = PRE_ROLL_SAMPLES - startIdx;
+            ringBuffer.set(preRollBuffer.subarray(startIdx, PRE_ROLL_SAMPLES), 0);
+            ringBuffer.set(preRollBuffer.subarray(0, preRollCount - firstPart), firstPart);
+          }
+          writePos = preRollCount;
+        } else {
+          writePos = 0;
+        }
+        preRollCount = 0;
+        preRollWritePos = 0;
+      } else {
+        // Accumulate silence in circular pre-roll buffer without posting anything
+        for (let i = 0; i < samples.length; i++) {
+          preRollBuffer[preRollWritePos] = samples[i];
+          preRollWritePos = (preRollWritePos + 1) % PRE_ROLL_SAMPLES;
+        }
+        preRollCount = Math.min(preRollCount + samples.length, PRE_ROLL_SAMPLES);
+        return true;
+      }
+    }
+
+    // ── Accumulate speech audio ──
     if (writePos + samples.length > ringBuffer.length) {
       const newBuf = new Float32Array(ringBuffer.length * 2);
       newBuf.set(ringBuffer.subarray(0, writePos));
@@ -203,38 +188,67 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
     writePos += samples.length;
 
     if (isSpeech) {
-      bufferHasSpeech = true;
       silenceCount = 0;
     } else {
       silenceCount++;
     }
 
-    // ── Flush decisions ───────────────────────────────────────────────────
+    framesSinceLastPartial++;
 
-    let shouldFlush = false;
+    // ── Partials (without draining buffer) ──
+    const minPartialSamples = Math.ceil(minPartialMs / MS_PER_FRAME) * RENDER_QUANTUM;
+    if (
+      partialsEnabled &&
+      bufferHasSpeech &&
+      writePos >= minPartialSamples &&
+      (framesSinceLastPartial * MS_PER_FRAME) >= partialIntervalMs
+    ) {
+      framesSinceLastPartial = 0;
+      const partialPcm = ringBuffer.slice(0, writePos);
+      this.port.postMessage({ type: 'partial', pcm: partialPcm, seq: ++partialSeq });
+    }
 
-    // 1. Speech ended: trailing silence exceeded hangover threshold AND
-    //    the buffer contains at least one speech frame.
+    // ── Flush decisions ──
+    let flushReason = null; // 'hangover' | 'cap' | null
     if (bufferHasSpeech && silenceCount >= hangoverFrames) {
-      shouldFlush = true;
+      flushReason = 'hangover';
+    } else if (writePos >= maxBufferSamples) {
+      flushReason = 'cap';
     }
 
-    // 2. Hard cap: buffer is too large (sustained speech without pause).
-    if (writePos >= maxBufferSamples) {
-      shouldFlush = true;
-    }
+    if (flushReason !== null) {
+      if (bufferHasSpeech && writePos >= MIN_CHUNK_SAMPLES) {
+        const chunk = ringBuffer.slice(0, writePos);
 
-    if (shouldFlush && writePos >= MIN_CHUNK_SAMPLES) {
-      const chunk = drainBuffer();
-      if (chunk) {
-        // Transfer ownership — zero-copy move to main thread.
+        if (flushReason === 'cap') {
+          // Hard-cap flush: preserve overlap tail to prevent cutting words mid-syllable
+          const tailLen = Math.min(writePos, OVERLAP_TAIL_SAMPLES);
+          const tail = ringBuffer.slice(writePos - tailLen, writePos);
+          ringBuffer.set(tail, 0);
+          writePos = tailLen;
+          bufferHasSpeech = true;
+          silenceCount = 0;
+          framesSinceLastPartial = 0;
+        } else {
+          // Utterance genuinely ended: clean reset
+          writePos = 0;
+          bufferHasSpeech = false;
+          silenceCount = 0;
+          preRollCount = 0;
+          preRollWritePos = 0;
+          framesSinceLastPartial = 0;
+        }
+
         this.port.postMessage({ type: 'chunk', pcm: chunk }, [chunk.buffer]);
+      } else {
+        // Discard sub-minimum or silent chunks silently
+        writePos = 0;
+        bufferHasSpeech = false;
+        silenceCount = 0;
+        preRollCount = 0;
+        preRollWritePos = 0;
+        framesSinceLastPartial = 0;
       }
-    } else if (shouldFlush) {
-      // Buffer too short to be useful — discard silently.
-      writePos = 0;
-      bufferHasSpeech = false;
-      silenceCount = 0;
     }
 
     return true;

@@ -76,8 +76,6 @@ export function getWorkletUrl(): string {
   return '/pcm-capture-processor.js';
 }
 
-const WORKLET_URL = getWorkletUrl();
-
 /**
  * Sample rate expected by Whisper models (16 kHz mono).
  */
@@ -154,31 +152,36 @@ export interface WhisperProviderOptions {
   speakerRole?: 'user' | 'other';
   /**
    * Maximum buffer duration (ms) before the AudioWorklet forces a flush.
-   * Default is 3000 ms. Lower values decrease max latency for sustained
-   * speech at the cost of more, smaller chunks.
+   * Default is 2000 ms.
    */
   maxBufferMs?: number;
   /**
-   * Try the WebGPU backend before WASM. Defaults to FALSE: the onnxruntime-web
-   * WebGPU/JSEP backend natively crashes the Electron renderer on session
-   * build (observed on Electron 42, uncatchable), so by default we use the WASM
-   * backend only. Set true to force WebGPU first on machines where it's proven
-   * stable.
-   *
-   * NOTE: only relevant when running inference in-renderer (no `transcribeFn`).
-   * When a `transcribeFn` is supplied, inference happens out-of-process and
-   * this option is ignored.
+   * Try the WebGPU backend before WASM. Defaults to FALSE.
    */
   preferWebGPU?: boolean;
+  /** Audio pipeline identifier ('loopback' or 'microphone'). Default 'microphone'. */
+  pipelineId?: 'loopback' | 'microphone';
+  /** Partials configuration for real-time interim speech-to-text. */
+  partials?: {
+    enabled?: boolean;
+    intervalMs?: number;
+    minPartialMs?: number;
+  };
   /**
    * Inject an external inference function. When provided, the provider does
    * NOT load any in-renderer ML model — it only CAPTURES audio and delegates
-   * transcription to this function (one chunk of 16 kHz mono Float32 PCM in,
-   * recognised text out). This is how system-audio transcription runs Whisper
-   * in the Electron main process (onnxruntime-node) instead of the renderer,
-   * which crashes on the WASM/WebGPU engine (0xC0000005).
+   * transcription to this function.
    */
-  transcribeFn?: (pcm: Float32Array, opts: { language: string }) => Promise<string>;
+  transcribeFn?: (
+    pcm: Float32Array,
+    opts: {
+      language?: string;
+      kind?: 'final' | 'partial';
+      seq?: number;
+      pipeline?: 'loopback' | 'microphone';
+      modelId?: string;
+    },
+  ) => Promise<{ text: string; queueMs?: number; inferMs?: number } | string>;
 }
 
 // ---- Internal types ----
@@ -213,7 +216,22 @@ export class WhisperProvider {
   private speakerRole: 'user' | 'other';
   private maxBufferMs: number;
   private preferWebGPU: boolean;
-  private transcribeFn?: (pcm: Float32Array, opts: { language: string }) => Promise<string>;
+  public readonly pipelineId: 'loopback' | 'microphone';
+  private partialsEnabled: boolean;
+  private partialIntervalMs: number;
+  private minPartialMs: number;
+  private lastProcessedPartialSeq = 0;
+  private isPartialInFlight = false;
+  private transcribeFn?: (
+    pcm: Float32Array,
+    opts: {
+      language?: string;
+      kind?: 'final' | 'partial';
+      seq?: number;
+      pipeline?: 'loopback' | 'microphone';
+      modelId?: string;
+    },
+  ) => Promise<{ text: string; queueMs?: number; inferMs?: number } | string>;
 
   // Audio pipeline
   private mediaStream: MediaStream | null = null;
@@ -260,6 +278,10 @@ export class WhisperProvider {
     this.speakerRole = opts.speakerRole ?? 'user';
     this.maxBufferMs = opts.maxBufferMs ?? DEFAULT_MAX_BUFFER_MS;
     this.preferWebGPU = opts.preferWebGPU ?? false;
+    this.pipelineId = opts.pipelineId ?? 'microphone';
+    this.partialsEnabled = opts.partials?.enabled ?? false;
+    this.partialIntervalMs = opts.partials?.intervalMs ?? 600;
+    this.minPartialMs = opts.partials?.minPartialMs ?? 700;
     this.transcribeFn = opts.transcribeFn;
   }
 
@@ -644,6 +666,9 @@ export class WhisperProvider {
     this.workletNode.port.postMessage({
       type: 'config',
       maxBufferMs: this.maxBufferMs,
+      partialsEnabled: this.partialsEnabled,
+      partialIntervalMs: this.partialIntervalMs,
+      minPartialMs: this.minPartialMs,
     });
 
     // Handle messages from the worklet (chunks, VAD state, flush-done).
@@ -770,8 +795,8 @@ export class WhisperProvider {
    *     forwards (returns `true`) so the loopback integration tests
    *     keep their assertions (Requirement 9.3 partner).
    *   - Skips the IPC and emits exactly one `vad.skipped` telemetry
-   *     event with `pipeline: 'microphone'` per gated chunk
-   *     (Requirement 10.3, Property 21).
+   *     event tagged with this provider's own `pipelineId` (`'loopback'`
+   *     or `'microphone'`) per gated chunk (Requirement 10.3, Property 21).
    *   - On a thrown VAD or an out-of-range score the chunk is forwarded
    *     anyway and a typed `transcription.vad-failed` error event is
    *     emitted. Forwarding-on-failure preserves transcription
@@ -789,7 +814,7 @@ export class WhisperProvider {
         name: 'transcription.vad-failed',
         message: err instanceof Error ? err.message : String(err),
         stack: err instanceof Error && err.stack ? err.stack : '',
-        breadcrumb: ['vad:scoreChunk:threw', 'pipeline:microphone'],
+        breadcrumb: ['vad:scoreChunk:threw', `pipeline:${this.pipelineId}`],
       });
       return true;
     }
@@ -806,7 +831,7 @@ export class WhisperProvider {
         name: 'transcription.vad-failed',
         message: `invalid VAD score ${String(score)}`,
         stack: '',
-        breadcrumb: ['vad:scoreChunk:invalid-score', 'pipeline:microphone'],
+        breadcrumb: ['vad:scoreChunk:invalid-score', `pipeline:${this.pipelineId}`],
       });
       return true;
     }
@@ -816,7 +841,7 @@ export class WhisperProvider {
       // and crucially do NOT touch `audioContext`, `processorNode`,
       // `mediaStream`, or `_isListening` — Property 16 requires those to
       // remain `===` across consecutive silent chunks (Requirement 6.3).
-      telemetry.emit({ kind: 'vad.skipped', pipeline: 'microphone' });
+      telemetry.emit({ kind: 'vad.skipped', pipeline: this.pipelineId });
       return false;
     }
 
@@ -825,15 +850,32 @@ export class WhisperProvider {
 
   /**
    * Handle messages from the AudioWorklet processor. Dispatches chunk
-   * processing, VAD state transitions, and flush completion.
+   * processing, partial interim processing, VAD state transitions, and flush completion.
    */
   private handleWorkletMessage(data: {
     type: string;
     pcm?: Float32Array;
     isSpeech?: boolean;
     energy?: number;
+    seq?: number;
   }): void {
     switch (data.type) {
+      case 'partial': {
+        if (!this._isListening || !data.pcm || !this.partialsEnabled) return;
+        const seq = data.seq ?? 0;
+        if (seq <= this.lastProcessedPartialSeq) return;
+        if (this.isPartialInFlight) return;
+
+        const audio = data.pcm;
+        if (!this.vadGate(audio)) return;
+
+        this.isPartialInFlight = true;
+        void this.processPartialSegment(audio, seq).finally(() => {
+          this.isPartialInFlight = false;
+        });
+        break;
+      }
+
       case 'chunk': {
         if (!this._isListening || !data.pcm) return;
         const audio = data.pcm;
@@ -844,8 +886,10 @@ export class WhisperProvider {
         // Sub-threshold chunks are dropped silently.
         if (!this.vadGate(audio)) return;
 
-        // Emit interim indicator while processing.
-        this.emit('interim', '...');
+        // Emit interim placeholder only if no real partial has been emitted
+        if (this.lastProcessedPartialSeq === 0) {
+          this.emit('interim', '...');
+        }
 
         void this.processAudioSegment(audio).then((line) => {
           if (line) {
@@ -877,17 +921,89 @@ export class WhisperProvider {
   }
 
   /**
+   * Process a partial interim audio chunk. Never emits a 'line' and never
+   * increments lineCounter.
+   */
+  private async processPartialSegment(audio: Float32Array, seq: number): Promise<void> {
+    try {
+      let text: string | undefined;
+      let queueMs: number | undefined;
+      let inferMs: number | undefined;
+
+      if (this.transcribeFn) {
+        const result = await this.transcribeFn(audio, {
+          language: this.language,
+          kind: 'partial',
+          seq,
+          pipeline: this.pipelineId,
+          modelId: 'Xenova/whisper-tiny.en',
+        });
+        if (typeof result === 'object' && result !== null) {
+          text = result.text?.trim();
+          queueMs = result.queueMs;
+          inferMs = result.inferMs;
+        } else if (typeof result === 'string') {
+          text = result.trim();
+        }
+      } else if (this.transcriber) {
+        const result = await this.transcriber(audio, {
+          language: this.language,
+          task: 'transcribe',
+          return_timestamps: false,
+        });
+        text = result.text?.trim();
+      }
+
+      // Guard against out-of-order partial returns
+      if (seq < this.lastProcessedPartialSeq) return;
+      this.lastProcessedPartialSeq = seq;
+
+      if (queueMs !== undefined && inferMs !== undefined) {
+        telemetry.emit({
+          kind: 'asr.chunk',
+          pipeline: this.pipelineId,
+          chunkKind: 'partial',
+          queueMs,
+          inferMs,
+        });
+      }
+
+      if (!text) return;
+      text = stripNonSpeechTokens(text);
+      if (!text || text === '...') return;
+
+      this.emit('interim', text);
+    } catch (error) {
+      console.warn('[whisper] partial inference error:', error);
+    }
+  }
+
+  /**
    * Run inference on a single audio segment. Returns a TranscriptionLine
    * if text was produced, or null if the segment was silence/empty.
    */
   private async processAudioSegment(audio: Float32Array): Promise<TranscriptionLine | null> {
     try {
       let text: string | undefined;
+      let queueMs: number | undefined;
+      let inferMs: number | undefined;
 
       if (this.transcribeFn) {
         // Capture-only mode: delegate inference out-of-process (main-process
-        // onnxruntime-node). Returns recognised text directly.
-        text = (await this.transcribeFn(audio, { language: this.language }))?.trim();
+        // onnxruntime-node).
+        const result = await this.transcribeFn(audio, {
+          language: this.language,
+          kind: 'final',
+          pipeline: this.pipelineId,
+          modelId: this.modelId,
+        });
+        if (typeof result === 'object' && result !== null) {
+          text = result.text?.trim();
+          queueMs = result.queueMs;
+          inferMs = result.inferMs;
+        } else if (typeof result === 'string') {
+          text = result.trim();
+        }
       } else {
         // In-renderer inference (legacy path).
         if (!this.transcriber) return null;
@@ -897,6 +1013,19 @@ export class WhisperProvider {
           return_timestamps: true,
         });
         text = result.text?.trim();
+      }
+
+      // Clear partial sequence on final segment completion
+      this.lastProcessedPartialSeq = 0;
+
+      if (queueMs !== undefined && inferMs !== undefined) {
+        telemetry.emit({
+          kind: 'asr.chunk',
+          pipeline: this.pipelineId,
+          chunkKind: 'final',
+          queueMs,
+          inferMs,
+        });
       }
 
       if (!text) return null;

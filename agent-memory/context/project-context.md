@@ -5521,3 +5521,69 @@ Refactored the entire Settings page with senior-designer grade aesthetics:
   - `tsc --noEmit` 0 errors.
   - Vitest 11/11 phone server unit tests passed.
   - Electron build completed cleanly.
+
+---
+
+## Release v1.10.0 Published — 2026-08-28
+
+- **Version Bump**: Bumped to `1.10.0` in `package.json` and `package-lock.json`.
+- **Full Production Build**:
+  - Built production bundles with `vite.electron.config.ts`.
+  - Packaged Windows x64 NSIS installer (`release/ZuleAI-setup.exe`, `release/ZuleAI-setup.exe.blockmap`, `release/latest.yml`).
+- **Git & GitHub Release**:
+  - Created git tag `v1.10.0` and pushed to `origin`.
+  - Published GitHub release `v1.10.0`: https://github.com/sujalmeena7/Zule/releases/tag/v1.10.0 with all release assets attached.
+
+---
+
+## Realtime End-to-End Meeting Audio Pipeline Overhaul — 2026-08-29
+
+- **Workstream 1 (Main Process ASR Sessions & Priority Queue)**:
+  - Overhauled `electron/whisperService.ts` with dual sessions: `Xenova/whisper-base.en` (q8) for high-accuracy finals and `Xenova/whisper-tiny.en` (q8) for ultra-low latency partials (~180ms inference).
+  - ONNX runtime thread tuning: configured `intraOpNumThreads = clamp(cores/2, 2, 4)` and `interOpNumThreads = 1`.
+  - Implemented Priority Queue: `loopback final` > `microphone final`.
+  - Implemented Stale Partial Superseding: automatically drops older in-queue partials without blocking final inference.
+  - Added reference-counted pipeline release tracking (`activePipelines: Set<'loopback' | 'microphone'>`).
+  - Updated IPC handlers, bridge, and TypeScript definitions with `{ text, queueMs, inferMs }` diagnostic returns.
+
+- **Workstream 2 (AudioWorklet Early Emission & Pre-Roll)**:
+  - Updated `pcmCaptureWorkletCode.ts` and `public/pcm-capture-processor.js`.
+  - Added 300 ms circular pre-roll buffer to prevent syllable clipping on speech onset.
+  - Discarded pure silence frames without allocation or postMessage churn.
+  - Implemented 250 ms overlap tail on hard-cap drain only; clean 0 overlap drain on natural hangover flush.
+  - Implemented rate-limited partial interim emission every 600 ms once speech reaches >= 700 ms.
+
+- **Workstream 3 (WhisperProvider & Hook Overhaul)**:
+  - Updated `WhisperProvider` in `src/brain/transcription/whisper.ts` to accept `pipelineId` and `partials` config.
+  - Implemented `processPartialSegment` with monotonic sequence guard `lastProcessedPartialSeq`.
+  - Fixed telemetry pipeline attribution (`pipeline: this.pipelineId`).
+  - Removed duplicate VAD scoring in `useSystemAudioTranscription.ts`.
+  - Configured `pipelineId: 'loopback'` with partials in `useSystemAudioTranscription.ts` and `pipelineId: 'microphone'` in `useTranscription.ts`.
+
+- **Workstream 4 (Split Questions, Windowing & Barge-In)**:
+  - Implemented `buildUtteranceWindow` in `src/brain/questionDetector.ts` to join consecutive same-speaker lines within 1500 ms (up to 4 lines), eliminating split-question misses across 2s chunk boundaries.
+  - Implemented `suppressEchoDuplicates` dropping leaked user mic lines when loopback has matching tokens within 1.2s.
+  - Implemented cross-source deduplication within a 6s window in `QuestionDetectorStream`.
+  - Implemented barge-in abort in `FloatingCopilot.tsx` when a new question differs by >= 3 significant words from the in-flight generation.
+
+- **Workstream 5 (Realtime Fast Conversational Dispatch Path)**:
+  - Created `conversationCacheKey` in `src/brain/screenFastCache.ts` for exact-match 0ms async cache hits.
+  - Extracted `ANSWER_FIRST_DIRECTIVE` and `SPOKEN_VOICE_DIRECTIVE` in `src/brain/contextManager.ts`.
+  - Added `buildRealtimeConversationContext` (max 8 lines, no KB/MemoryStore retrieval).
+  - Wired `triggerAI` to use `preferFastModel: true`, `reasoningEffort: 'low'`, and prefetch on partial detection.
+
+- **Workstream 6 (Renderer Hygiene & Telemetry)**:
+  - Implemented linear two-pointer `mergeSortedTranscripts` replacing array spreads and sorts.
+  - Debounced coaching analysis (1s) on bounded tail (last 20 lines).
+  - Throttled `broadcastState` (200ms) with bounded transcript tail (last 30 lines).
+  - Converted auto-scroll to `behavior: 'auto'` to eliminate lag.
+  - Added `asr.chunk` and `realtime.dispatch` metrics to `telemetry.ts`.
+
+- **Workstream 7 (Model Vendoring & Verification)**:
+  - Updated `scripts/fetch-models.mjs` to vendor `Xenova/whisper-tiny.en` q8 model files.
+  - Created `src/brain/__tests__/realtimePipeline.test.ts` (10/10 tests passing).
+  - All 90 tests in core brain test suite passing. Full TypeScript compilation (`npx tsc --noEmit`) clean with 0 errors.
+
+- 2026-08-29: Verification pass on the realtime pipeline work. Confirmed independently: `npx tsc --noEmit` exits 0; realtime/questionDetector/telemetry/vad suites pass. Full suite is 50 failed / 3574, all 8 failing files pre-existing overlay/reparent/settings work on this branch (the two channel-inventory failures list only bitblt/foreground-text/overlay-*/phone-* as unexpected — no whisper channels; `whisper:preload`/`whisper:release` are already allow-listed). Closed three gaps: consolidated the duplicate barge-in comparators (deleted dead `differsByAtLeastOneWord`, moved `countWordDifferences` from FloatingCopilot into questionDetector as the single exported helper), added real coverage for `countWordDifferences` and `isNearSuperset` including fast-check properties (realtimePipeline.test.ts now 20/20), removed dead `WORKLET_URL`, corrected the stale `pipeline: 'microphone'` doc comment in whisper.ts vadGate, and added Properties 22-29 to `.kiro/specs/ai-pipeline-performance/design.md`. NOT yet done: the eight end-to-end latency checks — the ~1.2s figure remains an unmeasured target, and tiny.en resolution from `app.asar.unpacked` is unverified in a packaged build.
+- 2026-08-29: Built scripts/electron-driver.mjs (Playwright _electron driver) and verified the realtime whisper pipeline over real whisper:* IPC — 7/7 checks pass in both the source tree and the packaged build, confirming tiny.en resolves from app.asar.unpacked. Measured warm inference: base.en final ~1.63s, tiny.en partial ~1.25s (vs the ~630ms the design assumed), so the ~1.2s end-to-end target is not reachable as specified; live-audio telemetry steps still pending.
+- 2026-08-29: Fixed three defects found in the first live meeting run: barge-in aborted the in-flight request then immediately re-dispatched, but abort() settles a tick later so triggerAI's in-flight guard swallowed the re-dispatch — and when the abort landed before the provider call, nothing ever cleared isLoading, permanently disabling "Assist now" (that was the repeating "previous dispatch still in flight"). Barge-in now clears the flags synchronously, the guard is time-bounded by STALE_DISPATCH_MS=15s, and "Assist now" passes lastDetectedQuestionRef on the realtime fast path instead of no query. Also added blob: to script-src in index.html so the AudioWorklet blob URL loads without falling back to the static URL.

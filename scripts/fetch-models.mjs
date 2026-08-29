@@ -73,6 +73,21 @@ const MODELS = [
       'onnx/decoder_model_merged.onnx',
     ],
   },
+  {
+    // Whisper tiny.en for low-latency interim partials in the main process
+    // (onnxruntime-node) with dtype:'q8'.
+    id: 'Xenova/whisper-tiny.en',
+    files: [
+      'config.json',
+      'generation_config.json',
+      'preprocessor_config.json',
+      'tokenizer.json',
+      'tokenizer_config.json',
+      // q8 / quantized (used by onnxruntime-node):
+      'onnx/encoder_model_quantized.onnx',
+      'onnx/decoder_model_merged_quantized.onnx',
+    ],
+  },
 ];
 
 /** Download one file unless an up-to-date copy already exists. */

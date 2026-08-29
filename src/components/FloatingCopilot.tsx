@@ -19,18 +19,17 @@ import { clampPosition } from '../utils/geometry';
 import { ocrBase64Image } from '../utils/ocrImage';
 import { speakerManager } from '../brain/speakerManager';
 import { persistPlaceholderMeeting, generateSummaryWithTimeout } from '../brain/stopSession';
-import { buildContextWindow, buildMinimalScreenContext, primeFastContext } from '../brain/contextManager';
+import { buildContextWindow, buildMinimalScreenContext, buildRealtimeConversationContext, primeFastContext } from '../brain/contextManager';
 import type { TranscriptLine, CitationInfo } from '../brain/contextManager';
 import type { TranscriptionLine } from '../types/transcription';
 import { streamAIResponse, describeProviderFailure, warmProviders } from '../brain/aiProvider';
 import type { AIResponse } from '../brain/aiProvider';
 import { activeAdapterSupportsImageInput, hasVisionProvider, NoVisionProviderError } from '../brain/aiProvider';
 import { database as knowledgeBase } from '../data/database';
-import { QuestionDetectorStream } from '../brain/questionDetector';
+import { QuestionDetectorStream, suppressEchoDuplicates, countWordDifferences } from '../brain/questionDetector';
 import { getFullAnalysis } from '../brain/sentimentAnalyzer';
 import { semanticCache } from '../brain/responseCache';
-import { screenCacheKey, getScreenCached, setScreenCached } from '../brain/screenFastCache';
-import { ScreenContextGuard } from '../brain/screenContextGuard';
+import { screenCacheKey, conversationCacheKey, getScreenCached, setScreenCached } from '../brain/screenFastCache';
 import { telemetry } from '../brain/telemetry';
 import type { SentimentResult } from '../brain/sentimentAnalyzer';
 import { MODE_CONFIGS, type CopilotMode } from '../brain/modePrompts';
@@ -135,6 +134,16 @@ const RETRIEVAL_DEADLINE_MS = 600;
  * uses the synchronous hash cache in `screenFastCache` instead of this one.
  */
 const SEMANTIC_CACHE_DEADLINE_MS = 400;
+
+/**
+ * Upper bound on how long the "a dispatch is already in flight" guard may
+ * suppress new dispatches. A request aborted before its provider call is ever
+ * made resolves through no handler, so the guard would otherwise latch on and
+ * silently swallow every later dispatch — auto-detected questions and the
+ * "Assist now" button alike. Comfortably above a realistic time-to-first-token
+ * (observed 2–3.5 s on a remote model), so it never cuts a live dispatch short.
+ */
+const STALE_DISPATCH_MS = 15000;
 
 /**
  * Timing instrumentation for the dispatch path. Emits one line per request so a
@@ -294,6 +303,25 @@ function RestoreIcon() {
   );
 }
 
+function mergeSortedTranscripts(
+  a: readonly TranscriptionLine[],
+  b: readonly TranscriptionLine[],
+): TranscriptionLine[] {
+  const result: TranscriptionLine[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i].timestamp <= b[j].timestamp) {
+      result.push(a[i++]);
+    } else {
+      result.push(b[j++]);
+    }
+  }
+  while (i < a.length) result.push(a[i++]);
+  while (j < b.length) result.push(b[j++]);
+  return result;
+}
+
 export function FloatingCopilot() {
   const { state, actions } = useZule();
   const { user } = useAuth();
@@ -375,25 +403,23 @@ export function FloatingCopilot() {
     modeAnnouncement,
   } = useOverlayMode();
 
-  // Auto-update state for the overlay indicator (Requirements 7.1, 7.3)
-  const { state: updateState } = useAutoUpdate();
+  // Auto-update check in background (Requirements 7.1, 7.3)
+  useAutoUpdate();
 
   // Single transcript feeding the AI / detectors / UI: mic lines (role 'user')
-  // and system-audio lines (role 'other') merged in timestamp order. Both
-  // already carry epoch-ms timestamps, so a stable sort interleaves them.
+  // and system-audio lines (role 'other') merged in timestamp order via linear
+  // two-pointer merge with echo duplicate suppression.
   const mergedTranscript = useMemo(
     () =>
-      [...speech.transcript, ...systemAudio.lines].sort(
-        (a, b) => a.timestamp - b.timestamp,
+      suppressEchoDuplicates(
+        mergeSortedTranscripts(speech.transcript, systemAudio.lines),
       ),
     [speech.transcript, systemAudio.lines],
   );
 
   // Live captions: a short rolling window of the most recent transcribed lines
-  // (so text reads continuously instead of vanishing as new speech arrives),
-  // plus any in-progress interim text appended as a live, pulsing line. Mic
-  // interim is real partial text; system-audio (Whisper) interim is just a '...'
-  // working placeholder, so only mic interim is surfaced as live text.
+  // plus any in-progress interim text appended as a live, pulsing line.
+  // Filters out literal '...' placeholders.
   const CAPTION_HISTORY = 3;
   const liveCaptions = useMemo(() => {
     const recent = mergedTranscript
@@ -404,17 +430,24 @@ export function FloatingCopilot() {
         role: l.speakerRole,
         live: false,
       }));
-    if (speech.interimText) {
+    const activeInterim =
+      speech.interimText && speech.interimText !== '...'
+        ? { text: speech.interimText, role: 'user' as const }
+        : systemAudio.interimText && systemAudio.interimText !== '...'
+        ? { text: systemAudio.interimText, role: 'other' as const }
+        : null;
+
+    if (activeInterim) {
       recent.push({
         key: 'interim',
-        text: speech.interimText,
-        role: 'user' as const,
+        text: activeInterim.text,
+        role: activeInterim.role,
         live: true,
       });
     }
     // Keep the window bounded even with the interim line appended.
     return recent.slice(-CAPTION_HISTORY);
-  }, [speech.interimText, mergedTranscript]);
+  }, [speech.interimText, systemAudio.interimText, mergedTranscript]);
 
   // Ref mirrors overlayMode so callbacks always read the current value
   // without needing it in their dependency array (which causes stale closures).
@@ -482,8 +515,6 @@ export function FloatingCopilot() {
   const abortControllerRef = useRef<AbortController | null>(null);
   // Generation counter for discarding late tokens from aborted streams (Req 12.2)
   const requestIdRef = useRef(0);
-  // Screen context guard for frame freshness and cross-request isolation (Req 8.1, 8.2, 8.3)
-  const screenContextGuardRef = useRef(new ScreenContextGuard());
   // Req 12.5: Stable refs for values that change every transcript update,
   // so triggerAI's useCallback deps remain stable and the autonomous-detection
   // useEffects do not re-fire on every render.
@@ -524,6 +555,17 @@ export function FloatingCopilot() {
   const forceTextChainRef = useRef(false);
   const inputTextRef = useRef(inputText);
   inputTextRef.current = inputText;
+  const inFlightQuestionRef = useRef<string>('');
+  // Most recent auto-detected question, so "Assist now" can answer the thing
+  // that was actually heard instead of making the model guess from the transcript.
+  const lastDetectedQuestionRef = useRef<string>('');
+  // When the current dispatch entered its pre-first-token phase. The in-flight
+  // guard is time-bounded against it so a dropped/aborted dispatch can never
+  // latch the UI into a permanently disabled state.
+  const dispatchStartedAtRef = useRef<number>(0);
+  const dispatchOriginRef = useRef<'manual' | 'realtime-audio' | 'screen'>('manual');
+  const elapsedTimeRef = useRef(elapsedTime);
+  elapsedTimeRef.current = elapsedTime;
   const broadcastToPhoneRef = useRef<(text: string, question?: string) => void>(() => {});
 
   // Phone Camera Input: listen for photos sent from the phone browser
@@ -631,30 +673,33 @@ export function FloatingCopilot() {
     };
   }, []);
 
-  // Sync state to detached window
+  // Sync state to detached window (throttled with bounded transcript tail)
   useEffect(() => {
-    broadcastState({
-      isDetached: false,
-      transcript: mergedTranscript,
-      interimText: speech.interimText,
-      streamingText,
-      aiResponse,
-      isLoading,
-      isStreaming,
-      elapsedTime,
-      coaching,
-      activeMode,
-    });
+    const timer = setTimeout(() => {
+      broadcastState({
+        isDetached: false,
+        transcript: mergedTranscript.slice(-30),
+        interimText: speech.interimText,
+        streamingText,
+        aiResponse,
+        isLoading,
+        isStreaming,
+        elapsedTime,
+        coaching,
+        activeMode,
+      });
+    }, 200);
+    return () => clearTimeout(timer);
   }, [mergedTranscript, speech.interimText, streamingText, aiResponse, isLoading, isStreaming, elapsedTime, coaching, activeMode, broadcastState]);
 
-  // Auto-scroll transcript
+  // Auto-scroll transcript (instant scroll)
   useEffect(() => {
-    transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    transcriptEndRef.current?.scrollIntoView({ behavior: 'auto' });
   }, [mergedTranscript]);
 
-  // Auto-scroll chat to latest message
+  // Auto-scroll chat to latest message (instant scroll)
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    chatEndRef.current?.scrollIntoView({ behavior: 'auto' });
   }, [chatHistory, streamingText]);
 
   // Dedicated screen-share stealth toggle, wired to the segmented eye/eye-off
@@ -713,67 +758,86 @@ export function FloatingCopilot() {
     }
   }, [isPanicHidden, speech, systemAudio, screen]);
 
-  // Handle coaching and simulated response updates
+  // Handle coaching updates with debounce on bounded transcript tail
   useEffect(() => {
     if (mergedTranscript.length === 0) return;
-    const fullText = mergedTranscript.map(l => l.text).join(' ');
-    const totalWords = fullText.split(/\s+/).length;
-    const analysis = getFullAnalysis(fullText, totalWords, elapsedTime);
-    setCoaching(analysis);
-  }, [mergedTranscript, elapsedTime]);
+    const timer = setTimeout(() => {
+      const bounded = mergedTranscript.slice(-20);
+      const fullText = bounded.map(l => l.text).join(' ');
+      const totalWords = fullText.split(/\s+/).length;
+      const analysis = getFullAnalysis(fullText, totalWords, elapsedTimeRef.current);
+      setCoaching(analysis);
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [mergedTranscript]);
 
-  // Autonomous question detection
-  // Req 12.5: Call triggerAIRef.current() so this effect does NOT depend on triggerAI
+  // Autonomous question detection on final lines with multi-line windowing & barge-in
   useEffect(() => {
     if (isPanicHidden) return; // Paused during panic hide (Requirement 15.8)
     if (mergedTranscript.length > 0) {
-      const recentContext = mergedTranscript.slice(-3); // Get last 3 lines for context
+      const recentContext = mergedTranscript.slice(-4); // Last 4 lines for multi-line split questions
       questionDetectorRef.current.onNewContext(recentContext, async (result) => {
-        // Suppress duplicate triggers while AI is already working
-        if (isStreamingRef.current || isLoadingRef.current) return;
+        lastDetectedQuestionRef.current = result.question;
+        if (isStreamingRef.current || isLoadingRef.current) {
+          // Barge-in check: if new question differs by >= 3 significant words from in-flight question
+          const diff = countWordDifferences(inFlightQuestionRef.current, result.question);
+          if (diff >= 3) {
+            console.log(`[FloatingCopilot] Barge-in triggered (word diff=${diff}), aborting in-flight AI request`);
+            if (abortControllerRef.current) {
+              abortControllerRef.current.abort();
+            }
+            // abort() settles on a later tick, so the aborted request's own
+            // handlers have not cleared these yet. Clear them here or the
+            // re-dispatch below trips triggerAI's in-flight guard — and if the
+            // abort landed before the provider call, nothing ever clears them
+            // and every later dispatch (including "Assist now") is blocked.
+            setIsLoading(false);
+            isLoadingRef.current = false;
+            setIsStreaming(false);
+            isStreamingRef.current = false;
+          } else {
+            return; // Suppress duplicate or minor variation of in-flight question
+          }
+        }
+
         // Show detected question badge
         setDetectedQuestion(result.question.length > 80 ? result.question.slice(0, 80) + '…' : result.question);
         setTimeout(() => setDetectedQuestion(null), 3500);
+
         // Auto-expand overlay so the answer is visible
         if (isNativeOverlay && (overlayModeRef.current === 'compact' || overlayModeRef.current === 'expanded')) {
           setOverlayMode('maximized');
         }
-        await triggerAIRef.current();
+
+        dispatchOriginRef.current = 'realtime-audio';
+        await triggerAIRef.current(result.question);
       });
     }
   }, [mergedTranscript, isPanicHidden, isNativeOverlay, setOverlayMode]);
 
-  // Predictive pre-warming detection (user mic interim)
-  // Req 12.5: Call triggerAIRef.current() so this effect does NOT depend on triggerAI
-  useEffect(() => {
-    if (isPanicHidden) return; // Paused during panic hide (Requirement 15.8)
-    if (speech.interimText) {
-      questionDetectorRef.current.onInterimText(speech.interimText, async () => {
-        if (isStreamingRef.current || isLoadingRef.current) return;
-        await triggerAIRef.current(speech.interimText);
-      });
-    }
-  }, [speech.interimText, isPanicHidden]);
-
-  // System-audio interim text — feed the other party's live text into
-  // the question detector so detection can fire mid-utterance when
-  // Whisper emits partial results (future improvement).
+  // Prefetch on partial detection (system audio partials)
   useEffect(() => {
     if (isPanicHidden) return;
     const interim = systemAudio.interimText;
-    // Whisper currently emits '...' as interim — skip that placeholder.
-    if (interim && interim !== '...' && interim.trim().length > 10) {
-      questionDetectorRef.current.onInterimText(interim, async () => {
-        if (isStreamingRef.current || isLoadingRef.current) return;
-        setDetectedQuestion(interim.length > 80 ? interim.slice(0, 80) + '…' : interim);
-        setTimeout(() => setDetectedQuestion(null), 3500);
-        if (isNativeOverlay && (overlayModeRef.current === 'compact' || overlayModeRef.current === 'expanded')) {
-          setOverlayMode('maximized');
-        }
-        await triggerAIRef.current(interim);
-      });
+    if (interim && interim !== '...' && interim.trim().length > 15) {
+      questionDetectorRef.current.onInterimText(
+        interim,
+        async (result) => {
+          lastDetectedQuestionRef.current = result.question;
+          // Hybrid approach: warm providers and prime context in background without answering yet
+          void primeFastContext();
+          void warmProviders(apiKey);
+          getScreenCached(conversationCacheKey({ mode: activeMode, query: result.question }));
+          setDetectedQuestion(result.question.length > 80 ? result.question.slice(0, 80) + '…' : result.question);
+          setTimeout(() => setDetectedQuestion(null), 3500);
+          if (isNativeOverlay && (overlayModeRef.current === 'compact' || overlayModeRef.current === 'expanded')) {
+            setOverlayMode('maximized');
+          }
+        },
+        'other',
+      );
     }
-  }, [systemAudio.interimText, isPanicHidden, isNativeOverlay, setOverlayMode]);
+  }, [systemAudio.interimText, isPanicHidden, isNativeOverlay, setOverlayMode, apiKey, activeMode]);
 
   // Mic does NOT auto-start. User must explicitly enable transcription
   // via the headphone/mic toggle button on the control capsule.
@@ -850,10 +914,20 @@ export function FloatingCopilot() {
     // (not yet streaming), skip this call. Rapid "Use Screen" clicks should
     // not stack up multiple concurrent IPC calls that overwhelm the main process.
     // Once streaming starts, isLoadingRef flips to false and new calls are allowed.
-    if (isLoadingRef.current && !isStreamingRef.current) {
+    //
+    // Time-bounded: a dispatch that is aborted before the provider call is made
+    // never reaches an error handler, so without an upper bound the flag latches
+    // and every later dispatch — including the "Assist now" button — is dropped.
+    if (
+      isLoadingRef.current &&
+      !isStreamingRef.current &&
+      Date.now() - dispatchStartedAtRef.current < STALE_DISPATCH_MS
+    ) {
       console.log('[FloatingCopilot] triggerAI skipped: previous dispatch still in flight');
       return;
     }
+
+    dispatchStartedAtRef.current = Date.now();
 
     setIsLoading(true);
     isLoadingRef.current = true;
@@ -1175,8 +1249,14 @@ export function FloatingCopilot() {
         || (keyframeForContext !== null && visionAvailable);
       const useFastPath = screenArmed || hasScreenGrounding;
 
+      const currentOrigin = dispatchOriginRef.current;
+      dispatchOriginRef.current = 'manual';
+      const isRealtimeAudio = currentOrigin === 'realtime-audio';
+      const utteranceEndAt = Date.now();
+
       // Determine the core query for caching purposes
       const coreQuery = query || (currentTranscript.length > 0 ? currentTranscript[currentTranscript.length - 1].text : '');
+      inFlightQuestionRef.current = coreQuery;
 
       // A screen dispatch with nothing captured and nothing typed cannot succeed.
       // There is no question in the prompt — not a vague one, none — so the round
@@ -1226,12 +1306,6 @@ export function FloatingCopilot() {
       // mode + query + screen text + image. No embedding, so a miss costs
       // effectively nothing (Req 6.1, 6.2 in spirit — same "unchanged screen
       // answers instantly" guarantee, without the WASM round trip).
-      //
-      // Keyed off `hasScreenGrounding`, not `useFastPath`. When capture came back
-      // empty the only key material left is the typed query, and that key is not
-      // safe: two dispatches of "next" against two different questions, both with
-      // a failed capture, hash identically and the second would be served the
-      // first one's answer. No grounding, no caching.
       const fastKey = hasScreenGrounding
         ? screenCacheKey({
             mode: currentActiveMode,
@@ -1251,12 +1325,24 @@ export function FloatingCopilot() {
         }
       }
 
-      // Embedding-backed Semantic Cache — conversational path only.
-      //
-      // Skipped entirely when the fast path is active: the exact-match probe
-      // above already covers the repeated-question case, and generating a query
-      // embedding here would cost more than the lookup can ever save.
-      if (coreQuery && !useFastPath) {
+      // Realtime audio exact-match fast cache lookup (0ms async cost)
+      const convKey = isRealtimeAudio && coreQuery
+        ? conversationCacheKey({ mode: currentActiveMode, query: coreQuery })
+        : null;
+
+      if (convKey) {
+        const cached = getScreenCached(convKey);
+        if (cached) {
+          console.log('[FloatingCopilot] realtime conversational fast-cache hit');
+          sw.report('conv-fast-cache hit');
+          applyCachedAnswer(cached.text, cached.isSimulated);
+          return;
+        }
+      }
+
+      // Embedding-backed Semantic Cache — manual conversational path only.
+      // Skipped on screen fast path AND realtime audio questions to avoid WASM latency.
+      if (coreQuery && !useFastPath && !isRealtimeAudio) {
         const { hit } = await raceTimeout(
           semanticCache.get(coreQuery),
           SEMANTIC_CACHE_DEADLINE_MS,
@@ -1284,9 +1370,7 @@ export function FloatingCopilot() {
 
       // The prompt's only grounding is the image when nothing textual survived the
       // capture chain. Telling the router that turns a guaranteed non-answer into
-      // either an answer or a diagnosable error: without it the image is handed to
-      // whichever adapter is first in priority order, a text-only one drops it, and
-      // the model is asked a question with no question in it.
+      // either an answer or a diagnosable error.
       const imageIsOnlyGrounding =
         (contextImages?.images?.length ?? 0) > 0
         && (currentScreenText ? currentScreenText.trim().length < 24 : true);
@@ -1300,18 +1384,23 @@ export function FloatingCopilot() {
             currentCustomModes,
             contextImages,
           )
-        : await buildContextWindow(
-            currentActiveMode,
-            toLegacyTranscript(currentTranscript),
-            currentScreenText,
-            query || '',
-            currentCustomModes,
-            // Vision adapter with successful keyframe: use the already-captured
-            // keyframe (Req 2.1). Text_Only_Adapter or keyframe failure: no
-            // image attachment. Legacy path: synchronous keyframe when the
-            // adapter supports images but the new path is not active.
-            { ...contextImages, retrievalDeadlineMs: RETRIEVAL_DEADLINE_MS },
-          );
+        : isRealtimeAudio
+          ? await buildRealtimeConversationContext(
+              currentActiveMode,
+              toLegacyTranscript(currentTranscript),
+              coreQuery,
+              currentCustomModes,
+            )
+          : await buildContextWindow(
+              currentActiveMode,
+              toLegacyTranscript(currentTranscript),
+              currentScreenText,
+              query || '',
+              currentCustomModes,
+              // Vision adapter with successful keyframe: use the already-captured
+              // keyframe (Req 2.1).
+              { ...contextImages, retrievalDeadlineMs: RETRIEVAL_DEADLINE_MS },
+            );
       sw.mark('context');
 
       // Check if this request is still current after async context build
@@ -1343,11 +1432,22 @@ export function FloatingCopilot() {
             if (requestIdRef.current !== currentRequestId) return;
              if (!isStreamingRef.current) {
               sw.mark('ttft');
-              sw.report(useFastPath ? 'fast path' : 'full path');
+              sw.report(useFastPath ? 'fast path (screen)' : isRealtimeAudio ? 'fast path (realtime-audio)' : 'full path');
               setIsLoading(false);
               isLoadingRef.current = false;
               setIsStreaming(true);
               isStreamingRef.current = true;
+
+              if (isRealtimeAudio) {
+                const detectToDispatchMs = Math.round(performance.now() - dispatchStartMs);
+                const utteranceEndToFirstTokenMs = Date.now() - utteranceEndAt;
+                telemetry.emit({
+                  kind: 'realtime.dispatch',
+                  source: 'final',
+                  detectToDispatchMs,
+                  utteranceEndToFirstTokenMs,
+                });
+              }
             }
             setStreamingText(partialText);
           },
@@ -1365,15 +1465,11 @@ export function FloatingCopilot() {
             // Save to cache if it was a good response.
             if (!response.isSimulated && response.text.trim()) {
               if (useFastPath) {
-                // Exact-hash store, mirroring the exact-hash lookup above. Costs
-                // nothing and makes a re-ask about an unchanged screen instant.
+                // Exact-hash store, mirroring the exact-hash lookup above.
                 setScreenCached(fastKey, {
                   text: response.text,
                   isSimulated: response.isSimulated,
                 });
-                // Also populate the embedding-backed screen cache, but off the
-                // critical path — the answer is already on screen, so this only
-                // needs to be ready for some *later* request.
                 if (coreQuery && currentFrameHash) {
                   void semanticCache.setWithFrame(
                     { query: coreQuery, frameHash: currentFrameHash },
@@ -1383,6 +1479,19 @@ export function FloatingCopilot() {
                       status: (response as any).status ?? 200,
                     },
                   ).catch(() => undefined);
+                }
+              } else if (isRealtimeAudio && convKey) {
+                // Exact-hash store for conversational fast path
+                setScreenCached(convKey, {
+                  text: response.text,
+                  isSimulated: response.isSimulated,
+                });
+                if (coreQuery) {
+                  void semanticCache.set(coreQuery, {
+                    text: response.text,
+                    isSimulated: response.isSimulated,
+                    status: (response as any).status ?? 200,
+                  }).catch(() => undefined);
                 }
               } else if (coreQuery) {
                 void semanticCache.set(coreQuery, {
@@ -1411,26 +1520,12 @@ export function FloatingCopilot() {
             }
           },
           onMetrics: (metrics) => {
-            // Which model actually answered. `onComplete`'s `AIResponse` does not
-            // carry it, and the `[perf]` line in `onToken` fires before the router
-            // has resolved anything — so without this, a latency number is
-            // unattributable: "3s" means nothing until you know whether it came
-            // from the fast slot or from the thinking model.
-            //
-            // `totalLatency` is the adapter's own measurement of the request;
-            // `sw.elapsed()` is the wall clock the User experienced, capture and
-            // context assembly included. Both, because the gap between them is
-            // the part this app is responsible for.
             // eslint-disable-next-line no-console
             console.log(
               `[perf] answered by ${metrics.model} — ttft ${Math.round(metrics.timeToFirstToken)}ms | provider ${Math.round(metrics.totalLatency)}ms | wall ${sw.elapsed()}ms`,
             );
           },
           onProviderFallback: (error) => {
-            // Every real provider failed and simulation is about to answer.
-            // Name the actual cause — the generic "add your Gemini key" banner
-            // on the simulated reply misattributes wrong-model / no-credit /
-            // model-disabled failures to a missing credential.
             if (requestIdRef.current !== currentRequestId) return;
             toast.error(`AI provider unavailable: ${describeProviderFailure(error)}`, {
               duration: 7000,
@@ -1438,14 +1533,12 @@ export function FloatingCopilot() {
           },
           onError: (error) => {
             if (error.name === 'AbortError') {
-              // Reset loading state on abort so buttons don't get stuck
               setIsLoading(false);
               isLoadingRef.current = false;
               setIsStreaming(false);
               isStreamingRef.current = false;
               return;
             }
-            // Discard errors from stale requests
             if (requestIdRef.current !== currentRequestId) return;
             toast.error('AI streaming encountered an error. Please try again.');
             setIsStreaming(false);
@@ -1464,25 +1557,8 @@ export function FloatingCopilot() {
         abortControllerRef.current.signal,
         {
           requireImageInput: imageIsOnlyGrounding,
-          // A screen dispatch is the latency-critical case: the question is on
-          // screen right now, in front of someone waiting. Ask for the fast model.
-          // Degrades to today's behaviour when the provider has none configured, so
-          // this is safe to set always.
-          preferFastModel: useFastPath,
-          // 'low' rather than 'none', and the distinction is the whole point of
-          // answer-first output.
-          //
-          // With deliberation switched off entirely, the directive to lead with the
-          // answer makes the model commit to a letter before it has computed
-          // anything, then do the arithmetic in the visible text and discover it was
-          // wrong. Measured on a protected-window MCQ: first line "B) 2", corrected
-          // to "A) 1" three paragraphs down. First token at 804ms, and worthless —
-          // in an interview the first line is the one that gets said out loud.
-          //
-          // A small budget buys the check before the commit. It is not free, but the
-          // thing being paid for is the first line meaning what it says, and there is
-          // room for it: 804ms of an 8.4s answer.
-          reasoningEffort: useFastPath ? 'low' : undefined,
+          preferFastModel: useFastPath || isRealtimeAudio,
+          reasoningEffort: (useFastPath || isRealtimeAudio) ? 'low' : undefined,
         }
       );
     } catch (error) {
@@ -2161,13 +2237,18 @@ export function FloatingCopilot() {
               <span>{MODE_CONFIGS[activeMode].icon}</span>
               <span>{MODE_CONFIGS[activeMode].label}</span>
             </div>
-            {/* Manual "Assist now" — forces an AI answer from the recent
-                transcript even when no question was auto-detected (auto-detect
-                can miss when transcription is imperfect). */}
+            {/* Manual "Assist now" — answers the most recently detected question
+                if there is one (auto-detect fires but a dispatch can be
+                suppressed while another is in flight), otherwise falls back to
+                letting the model read the recent transcript. */}
             <button
               type="button"
               className="card-assist-now-btn"
-              onClick={() => triggerAI()}
+              onClick={() => {
+                const detected = lastDetectedQuestionRef.current;
+                if (detected) dispatchOriginRef.current = 'realtime-audio';
+                void triggerAI(detected || undefined);
+              }}
               disabled={isLoading || isStreaming}
               aria-label="Get an AI answer now from the recent conversation"
             >

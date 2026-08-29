@@ -196,18 +196,28 @@ const electronAPI = {
   // 16 kHz mono Float32 PCM and ships chunks here.
 
   /** Pre-warm the Whisper model (call when the user enables system audio). */
-  whisperPreload: (opts?: { modelId?: string }): Promise<boolean> =>
-    ipcRenderer.invoke('whisper:preload', opts),
+  whisperPreload: (opts?: {
+    pipeline?: 'loopback' | 'microphone' | string;
+    modelId?: string;
+  }): Promise<boolean> => ipcRenderer.invoke('whisper:preload', opts),
 
-  /** Transcribe one PCM chunk; returns the recognised text. */
+  /** Transcribe one PCM chunk; returns the recognised text and latency metrics. */
   whisperTranscribe: (
     pcm: Float32Array,
-    opts?: { language?: string; modelId?: string },
-  ): Promise<{ text: string }> =>
+    opts?: {
+      language?: string;
+      modelId?: string;
+      kind?: 'final' | 'partial';
+      seq?: number;
+      pipeline?: 'loopback' | 'microphone';
+    },
+  ): Promise<{ text: string; queueMs?: number; inferMs?: number }> =>
     ipcRenderer.invoke('whisper:transcribe', pcm, opts),
 
   /** Release the Whisper model/session (call when system audio is disabled). */
-  whisperRelease: (): Promise<boolean> => ipcRenderer.invoke('whisper:release'),
+  whisperRelease: (opts?: {
+    pipeline?: 'loopback' | 'microphone' | string;
+  }): Promise<boolean> => ipcRenderer.invoke('whisper:release', opts),
 
   // ── Local text embeddings (native, main-process) ─────────────────────────
   // The embedding model also runs in the main process (renderer onnxruntime-web

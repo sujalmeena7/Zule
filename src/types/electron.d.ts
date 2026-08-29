@@ -112,12 +112,23 @@ export interface ElectronAPI {
   >;
 
   // Local Whisper transcription (native, main-process)
-  whisperPreload?: (opts?: { modelId?: string }) => Promise<boolean>;
+  whisperPreload?: (opts?: {
+    pipeline?: 'loopback' | 'microphone' | string;
+    modelId?: string;
+  }) => Promise<boolean>;
   whisperTranscribe?: (
     pcm: Float32Array,
-    opts?: { language?: string; modelId?: string },
-  ) => Promise<{ text: string }>;
-  whisperRelease?: () => Promise<boolean>;
+    opts?: {
+      language?: string;
+      modelId?: string;
+      kind?: 'final' | 'partial';
+      seq?: number;
+      pipeline?: 'loopback' | 'microphone';
+    },
+  ) => Promise<{ text: string; queueMs?: number; inferMs?: number }>;
+  whisperRelease?: (opts?: {
+    pipeline?: 'loopback' | 'microphone' | string;
+  }) => Promise<boolean>;
 
   // Local text embeddings (native, main-process)
   embedPreload?: (opts?: { modelId?: string }) => Promise<boolean>;

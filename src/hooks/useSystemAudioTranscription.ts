@@ -23,16 +23,6 @@ import type { ZuleError } from '../types/errors';
 import { WhisperProvider } from '../brain/transcription/whisper';
 import type { Off, TranscriptionEventCallback } from '../brain/transcription/webSpeech';
 import { acquireLoopbackStream, LoopbackError } from '../brain/transcription/loopbackAudio';
-import {
-  scoreChunk,
-  mapSensitivityToThreshold,
-  VAD_DISABLE_FOR_TEST,
-  type VADSensitivity,
-  type VADResult,
-} from '../brain/transcription/vad';
-import { vadSensitivityBus } from '../brain/transcription/vadSensitivityBus';
-import { telemetry } from '../brain/telemetry';
-import { database } from '../data/database';
 import { useZuleError } from './useZuleError';
 import toast from 'react-hot-toast';
 
@@ -47,7 +37,7 @@ export interface UseSystemAudioTranscriptionOptions {
 export interface UseSystemAudioTranscriptionResult {
   /** Final lines produced from system audio (role 'other'). */
   lines: TranscriptionLine[];
-  /** Current interim placeholder (Whisper emits '...' while processing). */
+  /** Current interim text from partials. */
   interimText: string;
   /** Whether the loopback pipeline is currently capturing. */
   isActive: boolean;
@@ -79,23 +69,11 @@ export function useSystemAudioTranscription(
   const unsubscribesRef = useRef<Off[]>([]);
   /** Guard against concurrent enable() calls racing through async preload. */
   const isEnablingRef = useRef(false);
-  /**
-   * Effective `speechThreshold` used by the VAD gate for the next chunk.
-   * Held in a ref (not state) so the wrapped `transcribeFn` reads the
-   * latest value without triggering re-renders, and so a
-   * `vadSensitivityBus` event applied mid-capture takes effect on the
-   * next chunk without tearing down audio (Requirement 7.4 /
-   * Property 18). Default `medium` matches the un-gated baseline
-   * (Requirement 7.6) and is overwritten in `enable` from the
-   * persisted setting before the provider starts.
-   */
-  const speechThresholdRef = useRef<number>(mapSensitivityToThreshold('medium'));
   const notifyError = useZuleError();
 
   // Supported when we can capture system audio (getDisplayMedia) AND inference
-  // is available. Inference now runs in the Electron main process via the
-  // preload bridge (`whisperTranscribe`) — so this is desktop-only. The
-  // renderer's own WASM/WebGPU engine crashes (0xC0000005), so we never use it.
+  // is available. Inference runs in the Electron main process via the
+  // preload bridge (`whisperTranscribe`) — so this is desktop-only.
   const whisperBridge =
     typeof window !== 'undefined' ? window.electronAPI?.whisperTranscribe : undefined;
   const isSupported =
@@ -120,8 +98,8 @@ export function useSystemAudioTranscription(
       for (const track of streamRef.current.getTracks()) track.stop();
       streamRef.current = null;
     }
-    // Release the main-process Whisper session (best-effort; ignore errors).
-    window.electronAPI?.whisperRelease?.().catch(() => undefined);
+    // Release the main-process Whisper session with refcounting (best-effort; ignore errors).
+    window.electronAPI?.whisperRelease?.({ pipeline: 'loopback' }).catch(() => undefined);
     setInterimText('');
   }, [cleanupSubscriptions]);
 
@@ -165,91 +143,34 @@ export function useSystemAudioTranscription(
     const audioTrack = stream.getAudioTracks()[0];
     audioTrack?.addEventListener('ended', () => disable());
 
-    // Show the green dot IMMEDIATELY after stream acquisition — the user
-    // has already granted permission and the stream is live. Model preload
-    // and provider start happen below but shouldn't block the UI indicator.
+    // Show the green dot IMMEDIATELY after stream acquisition.
     setIsActive(true);
 
-    // 2. Pre-warm the main-process Whisper model (non-blocking for UI).
-    //    Native onnxruntime-node, ~760ms cold start.
+    // 2. Pre-warm the main-process Whisper models for loopback.
     try {
-      await bridge.whisperPreload?.({});
+      await bridge.whisperPreload?.({ pipeline: 'loopback' });
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn('[useSystemAudioTranscription] whisper preload failed (will load on-demand):', err);
-      // Don't abort — the transcribeFn call will trigger lazy load anyway.
     }
 
-    // 3. Spin up the Whisper provider in CAPTURE-ONLY mode.
-    // Hydrate the gate threshold from the persisted Settings row.
-    try {
-      const persisted = await database.getSetting<VADSensitivity>(
-        'vadSensitivity',
-        'medium',
-      );
-      const sensitivity: VADSensitivity =
-        persisted === 'low' || persisted === 'medium' || persisted === 'high'
-          ? persisted
-          : 'medium';
-      speechThresholdRef.current = mapSensitivityToThreshold(sensitivity);
-    } catch {
-      speechThresholdRef.current = mapSensitivityToThreshold('medium');
-    }
-
-    const offVadBus = vadSensitivityBus.subscribe((event) => {
-      speechThresholdRef.current = mapSensitivityToThreshold(event.value);
-    });
-
+    // 3. Spin up the Whisper provider in CAPTURE-ONLY mode with partials enabled.
+    // The provider internally executes VAD gating and listens to vadSensitivityBus.
     const provider = new WhisperProvider({
+      pipelineId: 'loopback',
+      partials: { enabled: true },
       speakerId: SYSTEM_SPEAKER_ID,
       speakerRole: 'other',
       language,
-      transcribeFn: async (pcm) => {
-        // VAD gate
-        if (!VAD_DISABLE_FOR_TEST.enabled) {
-          let result: VADResult | undefined;
-          let cause: 'threw' | 'invalid-score' | null = null;
-          try {
-            result = scoreChunk(pcm, {
-              speechThreshold: speechThresholdRef.current,
-            });
-          } catch {
-            cause = 'threw';
-          }
-
-          if (cause === null) {
-            const score = result?.score;
-            if (
-              !result ||
-              typeof score !== 'number' ||
-              !Number.isFinite(score) ||
-              score < 0 ||
-              score > 1
-            ) {
-              cause = 'invalid-score';
-            }
-          }
-
-          if (cause !== null) {
-            telemetry.emit({
-              kind: 'error',
-              name: 'transcription.vad-failed',
-              message:
-                cause === 'threw'
-                  ? 'VAD threw during scoreChunk for loopback chunk'
-                  : 'VAD returned an invalid score for loopback chunk',
-              stack: '',
-              breadcrumb: ['useSystemAudioTranscription', 'loopback', cause],
-            });
-          } else if (result && !result.isSpeech) {
-            telemetry.emit({ kind: 'vad.skipped', pipeline: 'loopback' });
-            setInterimText('');
-            return '';
-          }
-        }
-
-        const { text } = await bridge.whisperTranscribe!(pcm, { language });
-        return text;
+      transcribeFn: async (pcm, opts) => {
+        const result = await bridge.whisperTranscribe!(pcm, {
+          language: opts.language ?? language,
+          kind: opts.kind,
+          seq: opts.seq,
+          pipeline: 'loopback',
+          modelId: opts.modelId,
+        });
+        return result;
       },
     });
     providerRef.current = provider;
@@ -264,7 +185,7 @@ export function useSystemAudioTranscription(
     const offError = provider.on('error', ((e: ZuleError) => {
       notifyError(e);
     }) as TranscriptionEventCallback);
-    unsubscribesRef.current = [offLine, offInterim, offError, offVadBus];
+    unsubscribesRef.current = [offLine, offInterim, offError];
 
     // 4. Start capture. Inference happens out-of-process per chunk.
     try {
@@ -279,7 +200,6 @@ export function useSystemAudioTranscription(
       isEnablingRef.current = false;
     }
   }, [isSupported, language, disable, teardown, notifyError]);
-
 
   const pause = useCallback(() => {
     providerRef.current?.pause();
@@ -300,9 +220,6 @@ export function useSystemAudioTranscription(
       teardown();
     };
   }, [teardown]);
-
-  // Consumers observe results via `lines` / `interimText` — no event
-  // passthrough is exposed.
 
   return {
     lines,

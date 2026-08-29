@@ -904,34 +904,49 @@ function registerIpcHandlers(): void {
   // The renderer captures system-audio PCM and ships chunks here; onnxruntime
   // -node transcribes them. See electron/whisperService.ts for why inference is
   // not done in the renderer (native 0xC0000005 crash in the WASM engine).
-  ipcMain.handle('whisper:preload', async (_event, opts?: { modelId?: string }) => {
-    const { preloadWhisper } = await import('./whisperService');
-    await preloadWhisper(opts?.modelId);
-    return true;
-  });
+  ipcMain.handle(
+    'whisper:preload',
+    async (
+      _event,
+      opts?: { pipeline?: 'loopback' | 'microphone' | string; modelId?: string },
+    ) => {
+      const { preloadWhisper } = await import('./whisperService');
+      await preloadWhisper(opts ?? {});
+      return true;
+    },
+  );
 
   ipcMain.handle(
     'whisper:transcribe',
     async (
       _event,
       pcm: Float32Array,
-      opts?: { language?: string; modelId?: string },
+      opts?: {
+        language?: string;
+        modelId?: string;
+        kind?: 'final' | 'partial';
+        seq?: number;
+        pipeline?: 'loopback' | 'microphone';
+      },
     ) => {
       const { transcribePcm } = await import('./whisperService');
       // Electron structured-clones the Float32Array across IPC; normalise to a
       // real Float32Array view in case it arrives as a plain ArrayBuffer.
       const samples =
         pcm instanceof Float32Array ? pcm : new Float32Array(pcm as ArrayBufferLike);
-      const text = await transcribePcm(samples, opts ?? {});
-      return { text };
+      const result = await transcribePcm(samples, opts ?? {});
+      return result;
     },
   );
 
-  ipcMain.handle('whisper:release', async () => {
-    const { releaseWhisper } = await import('./whisperService');
-    releaseWhisper();
-    return true;
-  });
+  ipcMain.handle(
+    'whisper:release',
+    async (_event, opts?: { pipeline?: 'loopback' | 'microphone' | string }) => {
+      const { releaseWhisper } = await import('./whisperService');
+      releaseWhisper(opts ?? {});
+      return true;
+    },
+  );
 
   // ── Local text embeddings (also native, main-process) ──────────────────────
   // Same rationale as Whisper: onnxruntime-web crashes the renderer (0xC0000005),

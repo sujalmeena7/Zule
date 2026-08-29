@@ -1,24 +1,21 @@
 // ============================================
-// Zule AI — Screen Fast Cache
+// Zule AI — Fast Exact-Match Cache
 // ============================================
 //
-// A zero-async response cache for the screen-grounded fast dispatch path.
+// A zero-async response cache for latency-critical fast dispatch paths
+// (screen grounding and realtime audio conversational questions).
 //
 // `responseCache` (the Semantic_Cache) matches queries by cosine similarity
 // over Transformers.js embeddings. That tolerance is worth paying for on the
-// conversational path, where the same question arrives phrased three different
+// manual conversational path, where the same question arrives phrased three different
 // ways — but generating the query embedding is a WASM forward pass, so the
 // lookup costs hundreds of milliseconds warm and seconds cold. On a lookup that
 // misses, that entire cost is pure added latency before the request even leaves.
 //
-// On the screen path the tolerance is worth much less: the cache key includes
-// the captured screen text, and screen text is either byte-identical (the user
-// re-asked about the same unchanged frame) or wholly different (they scrolled to
-// the next question). Near-miss matching has almost nothing to match. So this
-// cache keys on an exact hash instead, which makes both hits and misses free.
+// On the screen and realtime meeting audio paths, exact-match hashing makes
+// both hits and misses instantaneous (0ms async delay).
 //
-// Scope is deliberately narrow: session-only, in-memory, small, and never
-// consulted by the conversational path.
+// Scope: session-only, in-memory, bounded.
 
 export interface CachedScreenResponse {
   text: string;
@@ -44,8 +41,7 @@ const entries: Entry[] = [];
 /**
  * FNV-1a, 32-bit. Chosen over a cryptographic digest because the only
  * requirement is that distinct screens rarely collide, and this runs on the
- * critical path — `crypto.subtle.digest` would reintroduce the await we are
- * here to remove.
+ * critical path.
  */
 function hash(text: string): string {
   let h = 0x811c9dc5;
@@ -57,12 +53,7 @@ function hash(text: string): string {
 }
 
 /**
- * Build the cache key, or `null` when this dispatch isn't cacheable.
- *
- * Returns `null` when there is no query and no usable screen text, since the
- * remaining key material would be identical across unrelated dispatches.
- * Images are keyed by their own hash so a fresh photo of a new question never
- * reuses the previous answer.
+ * Build the cache key for screen-grounded dispatches.
  */
 export function screenCacheKey(input: {
   mode: string;
@@ -84,6 +75,18 @@ export function screenCacheKey(input: {
   ].join(':');
 }
 
+/**
+ * Build the cache key for realtime conversational audio questions.
+ */
+export function conversationCacheKey(input: {
+  mode: string;
+  query: string;
+}): string | null {
+  const query = input.query.trim();
+  if (!query) return null;
+  return [input.mode, 'conv', hash(query)].join(':');
+}
+
 /** Look up a cached response. Synchronous and allocation-light. */
 export function getScreenCached(key: string | null): CachedScreenResponse | null {
   if (!key) return null;
@@ -96,8 +99,7 @@ export function getScreenCached(key: string | null): CachedScreenResponse | null
 }
 
 /**
- * Store a response. Simulated responses are rejected — caching the "add your
- * API key" placeholder would keep serving it after the key is configured.
+ * Store a response. Simulated responses are rejected.
  */
 export function setScreenCached(key: string | null, response: CachedScreenResponse): void {
   if (!key || response.isSimulated || !response.text.trim()) return;

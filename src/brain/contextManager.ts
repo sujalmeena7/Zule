@@ -248,11 +248,13 @@ function toLegacyTranscriptionLine(line: TranscriptLine) {
  * Kept deliberately short: it is prepended to every screen dispatch, and tokens
  * spent here are tokens of prefill on the critical path.
  */
-const ANSWER_FIRST_DIRECTIVE = `ANSWER FORMAT — follow exactly:
+export const ANSWER_FIRST_DIRECTIVE = `ANSWER FORMAT — follow exactly:
 - Line 1 is the answer itself and nothing else. For a multiple-choice question, the option letter and its text (e.g. "B) 14"). For a coding problem, the approach in one short line.
 - Line 1 is final. Work out the answer before you write it — for multiple choice, check every option first. Never revise it later in the reply; a reader who acts on line 1 will not see the correction.
 - Never open by restating the question, describing the screenshot, or saying what you are about to do.
 - Put code, explanation, and complexity after line 1.`;
+
+export const SPOKEN_VOICE_DIRECTIVE = `Answer in the concise, direct voice the user would speak aloud in a live meeting. Lead directly with the key insight or response without filler.`;
 
 export async function buildMinimalScreenContext(
   mode: CopilotMode,
@@ -310,6 +312,59 @@ export async function buildMinimalScreenContext(
     knowledgeContext: '',
     transcriptContext,
     screenContext,
+    userQuery,
+    fullPrompt: result.fullPrompt,
+    modalitiesUsed: result.trace.modalitiesUsed,
+    citations: [],
+    images: result.images,
+    redaction: result.redaction,
+  };
+}
+
+/**
+ * Fast context builder for realtime conversational audio questions.
+ * Eliminates KB/MemoryStore retrieval on the critical path and injects
+ * concise spoken-voice directive.
+ */
+export async function buildRealtimeConversationContext(
+  mode: CopilotMode,
+  transcript: TranscriptLine[],
+  userQuery: string,
+  customModes: ModeConfig[] = [],
+): Promise<ContextWindow> {
+  const redactionRules = await loadRedactionRules();
+
+  const result = build({
+    mode,
+    transcript: transcript.map(toLegacyTranscriptionLine),
+    screenText: '',
+    knowledgeChunks: [],
+    memoryChunks: [],
+    userQuery,
+    countTokens: countTokensApprox,
+    settings: {
+      customModes,
+      redactionRules,
+      skipRedaction: false,
+      maxTranscriptLines: 8,
+    },
+  });
+
+  const recentTranscript = transcript
+    .filter((line) => !line.isInterim)
+    .slice(-8)
+    .map((line) => `[${line.speaker === 'user' ? 'You' : 'Other'}]: ${line.text}`)
+    .join('\n');
+
+  const transcriptContext = recentTranscript
+    ? `\n--- LIVE CONVERSATION ---\n${recentTranscript}\n--- END CONVERSATION ---`
+    : '';
+
+  return {
+    systemPrompt: `${result.systemPrompt}\n\n${ANSWER_FIRST_DIRECTIVE}\n- ${SPOKEN_VOICE_DIRECTIVE}`,
+    knowledgeContext: '',
+    transcriptContext,
+    screenContext: '',
     userQuery,
     fullPrompt: result.fullPrompt,
     modalitiesUsed: result.trace.modalitiesUsed,
