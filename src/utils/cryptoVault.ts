@@ -247,7 +247,7 @@ export class CryptoVault {
       return err({ kind: 'crypto.decrypt-failed' });
     }
 
-    let combined: Uint8Array;
+    let combined: Uint8Array<ArrayBuffer>;
     try {
       combined = fromBase64(ciphertext);
     } catch {
@@ -296,7 +296,7 @@ function getSubtle(): SubtleCrypto | null {
  * `crypto.getRandomValues` — which would also disable PBKDF2 above,
  * so this is effectively unreachable in supported environments.
  */
-function generateRandomBytes(length: number): Uint8Array {
+function generateRandomBytes(length: number): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(length);
   const c = (globalThis as { crypto?: Crypto }).crypto;
   if (!c || typeof c.getRandomValues !== 'function') {
@@ -326,7 +326,7 @@ function toBase64(bytes: Uint8Array): string {
  * Decode a standard (RFC 4648) base64 string. Throws on malformed
  * input — callers translate that into `crypto.decrypt-failed`.
  */
-function fromBase64(b64: string): Uint8Array {
+function fromBase64(b64: string): Uint8Array<ArrayBuffer> {
   const binary = atob(b64);
   const out = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) {

@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from 'vitest';
 import * as fc from 'fast-check';
-import { QuestionDetectorStream, differsByAtLeastOneWord } from './questionDetector';
+import { QuestionDetectorStream, countWordDifferences } from './questionDetector';
 import type { DetectionResult } from './questionDetector';
 import type { TranscriptionLine } from '../types/transcription';
 
@@ -34,14 +34,6 @@ function makeTranscriptionLine(overrides: Partial<TranscriptionLine> = {}): Tran
 
 // Arbitrary that generates non-empty text strings of reasonable length
 const arbText = fc.string({ minLength: 10, maxLength: 200 }).filter(s => s.trim().length >= 10);
-
-// Arbitrary that generates text ending with a question mark
-const arbQuestionText = fc.string({ minLength: 10, maxLength: 200 })
-  .filter(s => s.trim().length >= 10)
-  .map(s => s.trimEnd().replace(/\?$/, '') + '?');
-
-// Arbitrary for speaker roles
-const arbSpeakerRole = fc.constantFrom('user' as const, 'other' as const);
 
 // ---------------------------------------------------------------------------
 // Property 6: Question_Detector never fires on user-attributed lines
@@ -383,16 +375,16 @@ describe('Property 23: Trailing-? floor for non-self speakers', () => {
 // Unit tests for helper function
 // ---------------------------------------------------------------------------
 
-describe('differsByAtLeastOneWord', () => {
-  it('returns true for different word count', () => {
-    expect(differsByAtLeastOneWord('hello world', 'hello')).toBe(true);
+describe('countWordDifferences', () => {
+  it('counts a dropped word as one difference', () => {
+    expect(countWordDifferences('hello world', 'hello')).toBe(1);
   });
 
-  it('returns true when same length but different words', () => {
-    expect(differsByAtLeastOneWord('hello world', 'hello there')).toBe(true);
+  it('counts a substituted word as two differences (one removed, one added)', () => {
+    expect(countWordDifferences('hello world', 'hello there')).toBe(2);
   });
 
-  it('returns false for identical text', () => {
-    expect(differsByAtLeastOneWord('hello world', 'hello world')).toBe(false);
+  it('returns zero for identical text', () => {
+    expect(countWordDifferences('hello world', 'hello world')).toBe(0);
   });
 });

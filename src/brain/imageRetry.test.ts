@@ -20,9 +20,11 @@ const streamMock = vi.fn();
 vi.mock('./providerRouter', () => {
   class VaultLockedError extends Error {}
   class OfflineError extends Error {}
+  class NoVisionProviderError extends Error {}
   return {
     VaultLockedError,
     OfflineError,
+    NoVisionProviderError,
     AI_Provider_Router: class {
       stream = streamMock;
       complete = vi.fn();
@@ -32,6 +34,7 @@ vi.mock('./providerRouter', () => {
       setVaultLocked = vi.fn();
       setOffline = vi.fn();
       getActiveAdapterCapabilities = vi.fn(() => ({ imageInput: true }));
+      hasImageCapableAdapter = vi.fn(() => true);
     },
   };
 });
@@ -65,6 +68,9 @@ vi.mock('./providers/simulation', () => ({
 }));
 
 const { streamAIResponse } = await import('./aiProvider');
+// Resolved from the mock above, so `instanceof` compares against the same class
+// `aiProvider` closed over.
+const { NoVisionProviderError } = await import('./providerRouter');
 
 /** Minimal ContextWindow carrying an attached keyframe plus OCR text. */
 function contextWithImage() {
@@ -164,5 +170,58 @@ describe('streamAIResponse — image-rejection retry', () => {
     const cb = makeCallbacks();
     await expect(streamAIResponse(contextWithImage(), cb)).rejects.toThrow(/aborted/);
     expect(cb.onProviderFallback).not.toHaveBeenCalled();
+  });
+
+  // The screen fast path sends pixels and keeps no OCR text, so dropping the
+  // image leaves a prompt with no question in it. A text-only retry there does
+  // not degrade the answer, it manufactures a confident non-answer ("no
+  // conversation context was included") that looks like the model's opinion.
+  it('does not retry text-only when the image was the only grounding', async () => {
+    streamMock.mockRejectedValue(
+      new Error('HTTP 404 — No endpoints found that support image input'),
+    );
+
+    const cb = makeCallbacks();
+    await expect(
+      streamAIResponse(
+        {
+          systemPrompt: 'sys',
+          userQuery: 'Answer the question on my screen',
+          fullPrompt: 'sys',
+          images: [{ mimeType: 'image/jpeg', base64: 'AAAA' }],
+        } as never,
+        cb,
+        undefined,
+        undefined,
+        { requireImageInput: true },
+      ),
+    ).rejects.toBeInstanceOf(NoVisionProviderError);
+
+    expect(streamMock).toHaveBeenCalledTimes(1);
+    // No simulated placeholder — the caller has to hear the real cause so it can
+    // fall back to reading the screen as text.
+    expect(cb.onProviderFallback).not.toHaveBeenCalled();
+    expect(cb.onComplete).not.toHaveBeenCalled();
+  });
+
+  it('forwards requireImageInput to the router', async () => {
+    streamMock.mockImplementationOnce(async (_p: unknown, cb2: { onComplete: (r: unknown) => void }) => {
+      cb2.onComplete({
+        text: 'ok',
+        promptTokens: 1,
+        completionTokens: 1,
+        modelId: 'm',
+        providerId: 'gemini',
+        isSimulated: false,
+        status: 200,
+      });
+    });
+
+    await streamAIResponse(contextWithImage(), makeCallbacks(), undefined, undefined, {
+      requireImageInput: true,
+    });
+
+    const opts = streamMock.mock.calls[0][2] as { requireImageInput?: boolean };
+    expect(opts.requireImageInput).toBe(true);
   });
 });

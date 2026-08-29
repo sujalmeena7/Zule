@@ -14,11 +14,11 @@
 //   - 7.4: Keyframe is valid base64 JPEG
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { phash, type ImageDataLike } from '../../utils/phash';
+import { phash } from '../../utils/phash';
 
 // Polyfill ImageData for Node/vitest environment (not available outside browser)
 if (typeof globalThis.ImageData === 'undefined') {
-  (globalThis as any).ImageData = class ImageData {
+  (globalThis as unknown as Record<string, unknown>).ImageData = class ImageData {
     data: Uint8ClampedArray;
     width: number;
     height: number;
@@ -30,7 +30,7 @@ if (typeof globalThis.ImageData === 'undefined') {
       } else {
         this.width = dataOrWidth;
         this.height = widthOrHeight;
-        this.data = new Uint8ClampedArray(this.width * this.height * 4);
+        this.data = new Uint8ClampedArray(dataOrWidth * widthOrHeight * 4);
       }
     }
   };
@@ -203,16 +203,16 @@ function setupDocumentMock(sourcePixelData?: Uint8ClampedArray) {
     }
     // Fallback for non-canvas elements
     if (originalCreateElement) {
-      return originalCreateElement.call(document, tag);
+      return (originalCreateElement as (tagName: string) => HTMLElement).call(document, tag);
     }
-    return {};
+    return {} as HTMLElement;
   });
 
   // Ensure document exists in the test env
   if (!globalThis.document) {
-    (globalThis as any).document = { createElement: mockCreateElement };
+    (globalThis as unknown as Record<string, unknown>).document = { createElement: mockCreateElement };
   } else {
-    vi.spyOn(document, 'createElement').mockImplementation(mockCreateElement);
+    vi.spyOn(document, 'createElement').mockImplementation(mockCreateElement as unknown as typeof document.createElement);
   }
 }
 
@@ -325,14 +325,11 @@ describe('FramePrepWorker (sync fallback)', () => {
       const width = 64;
       const height = 64;
       const blackPixels = makeUniformPixels(width, height, 0, 0, 0);
-      const whitePixels = makeUniformPixels(width, height, 255, 255, 255);
 
       const blackArray = new Uint8ClampedArray(blackPixels);
-      const whiteArray = new Uint8ClampedArray(whitePixels);
 
       // Compute hashes directly
       const blackHash = phash({ data: blackArray, width, height });
-      const whiteHash = phash({ data: whiteArray, width, height });
 
       // For uniform frames, the hash is all-ones (all samples >= mean)
       // so both uniform frames produce the same hash (0xFF * 8).

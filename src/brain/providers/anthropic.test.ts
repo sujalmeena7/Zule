@@ -487,3 +487,397 @@ describe('AnthropicAdapter — request body shape', () => {
     });
   });
 });
+
+// --- Anthropic-compatible gateways --------------------------------------
+//
+// The adapter is routinely pointed at a resale gateway rather than
+// api.anthropic.com. Those gateways translate the *request* into whatever
+// upstream they proxy but frequently do not translate the *response*, ignore
+// `stream: true`, or report failure inside HTTP 200. Each of those used to
+// degrade to an empty answer, which reached the UI as a spinner that never
+// resolved. These tests pin the tolerant behaviour.
+
+const GATEWAY_URL = 'https://api.lumosel.vip/v1/messages';
+
+describe('AnthropicAdapter — compatible gateways', () => {
+  let originalFetch: typeof globalThis.fetch;
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('sends Authorization: Bearer to a non-Anthropic host, alongside x-api-key', async () => {
+    const sse =
+      'data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n';
+    const { impl, calls } = makeRecordingFetch(() => makeStreamResponse([sse]));
+    const adapter = new AnthropicAdapter({
+      apiKey: TEST_API_KEY,
+      baseUrl: GATEWAY_URL,
+      fetchImpl: impl,
+    });
+
+    const { cb } = makeStreamCallbacks();
+    await adapter.streamGenerate(PROMPT, cb, NO_OPTS);
+
+    expect(String(calls[0].input)).toBe(GATEWAY_URL);
+    const headers = new Headers(calls[0].init?.headers);
+    expect(headers.get('authorization')).toBe(`Bearer ${TEST_API_KEY}`);
+    expect(headers.get('x-api-key')).toBe(TEST_API_KEY);
+  });
+
+  it('reads an OpenAI-dialect SSE stream from a gateway that did not translate the response', async () => {
+    const sse =
+      'data: {"choices":[{"delta":{"role":"assistant","content":""}}]}\n\n' +
+      'data: {"choices":[{"delta":{"content":"2 + 2 "}}]}\n\n' +
+      'data: {"choices":[{"delta":{"content":"= 4"}}]}\n\n' +
+      'data: {"choices":[{"delta":{}}],"usage":{"prompt_tokens":11,"completion_tokens":5}}\n\n' +
+      'data: [DONE]\n\n';
+    const { impl } = makeRecordingFetch(() => makeStreamResponse([sse]));
+    const adapter = new AnthropicAdapter({
+      apiKey: TEST_API_KEY,
+      baseUrl: GATEWAY_URL,
+      fetchImpl: impl,
+    });
+
+    const { cb, tokens, errors, result } = makeStreamCallbacks();
+    await adapter.streamGenerate(PROMPT, cb, NO_OPTS);
+
+    expect(errors).toHaveLength(0);
+    expect(tokens).toEqual(['2 + 2 ', '2 + 2 = 4']);
+    expect(result.value?.text).toBe('2 + 2 = 4');
+    expect(result.value?.promptTokens).toBe(11);
+    expect(result.value?.completionTokens).toBe(5);
+  });
+
+  it('salvages a gateway that ignored stream:true and returned one Anthropic JSON body', async () => {
+    const { impl } = makeRecordingFetch(() =>
+      makeJsonResponse({
+        content: [{ type: 'text', text: 'four' }],
+        usage: { input_tokens: 9, output_tokens: 1 },
+      }),
+    );
+    const adapter = new AnthropicAdapter({
+      apiKey: TEST_API_KEY,
+      baseUrl: GATEWAY_URL,
+      fetchImpl: impl,
+    });
+
+    const { cb, tokens, errors, result } = makeStreamCallbacks();
+    await adapter.streamGenerate(PROMPT, cb, NO_OPTS);
+
+    expect(errors).toHaveLength(0);
+    expect(tokens).toEqual(['four']);
+    expect(result.value?.text).toBe('four');
+  });
+
+  it('salvages a gateway that ignored stream:true and returned one OpenAI JSON body', async () => {
+    const { impl } = makeRecordingFetch(() =>
+      makeJsonResponse({
+        choices: [{ message: { role: 'assistant', content: 'four' } }],
+      }),
+    );
+    const adapter = new AnthropicAdapter({
+      apiKey: TEST_API_KEY,
+      baseUrl: GATEWAY_URL,
+      fetchImpl: impl,
+    });
+
+    const { cb, errors, result } = makeStreamCallbacks();
+    await adapter.streamGenerate(PROMPT, cb, NO_OPTS);
+
+    expect(errors).toHaveLength(0);
+    expect(result.value?.text).toBe('four');
+  });
+
+  it('reports an error frame delivered inside HTTP 200 instead of completing empty', async () => {
+    const sse =
+      'event: error\n' +
+      'data: {"type":"error","error":{"type":"insufficient_quota","message":"Your balance is exhausted"}}\n\n';
+    const { impl } = makeRecordingFetch(() => makeStreamResponse([sse]));
+    const adapter = new AnthropicAdapter({
+      apiKey: TEST_API_KEY,
+      baseUrl: GATEWAY_URL,
+      fetchImpl: impl,
+    });
+
+    const { cb, errors, result } = makeStreamCallbacks();
+    await adapter.streamGenerate(PROMPT, cb, NO_OPTS);
+
+    // onComplete withheld: handing the router `text: ''` is what produced a
+    // spinner with no answer and no explanation.
+    expect(result.value).toBeNull();
+    expect(errors).toHaveLength(1);
+    expect(errors[0].message).toContain('Your balance is exhausted');
+    expect(errors[0].message).toContain(GATEWAY_URL);
+  });
+
+  it('reports an error envelope returned as a plain 200 JSON body', async () => {
+    const { impl } = makeRecordingFetch(() =>
+      makeJsonResponse({ error: { message: 'model not found on this gateway' } }),
+    );
+    const adapter = new AnthropicAdapter({
+      apiKey: TEST_API_KEY,
+      baseUrl: GATEWAY_URL,
+      fetchImpl: impl,
+    });
+
+    const { cb, errors, result } = makeStreamCallbacks();
+    await adapter.streamGenerate(PROMPT, cb, NO_OPTS);
+
+    expect(result.value).toBeNull();
+    expect(errors[0]?.message).toContain('model not found on this gateway');
+  });
+
+  it('quotes an unreadable body so the failure is self-diagnosing, with the key masked', async () => {
+    const { impl } = makeRecordingFetch(
+      () =>
+        new Response(`<html><body>Forbidden ${TEST_API_KEY}</body></html>`, {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        }),
+    );
+    const adapter = new AnthropicAdapter({
+      apiKey: TEST_API_KEY,
+      baseUrl: GATEWAY_URL,
+      fetchImpl: impl,
+    });
+
+    const { cb, errors, result } = makeStreamCallbacks();
+    await adapter.streamGenerate(PROMPT, cb, NO_OPTS);
+
+    expect(result.value).toBeNull();
+    expect(errors).toHaveLength(1);
+    expect(errors[0].message).toContain('Forbidden');
+    expect(errors[0].message).not.toContain(TEST_API_KEY);
+  });
+
+  it('reports an empty 200 body with a hint about the Base URL', async () => {
+    const { impl } = makeRecordingFetch(
+      () => new Response('', { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+    );
+    const adapter = new AnthropicAdapter({
+      apiKey: TEST_API_KEY,
+      baseUrl: GATEWAY_URL,
+      fetchImpl: impl,
+    });
+
+    const { cb, errors, result } = makeStreamCallbacks();
+    await adapter.streamGenerate(PROMPT, cb, NO_OPTS);
+
+    expect(result.value).toBeNull();
+    expect(errors[0]?.message).toMatch(/v1\/messages/);
+  });
+
+  it('completes a Base URL that names only a host, and leaves any path untouched', async () => {
+    // The observed misconfiguration: `https://tokenbom.com` with no path, which
+    // POSTed the gateway's HTML homepage and got HTTP 200 back.
+    const sse =
+      'event: content_block_delta\n' +
+      'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"ok"}}\n\n';
+    const { impl, calls } = makeRecordingFetch(() => makeStreamResponse([sse]));
+
+    const bare = new AnthropicAdapter({
+      apiKey: TEST_API_KEY,
+      baseUrl: 'https://tokenbom.com',
+      fetchImpl: impl,
+    });
+    await bare.streamGenerate(PROMPT, makeStreamCallbacks().cb, NO_OPTS);
+    expect(String(calls[0].input)).toBe('https://tokenbom.com/v1/messages');
+
+    const withPath = new AnthropicAdapter({
+      apiKey: TEST_API_KEY,
+      baseUrl: 'https://tokenbom.com/anthropic/v1/messages',
+      fetchImpl: impl,
+    });
+    await withPath.streamGenerate(PROMPT, makeStreamCallbacks().cb, NO_OPTS);
+    expect(String(calls[1].input)).toBe('https://tokenbom.com/anthropic/v1/messages');
+  });
+
+  it('complete() reads the OpenAI non-streaming shape too', async () => {
+    const { impl } = makeRecordingFetch(() =>
+      makeJsonResponse({
+        choices: [{ message: { content: 'four' } }],
+        usage: { input_tokens: 4, output_tokens: 1 },
+      }),
+    );
+    const adapter = new AnthropicAdapter({
+      apiKey: TEST_API_KEY,
+      baseUrl: GATEWAY_URL,
+      fetchImpl: impl,
+    });
+
+    const res = await adapter.complete(PROMPT, NO_OPTS);
+    expect(res.text).toBe('four');
+  });
+});
+
+// --- Fast model + metrics parity with the OpenAI-compatible adapter ------
+
+describe('AnthropicAdapter — fast model selection', () => {
+  let originalFetch: typeof globalThis.fetch;
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  const TEXT_SSE =
+    'event: content_block_delta\n' +
+    'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}\n\n' +
+    'event: message_stop\ndata: {"type":"message_stop"}\n\n';
+
+  it('sends the fast model when the caller prefers speed', async () => {
+    const { impl, calls } = makeRecordingFetch(() => makeStreamResponse([TEXT_SSE]));
+    const adapter = new AnthropicAdapter({
+      apiKey: TEST_API_KEY,
+      defaultModelId: 'claude-opus-4-20250514',
+      fastModelId: 'claude-3-5-haiku-20241022',
+      fetchImpl: impl,
+    });
+
+    const { cb, result } = makeStreamCallbacks();
+    await adapter.streamGenerate(PROMPT, cb, { preferFastModel: true });
+
+    expect(JSON.parse(String(calls[0].init?.body)).model).toBe(
+      'claude-3-5-haiku-20241022',
+    );
+    expect(result.value?.modelId).toBe('claude-3-5-haiku-20241022');
+  });
+
+  it('falls back to the default model when no fast model is configured', async () => {
+    const { impl, calls } = makeRecordingFetch(() => makeStreamResponse([TEXT_SSE]));
+    const adapter = new AnthropicAdapter({
+      apiKey: TEST_API_KEY,
+      defaultModelId: 'claude-opus-4-20250514',
+      fetchImpl: impl,
+    });
+
+    await adapter.streamGenerate(PROMPT, makeStreamCallbacks().cb, {
+      preferFastModel: true,
+    });
+
+    expect(JSON.parse(String(calls[0].init?.body)).model).toBe(
+      'claude-opus-4-20250514',
+    );
+  });
+
+  it('treats a blank fast model id as unset', async () => {
+    const { impl, calls } = makeRecordingFetch(() => makeStreamResponse([TEXT_SSE]));
+    const adapter = new AnthropicAdapter({
+      apiKey: TEST_API_KEY,
+      defaultModelId: 'claude-opus-4-20250514',
+      fastModelId: '   ',
+      fetchImpl: impl,
+    });
+
+    await adapter.streamGenerate(PROMPT, makeStreamCallbacks().cb, {
+      preferFastModel: true,
+    });
+
+    expect(JSON.parse(String(calls[0].init?.body)).model).toBe(
+      'claude-opus-4-20250514',
+    );
+  });
+
+  it('lets an explicit opts.modelId win over both', async () => {
+    const { impl, calls } = makeRecordingFetch(() => makeStreamResponse([TEXT_SSE]));
+    const adapter = new AnthropicAdapter({
+      apiKey: TEST_API_KEY,
+      defaultModelId: 'claude-opus-4-20250514',
+      fastModelId: 'claude-3-5-haiku-20241022',
+      fetchImpl: impl,
+    });
+
+    await adapter.streamGenerate(PROMPT, makeStreamCallbacks().cb, {
+      preferFastModel: true,
+      modelId: 'claude-sonnet-4-20250514',
+    });
+
+    expect(JSON.parse(String(calls[0].init?.body)).model).toBe(
+      'claude-sonnet-4-20250514',
+    );
+  });
+
+  it('applies the same precedence on the non-streaming path', async () => {
+    const { impl, calls } = makeRecordingFetch(() =>
+      makeJsonResponse({ content: [{ type: 'text', text: 'hi' }] }),
+    );
+    const adapter = new AnthropicAdapter({
+      apiKey: TEST_API_KEY,
+      defaultModelId: 'claude-opus-4-20250514',
+      fastModelId: 'claude-3-5-haiku-20241022',
+      fetchImpl: impl,
+    });
+
+    const res = await adapter.complete(PROMPT, { preferFastModel: true });
+
+    expect(JSON.parse(String(calls[0].init?.body)).model).toBe(
+      'claude-3-5-haiku-20241022',
+    );
+    expect(res.modelId).toBe('claude-3-5-haiku-20241022');
+  });
+
+  it('emits a metrics frame naming the model that answered, before onComplete', async () => {
+    const { impl } = makeRecordingFetch(() => makeStreamResponse([TEXT_SSE]));
+    const adapter = new AnthropicAdapter({
+      apiKey: TEST_API_KEY,
+      fastModelId: 'claude-3-5-haiku-20241022',
+      fetchImpl: impl,
+    });
+
+    const order: string[] = [];
+    const metrics: Array<{ ttftMs: number; totalMs: number; modelId: string; retries: number }> =
+      [];
+    await adapter.streamGenerate(
+      PROMPT,
+      {
+        onToken: () => {},
+        onComplete: () => {
+          order.push('complete');
+        },
+        onError: () => {},
+        onMetrics: (m) => {
+          order.push('metrics');
+          metrics.push(m);
+        },
+      },
+      { preferFastModel: true },
+    );
+
+    // Order matters: a consumer that logs both must see the model id alongside
+    // the timings rather than after them.
+    expect(order).toEqual(['metrics', 'complete']);
+    expect(metrics[0].modelId).toBe('claude-3-5-haiku-20241022');
+    expect(metrics[0].retries).toBe(0);
+    expect(metrics[0].ttftMs).toBeGreaterThanOrEqual(0);
+    expect(metrics[0].totalMs).toBeGreaterThanOrEqual(metrics[0].ttftMs);
+  });
+
+  it('emits no metrics frame when the stream produced no answer', async () => {
+    const { impl } = makeRecordingFetch(
+      () => new Response('', { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+    );
+    const adapter = new AnthropicAdapter({ apiKey: TEST_API_KEY, fetchImpl: impl });
+
+    const metrics: unknown[] = [];
+    await adapter.streamGenerate(
+      PROMPT,
+      {
+        onToken: () => {},
+        onComplete: () => {},
+        onError: () => {},
+        onMetrics: (m) => metrics.push(m),
+      },
+      NO_OPTS,
+    );
+
+    // The request failed; reporting a latency for it would put a number on a
+    // non-answer and make the next comparison meaningless.
+    expect(metrics).toEqual([]);
+  });
+});

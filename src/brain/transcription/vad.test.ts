@@ -14,8 +14,6 @@ import * as fc from 'fast-check';
 import {
   scoreChunk,
   mapSensitivityToThreshold,
-  SPEECH_FLOOR,
-  DEFAULT_FRAME_SIZE,
   type VADConfig,
 } from './vad';
 

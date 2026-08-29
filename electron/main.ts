@@ -291,7 +291,16 @@ function registerDisplayMediaHandler(): void {
 // the user has already opted in by clicking the mic. The OS still enforces its
 // own microphone privacy prompt on first use.
 function registerMediaPermissionHandlers(): void {
-  const ALLOWED = new Set(['media', 'audioCapture', 'mediaKeySystem']);
+  const ALLOWED = new Set([
+    'media',
+    'audioCapture',
+    'microphone',
+    'speech',
+    'speech-recognition',
+    'display-capture',
+    'screen',
+    'mediaKeySystem',
+  ]);
 
   // Async permission *requests* (e.g. getUserMedia, SpeechRecognition).
   session.defaultSession.setPermissionRequestHandler(
@@ -779,15 +788,35 @@ function registerIpcHandlers(): void {
     }));
   });
 
-  // ── BitBlt Desktop Capture (bypasses SetWindowDisplayAffinity) ──────────────
-  // Uses GetDC(NULL) + BitBlt which reads the composited framebuffer directly,
-  // ignoring WDA_EXCLUDEFROMCAPTURE. Falls back gracefully if FFI unavailable.
+  // ── BitBlt Desktop Capture ──────────────────────────────────────────────────
+  // Native GetDC(NULL) + BitBlt through koffi: tens of milliseconds, against
+  // seconds for the UI Automation + Tesseract chain.
+  //
+  // Refuses to return a frame when the foreground window is capture-protected.
+  // This path does NOT see through WDA_EXCLUDEFROMCAPTURE — it returns the window
+  // behind the protected one, as a valid JPEG, with nothing about it looking
+  // wrong. Handing that to a vision model buys a fast confident answer about the
+  // wrong screen. `ok: false` instead lets the renderer fall through to UI
+  // Automation, which reads a protected window's text in ~1.6s.
   ipcMain.handle('capture-desktop-bitblt', async () => {
     try {
-      const { captureDesktopAsBase64 } = await import('./win32/desktopCapture');
+      const { captureDesktopAsJpeg, foregroundWindowIsCaptureProtected } = await import(
+        './win32/desktopCapture'
+      );
+
+      // Before the capture, not after: a frame that cannot be used is not worth
+      // the encode.
+      if (foregroundWindowIsCaptureProtected()) {
+        return { ok: false, reason: 'capture-protected' };
+      }
+
       const overlayWin = overlayManager?.getWindow?.() ?? null;
-      const base64 = captureDesktopAsBase64(overlayWin);
-      return base64 ? { ok: true, base64 } : { ok: false, reason: 'capture-failed' };
+      const shot = captureDesktopAsJpeg(overlayWin);
+      // `bytes`/`width`/`height` are diagnostics: the renderer folds them into its
+      // `[perf]` line so payload size is attributable instead of guessed at.
+      return shot
+        ? { ok: true, base64: shot.base64, bytes: shot.bytes, width: shot.width, height: shot.height }
+        : { ok: false, reason: 'capture-failed' };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       return { ok: false, reason: msg };
@@ -802,9 +831,30 @@ function registerIpcHandlers(): void {
   // Optimization: Uses a minimal PowerShell script with pre-compiled type to
   // reduce cold-start from ~3s to ~1s. Further requests reuse the cached .NET
   // assemblies in the same PowerShell session (if the OS caches them).
+  //
+  // One-strike circuit breaker, for spawn-level failures only. A missing or
+  // blocked `powershell.exe`, an unavailable `UIAutomationClient` assembly, or a
+  // policy that refuses `Add-Type` fails identically on every call, so retrying
+  // costs the full budget per screen dispatch and returns nothing.
+  //
+  // A TIMEOUT is not a strike, and this is the case that matters. UI Automation
+  // is verified working on this machine — `scripts/uia-probe.mjs` reads a
+  // capture-protected window in ~1.6s — yet `FindAll(Descendants, TrueCondition)`
+  // walks the entire accessibility tree, and on a Chrome or VS Code window that
+  // is thousands of elements and can overrun the 5s budget. That says something
+  // about the window in front at the time, nothing about the machine. Striking on
+  // it would disable the one path that survives display affinity for the rest of
+  // the session, on the evidence of a single heavy window.
+  //
+  // `no-text` is likewise not a strike: a successful walk of a window with no
+  // readable text says nothing about the next window.
+  let uiaDisabledReason: string | null = null;
   ipcMain.handle('extract-foreground-text', async () => {
     if (process.platform !== 'win32') {
       return { ok: false, reason: 'not-windows' };
+    }
+    if (uiaDisabledReason) {
+      return { ok: false, reason: `disabled-after-failure: ${uiaDisabledReason}` };
     }
     try {
       const { execFile } = await import('node:child_process');
@@ -814,6 +864,7 @@ function registerIpcHandlers(): void {
       // Minimal PowerShell script — optimized for speed over elegance
       const psScript = `Add-Type -A UIAutomationClient,UIAutomationTypes;Add-Type 'using System;using System.Runtime.InteropServices;public class W{[DllImport("user32.dll")]public static extern IntPtr GetForegroundWindow();}';$h=[W]::GetForegroundWindow();if($h-eq[IntPtr]::Zero){exit};$e=[System.Windows.Automation.AutomationElement]::FromHandle($h);if(!$e){exit};$r=@();foreach($c in $e.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)){try{$n=$c.Current.Name;if($n-and$n.Length-gt2-and$n.Length-lt5000){$r+=$n}}catch{}};($r|Select -Unique) -join [char]10`;
 
+      const startedAt = Date.now();
       const { stdout } = await execFileAsync(
         'powershell.exe',
         ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', psScript],
@@ -821,11 +872,31 @@ function registerIpcHandlers(): void {
       );
 
       const text = stdout.trim();
+      console.log(`[UIAutomation] ${text.length} chars in ${Date.now() - startedAt}ms`);
       return text.length > 0 ? { ok: true, text } : { ok: false, reason: 'no-text' };
     } catch (err: unknown) {
+      // `execFile` puts the actual cause on `stderr`, not on `message` — the
+      // message is only the command line, which is why every previous failure
+      // here was unexplainable from the log.
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`[UIAutomation] Failed: ${msg}`);
-      return { ok: false, reason: msg };
+      const stderr = String((err as { stderr?: unknown })?.stderr ?? '').trim();
+      const cause = stderr.length > 0 ? stderr.split('\n')[0].slice(0, 300) : msg.slice(0, 300);
+
+      // `killed` is set when execFile terminated the process itself, which on
+      // these options means only one thing: the 5s timeout elapsed. Per the note
+      // on the breaker above, that is a fact about the foreground window's tree
+      // size, so the next dispatch — against a different window — gets to try.
+      const timedOut = (err as { killed?: boolean })?.killed === true;
+      if (timedOut) {
+        console.warn('[UIAutomation] Timed out after 5000ms — tree too large; not disabling');
+        return { ok: false, reason: 'timeout' };
+      }
+
+      uiaDisabledReason = cause;
+      console.warn(
+        `[UIAutomation] Failed — disabling UI Automation for this session. Cause: ${cause}`,
+      );
+      return { ok: false, reason: cause };
     }
   });
 
@@ -833,34 +904,49 @@ function registerIpcHandlers(): void {
   // The renderer captures system-audio PCM and ships chunks here; onnxruntime
   // -node transcribes them. See electron/whisperService.ts for why inference is
   // not done in the renderer (native 0xC0000005 crash in the WASM engine).
-  ipcMain.handle('whisper:preload', async (_event, opts?: { modelId?: string }) => {
-    const { preloadWhisper } = await import('./whisperService');
-    await preloadWhisper(opts?.modelId);
-    return true;
-  });
+  ipcMain.handle(
+    'whisper:preload',
+    async (
+      _event,
+      opts?: { pipeline?: 'loopback' | 'microphone' | string; modelId?: string },
+    ) => {
+      const { preloadWhisper } = await import('./whisperService');
+      await preloadWhisper(opts ?? {});
+      return true;
+    },
+  );
 
   ipcMain.handle(
     'whisper:transcribe',
     async (
       _event,
       pcm: Float32Array,
-      opts?: { language?: string; modelId?: string },
+      opts?: {
+        language?: string;
+        modelId?: string;
+        kind?: 'final' | 'partial';
+        seq?: number;
+        pipeline?: 'loopback' | 'microphone';
+      },
     ) => {
       const { transcribePcm } = await import('./whisperService');
       // Electron structured-clones the Float32Array across IPC; normalise to a
       // real Float32Array view in case it arrives as a plain ArrayBuffer.
       const samples =
         pcm instanceof Float32Array ? pcm : new Float32Array(pcm as ArrayBufferLike);
-      const text = await transcribePcm(samples, opts ?? {});
-      return { text };
+      const result = await transcribePcm(samples, opts ?? {});
+      return result;
     },
   );
 
-  ipcMain.handle('whisper:release', async () => {
-    const { releaseWhisper } = await import('./whisperService');
-    releaseWhisper();
-    return true;
-  });
+  ipcMain.handle(
+    'whisper:release',
+    async (_event, opts?: { pipeline?: 'loopback' | 'microphone' | string }) => {
+      const { releaseWhisper } = await import('./whisperService');
+      releaseWhisper(opts ?? {});
+      return true;
+    },
+  );
 
   // ── Local text embeddings (also native, main-process) ──────────────────────
   // Same rationale as Whisper: onnxruntime-web crashes the renderer (0xC0000005),
@@ -1048,7 +1134,7 @@ function registerIpcHandlers(): void {
     service.deferInstall();
   });
 
-  // ── Phone Camera Input IPC Handlers ─────────────────────────────────────
+  // ── Phone Camera Input & Answer IPC Handlers ────────────────────────────
   ipcMain.handle('phone-server-start', async () => {
     try {
       if (!phoneServerModule) {
@@ -1073,6 +1159,25 @@ function registerIpcHandlers(): void {
       phoneServerModule?.stopPhoneServer();
     } catch (err) {
       console.warn('[main] phone-server-stop failed:', err);
+    }
+  });
+
+  ipcMain.handle('phone-send-answer', async (_e, data: {
+    id?: string;
+    text: string;
+    question?: string;
+    mode?: string;
+    model?: string;
+    timestamp?: number;
+  }) => {
+    try {
+      if (!phoneServerModule || !phoneServerModule.isPhoneServerRunning()) {
+        return { sent: 0, seq: 0 };
+      }
+      return phoneServerModule.broadcastAnswer(data);
+    } catch (err) {
+      console.warn('[main] phone-send-answer failed:', err);
+      return { sent: 0, seq: 0 };
     }
   });
 }
@@ -1168,6 +1273,11 @@ app.whenReady().then(() => {
         service.checkForUpdate('startup').catch(() => {
           // Silently ignore — offline-first (Requirement 8.1)
         });
+
+        // Periodic background check every 2 hours (Antigravity / Cursor model)
+        setInterval(() => {
+          service.checkForUpdate('startup').catch(() => {});
+        }, 2 * 60 * 60 * 1000);
       } catch (err) {
         console.warn(
           `[main] autoUpdateService init failed: ${
@@ -1180,6 +1290,7 @@ app.whenReady().then(() => {
     }, 3000); // 3s delay keeps it within the 5s budget (Req 2.1)
   });
 });
+
 
 // Quit when all windows are closed (Windows behavior)
 app.on('window-all-closed', () => {

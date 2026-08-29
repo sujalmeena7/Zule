@@ -425,7 +425,7 @@ function openCacheDB(): Promise<IDBDatabase> {
     request.onerror = () => reject(request.error);
     // We don't handle onupgradeneeded here because the main database.ts
     // module handles schema creation. This just opens the existing DB.
-    request.onupgradeneeded = (event) => {
+    request.onupgradeneeded = () => {
       const db = request.result;
       if (!db.objectStoreNames.contains(STORE_RESPONSE_CACHE)) {
         const store = db.createObjectStore(STORE_RESPONSE_CACHE, { keyPath: 'id' });

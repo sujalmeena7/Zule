@@ -22,6 +22,7 @@ import {
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactElement,
 } from 'react';
 import { motion } from 'framer-motion';
 
@@ -183,7 +184,7 @@ export function Logo3D({
   width = 24,
   height = 24,
   onClick,
-}: Logo3DProps): JSX.Element {
+}: Logo3DProps): ReactElement {
   const { reducedMotion } = useLandingMotion();
   const wrapperRef = useRef<HTMLDivElement>(null);
   const [rotation, setRotation] = useState<LogoRotation>({ rotX: 0, rotY: 0 });

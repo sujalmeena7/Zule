@@ -15,6 +15,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useAuth } from '../firebase/AuthContext';
+import toast from 'react-hot-toast';
 import {
   type SubscriptionPlan,
   type SubscriptionStatus,
@@ -318,10 +319,8 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
       }, pollInterval);
     } catch (err: any) {
       console.error('[SubscriptionContext] Upgrade flow error:', err);
-      if (typeof window !== 'undefined' && window.alert) {
-        const msg = err instanceof Error ? err.message : 'Unable to initialize payment checkout.';
-        window.alert(`Checkout error: ${msg}`);
-      }
+      const msg = err instanceof Error ? err.message : 'Unable to initialize payment checkout.';
+      toast.error(`Checkout error: ${msg}`);
     } finally {
       setLoading(false);
     }

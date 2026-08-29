@@ -11,12 +11,11 @@
  * Requirements: 7.1–7.10
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import {
   createPageAdapter,
   createPageAdapterWithDispatch,
   installPageAdapter,
-  _testing,
   type NativeBridgePort,
   type BridgeValidationError,
 } from '../pageAdapter';

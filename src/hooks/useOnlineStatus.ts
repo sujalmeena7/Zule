@@ -8,7 +8,7 @@
 //
 // Requirements: 20.1, 20.2
 
-import { useState, useEffect, useSyncExternalStore, useCallback } from 'react';
+import { useSyncExternalStore } from 'react';
 
 // ─── External store approach (React 18+) ─────────────────────────────────────
 

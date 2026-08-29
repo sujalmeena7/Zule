@@ -50,7 +50,6 @@ interface BrowserCaptureMediaStreamTrack extends MediaStreamTrack {
 
 // Augment the global scope for the experimental CropTarget constructor
 declare global {
-  // eslint-disable-next-line no-var
   var CropTarget: CropTargetConstructor | undefined;
 }
 

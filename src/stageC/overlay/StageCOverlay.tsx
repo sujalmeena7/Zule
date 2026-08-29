@@ -157,7 +157,14 @@ export function StageCOverlay() {
               isLoading={renderState.isLoading}
               isStreaming={renderState.isStreaming}
               streamingText={renderState.streamingText}
-              aiResponse={renderState.aiResponse}
+              aiResponse={
+                renderState.aiResponse
+                  ? {
+                      ...renderState.aiResponse,
+                      isSimulated: renderState.aiResponse.isSimulated ?? false,
+                    }
+                  : null
+              }
               onTriggerAI={handleTriggerAI}
             />
           )}

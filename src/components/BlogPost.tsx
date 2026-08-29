@@ -18,7 +18,7 @@ function parseMarkdown(content: string) {
     }
 
     // Bold text and links (simplified)
-    let parsedLine = line;
+    const parsedLine = line;
     const parts = [];
     let keyCount = 0;
     

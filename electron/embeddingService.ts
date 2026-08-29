@@ -17,6 +17,8 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import fs from 'node:fs';
+
 const require = createRequire(import.meta.url);
 const { app } = require('electron') as typeof import('electron');
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -34,11 +36,20 @@ let chain: Promise<unknown> = Promise.resolve();
 /** Vendored models dir (mirrors whisperService.resolveModelsDir). */
 function resolveModelsDir(): string {
   const packaged = app?.isPackaged ?? true;
-  const base = packaged
+  let base = packaged
     ? path.join(__dirname, '..', 'dist', 'vendor', 'models')
     : path.join(__dirname, '..', 'public', 'vendor', 'models');
+
+  if (packaged && base.includes('app.asar') && !base.includes('app.asar.unpacked')) {
+    const unpacked = base.replace('app.asar', 'app.asar.unpacked');
+    if (fs.existsSync(unpacked)) {
+      base = unpacked;
+    }
+  }
+
   return base + path.sep;
 }
+
 
 async function ensureExtractor(modelId: string): Promise<Extractor> {
   if (extractor) return extractor;

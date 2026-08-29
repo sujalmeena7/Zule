@@ -81,8 +81,24 @@ export interface ElectronAPI {
   blurOverlay?: () => void;
   /** Listen for keystrokes from the low-level keyboard hook (IPC-based input). */
   onOverlayKey?: (callback: (key: { type: string; char?: string }) => void) => () => void;
-  /** Capture screen using BitBlt (bypasses display affinity / capture protection). */
-  captureDesktopBitBlt?: () => Promise<{ ok: boolean; base64?: string; reason?: string }>;
+  /**
+   * Native BitBlt screen capture. `bytes`/`width`/`height` describe the encoded
+   * JPEG actually produced (downscaled to a 1600px longest edge) and exist so
+   * the dispatch's `[perf]` line can attribute latency to payload size.
+   *
+   * `reason: 'capture-protected'` means the foreground window has display affinity
+   * set. This path does not see through it — it would return the window behind the
+   * protected one — so it refuses rather than handing back a plausible frame of the
+   * wrong screen. UI Automation is the only source that reads such a window.
+   */
+  captureDesktopBitBlt?: () => Promise<{
+    ok: boolean;
+    base64?: string;
+    reason?: string;
+    bytes?: number;
+    width?: number;
+    height?: number;
+  }>;
   /** Extract text from foreground window via accessibility API (bypasses display affinity). */
   extractForegroundText?: () => Promise<{ ok: boolean; text?: string; reason?: string }>;
 
@@ -96,12 +112,23 @@ export interface ElectronAPI {
   >;
 
   // Local Whisper transcription (native, main-process)
-  whisperPreload?: (opts?: { modelId?: string }) => Promise<boolean>;
+  whisperPreload?: (opts?: {
+    pipeline?: 'loopback' | 'microphone' | string;
+    modelId?: string;
+  }) => Promise<boolean>;
   whisperTranscribe?: (
     pcm: Float32Array,
-    opts?: { language?: string; modelId?: string },
-  ) => Promise<{ text: string }>;
-  whisperRelease?: () => Promise<boolean>;
+    opts?: {
+      language?: string;
+      modelId?: string;
+      kind?: 'final' | 'partial';
+      seq?: number;
+      pipeline?: 'loopback' | 'microphone';
+    },
+  ) => Promise<{ text: string; queueMs?: number; inferMs?: number }>;
+  whisperRelease?: (opts?: {
+    pipeline?: 'loopback' | 'microphone' | string;
+  }) => Promise<boolean>;
 
   // Local text embeddings (native, main-process)
   embedPreload?: (opts?: { modelId?: string }) => Promise<boolean>;
@@ -130,10 +157,18 @@ export interface ElectronAPI {
   deferInstall?: () => Promise<void>;
   onUpdateState?: (cb: (state: UpdateState) => void) => () => void;
 
-  // Phone Camera Input (LAN server)
+  // Phone Camera Input & Live Answers (LAN server)
   startPhoneServer?: () => Promise<{ port: number; localIp: string; qrUrl: string }>;
   stopPhoneServer?: () => Promise<void>;
   onPhoneImage?: (callback: (data: { base64: string; mimeType: string }) => void) => () => void;
+  sendAnswerToPhone?: (data: {
+    id?: string;
+    text: string;
+    question?: string;
+    mode?: string;
+    model?: string;
+    timestamp?: number;
+  }) => Promise<{ sent: number; seq: number }>;
 }
 
 declare global {

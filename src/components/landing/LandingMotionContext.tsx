@@ -26,6 +26,7 @@ import {
   useContext,
   useMemo,
   type ReactNode,
+  type ReactElement,
 } from 'react';
 
 import { useReducedMotion } from '../../hooks/useReducedMotion';
@@ -80,7 +81,7 @@ interface LandingMotionProviderProps {
  */
 export function LandingMotionProvider({
   children,
-}: LandingMotionProviderProps): JSX.Element {
+}: LandingMotionProviderProps): ReactElement {
   const reducedMotion = useReducedMotion();
   const tabVisible = useDocumentVisibility();
 

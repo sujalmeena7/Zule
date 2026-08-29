@@ -13,38 +13,22 @@
 
 import { describe, it, expect } from 'vitest';
 import * as fc from 'fast-check';
-import { initialState, newRequest, applyToken, type StreamAbortState } from './streamAbort';
+import { initialState, newRequest, applyToken } from './streamAbort';
 
 // Action types for the state machine
 type Action =
   | { type: 'newRequest' }
   | { type: 'token'; requestId: number; text: string };
 
-/**
- * Arbitrary that generates a sequence of actions where tokens reference
- * various request IDs (both current and stale).
- */
 function actionArbitrary(maxRequestId: number): fc.Arbitrary<Action> {
   return fc.oneof(
     fc.constant<Action>({ type: 'newRequest' }),
-    fc.record<{ type: 'token'; requestId: number; text: string }>({
+    fc.record<Action>({
       type: fc.constant('token' as const),
       requestId: fc.nat({ max: Math.max(maxRequestId, 5) }),
       text: fc.string({ minLength: 1, maxLength: 20 }),
     })
   );
-}
-
-function runActions(actions: Action[]): StreamAbortState {
-  let state = initialState();
-  for (const action of actions) {
-    if (action.type === 'newRequest') {
-      state = newRequest(state);
-    } else {
-      state = applyToken(state, action.requestId, action.text);
-    }
-  }
-  return state;
 }
 
 describe('streamAbort state machine', () => {

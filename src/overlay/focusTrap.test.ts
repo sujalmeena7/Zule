@@ -1,6 +1,5 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
-import { useRef } from 'react';
 import { useFocusTrap } from './focusTrap';
 
 // Helper: create a container with focusable elements

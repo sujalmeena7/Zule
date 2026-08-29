@@ -28,7 +28,6 @@ import {
   terminateOcrWorker,
   warmOcrWorker,
   scheduleIdleTermination,
-  cancelIdleTermination,
   configureOcrService,
   _resetDedupState,
 } from '../ocrWorker';

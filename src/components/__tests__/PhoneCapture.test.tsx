@@ -4,7 +4,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
-import React from 'react';
+import '@testing-library/jest-dom';
 import { PhoneCapture } from '../copilot/PhoneCapture';
 
 describe('PhoneCapture Component', () => {

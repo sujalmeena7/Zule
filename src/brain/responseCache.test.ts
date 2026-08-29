@@ -13,7 +13,7 @@
 //   never exceeds maxEntries.
 //   **Validates: Requirement 7.2**
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import fc from 'fast-check';
 import 'fake-indexeddb/auto';
 

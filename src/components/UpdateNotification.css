@@ -1,0 +1,142 @@
+/* ============================================================================
+   Zule AI — Minimal Update Toast
+   Clean, single-line notification. No noise.
+   ============================================================================ */
+
+.update-toast {
+  position: fixed;
+  top: 16px;
+  right: 20px;
+  z-index: 10000;
+  min-width: 220px;
+  max-width: 380px;
+  background: rgba(18, 18, 24, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow:
+    0 8px 32px -4px rgba(0, 0, 0, 0.55),
+    0 0 0 0.5px rgba(255, 255, 255, 0.04);
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+/* ── Content row ── */
+
+.update-toast-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+/* ── Icon states ── */
+
+.update-toast-icon {
+  flex-shrink: 0;
+  color: #52525b;
+  transition: color 0.2s ease;
+}
+
+.update-toast-icon.downloading {
+  color: #60a5fa;
+  animation: toast-spin 2s linear infinite;
+}
+
+.update-toast-icon.ready {
+  color: #4ade80;
+}
+
+.update-toast-icon.installing {
+  color: #a78bfa;
+  animation: toast-spin 0.8s linear infinite;
+}
+
+/* ── Text ── */
+
+.update-toast-text {
+  flex: 1;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: #d4d4d8;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.update-toast-pct {
+  margin-left: 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #71717a;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Action button ── */
+
+.update-toast-action {
+  flex-shrink: 0;
+  padding: 4px 12px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #09090b;
+  font-size: 0.72rem;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  letter-spacing: -0.01em;
+}
+
+.update-toast-action:hover {
+  background: #ffffff;
+}
+
+.update-toast-action:active {
+  transform: scale(0.96);
+}
+
+/* ── Dismiss ── */
+
+.update-toast-dismiss {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: #3f3f46;
+  cursor: pointer;
+  padding: 3px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.update-toast-dismiss:hover {
+  color: #a1a1aa;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* ── Progress bar (thin line at bottom) ── */
+
+.update-toast-progress {
+  height: 2px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.update-toast-progress-bar {
+  height: 100%;
+  background: #3b82f6;
+  border-radius: 0 1px 1px 0;
+  will-change: width;
+}
+
+/* ── Spin ── */
+
+@keyframes toast-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}

@@ -3,12 +3,12 @@
 // ============================================
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import type { CSSProperties } from 'react';
+import type { CSSProperties, JSX } from 'react';
 import {
   Key, Palette, Keyboard, Database, Trash2, Plus, FileText,
   Sun, Moon, Shield, Upload, Eye, EyeOff, CheckCircle2, Wand2,
   ArrowUp, ArrowDown, Power, Server, ShieldCheck, Play, Clock,
-  Gauge, Lock, Globe, Mic, RefreshCw
+  Gauge, Lock, Globe, Mic, RefreshCw, Smartphone
 } from 'lucide-react';
 import { database as knowledgeBase, type KBDocument, type ProviderConfig } from '../data/database';
 import { encryptApiKey, decryptApiKey } from '../utils/secureKeyStorage';
@@ -19,6 +19,7 @@ import {
   MAX_MODEL_ID_LENGTH,
   buildCustomConfigForSave,
   clampField,
+  looksLikeThinkingModel,
   mergeCustomEntry,
 } from '../brain/providers/customProviderConfig';
 import { MAX_BASE_URL_LENGTH } from '../brain/providers/endpointValidator';
@@ -42,6 +43,7 @@ import { useAutoUpdate } from '../hooks/useAutoUpdate';
 import type { RedactionRule, RedactionEntity } from '../types/redaction';
 import { apply as applyRedaction } from '../brain/redaction';
 import { SpendPanel } from './SpendPanel';
+import { ModelCombobox } from './settings/ModelCombobox';
 import { getSupportedLocales, setLocale, type LocaleCode } from '../i18n';
 import {
   DEFAULT_MEETING_MAX_AGE_DAYS,
@@ -219,9 +221,6 @@ function describeConnectionTestResult(
   };
 }
 
-/** Explanation attached to the Test connection button while it is disabled. */
-const CUSTOM_TEST_DISABLED_HINT =
-  'Enter a Base URL, an API key, and a Model ID to test the connection.';
 
 /** Shared styling for the Custom_Provider field labels. */
 const CUSTOM_FIELD_LABEL_STYLE: CSSProperties = {
@@ -229,6 +228,105 @@ const CUSTOM_FIELD_LABEL_STYLE: CSSProperties = {
   fontWeight: 600,
   color: 'var(--text-tertiary)',
 };
+
+/** Shared styling for the small helper / result lines under a model input. */
+const CUSTOM_FIELD_HINT_STYLE: CSSProperties = {
+  fontSize: '0.7rem',
+  color: 'var(--text-tertiary)',
+  lineHeight: 1.4,
+};
+
+/**
+ * Advisory shown when a model id looks like a deliberating variant.
+ *
+ * Deliberately phrased as an observation with a next step rather than a warning:
+ * a thinking model is the right choice for a considered answer and the wrong one
+ * for a question already on screen in front of an interviewer, and the User is
+ * the only one who knows which they are doing.
+ */
+const THINKING_MODEL_HINT =
+  'This model thinks before answering — expect 30–60s on hard questions. Set a fast model below so screen questions skip the wait.';
+
+/**
+ * One Custom_Provider model input, with its optional-model help text, its
+ * catalog dropdown, its Test speed button, and the measurement result.
+ *
+ * Extracted because there are two of these — the default model and the fast one
+ * — and they differ only in label, placeholder, and which slot they measure.
+ * Inlining both would duplicate about forty lines of JSX whose only meaningful
+ * difference is a string.
+ */
+function CustomModelField(props: {
+  id: string;
+  label: string;
+  help?: string;
+  placeholder: string;
+  value: string;
+  onChange: (value: string) => void;
+  /** Rendered under the input when the id looks like a deliberating variant. */
+  thinkingHint?: boolean;
+  onMeasure: () => void;
+  /** Result of the most recent measurement for *this* slot. */
+  status?: { state: 'testing' | 'ok' | 'failed'; message?: string };
+  /** Ids offered as completions; `null` before the catalog has been loaded. */
+  catalog: string[] | null;
+}): JSX.Element {
+  const measuring = props.status?.state === 'testing';
+  const canMeasure = props.value.trim().length > 0 && !measuring;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+      <label htmlFor={props.id} style={CUSTOM_FIELD_LABEL_STYLE}>
+        {props.label}
+      </label>
+      <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+        <ModelCombobox
+          id={props.id}
+          className="provider-key-input"
+          style={{ flex: '1 1 auto', maxWidth: 'none' }}
+          maxLength={MAX_MODEL_ID_LENGTH}
+          placeholder={props.placeholder}
+          value={props.value}
+          onChange={props.onChange}
+          options={props.catalog}
+        />
+        <button
+          type="button"
+          className="btn-secondary"
+          style={{ padding: '4px 10px', fontSize: '0.7rem', whiteSpace: 'nowrap', flex: '0 0 auto' }}
+          onClick={props.onMeasure}
+          disabled={!canMeasure}
+          aria-busy={measuring}
+          title={
+            canMeasure
+              ? 'Send one short prompt to this model and time the answer.'
+              : 'Enter a model ID to measure its speed.'
+          }
+        >
+          {measuring ? 'Timing…' : 'Test speed'}
+        </button>
+      </div>
+      {props.help !== undefined && <span style={CUSTOM_FIELD_HINT_STYLE}>{props.help}</span>}
+      {props.thinkingHint === true && (
+        <span style={{ ...CUSTOM_FIELD_HINT_STYLE, color: 'var(--accent-amber, #d99a2b)' }}>
+          {THINKING_MODEL_HINT}
+        </span>
+      )}
+      {props.status?.message !== undefined && (
+        <span
+          role="status"
+          style={{
+            ...CUSTOM_FIELD_HINT_STYLE,
+            color:
+              props.status.state === 'ok' ? 'var(--accent-green, #3ba55d)' : 'var(--accent-red)',
+          }}
+        >
+          {props.status.message}
+        </span>
+      )}
+    </div>
+  );
+}
 
 // --- Data-egress disclosure (task 11.4, Requirement 1.4) -----------------
 //
@@ -281,8 +379,9 @@ export function Settings() {
   const notifyError = useZuleError();
 
   // Auto-Update State (task 10.2, Requirements 3.1–3.7)
-  const { state: updateState, check: checkForUpdate } = useAutoUpdate();
+  const { state: updateState, check: checkForUpdate, install: installUpdate } = useAutoUpdate();
   const [upToDate, setUpToDate] = useState(false);
+
   const [updateError, setUpdateError] = useState<string | null>(null);
   const prevStatusRef = useRef(updateState.status);
 
@@ -316,6 +415,26 @@ export function Settings() {
     }
   }, [updateState.status, updateState.error]);
 
+  // Phone Companion Broadcast State
+  const [phoneBroadcastEnabled, setPhoneBroadcastEnabled] = useState<boolean>(true);
+
+  useEffect(() => {
+    knowledgeBase.getSetting<boolean>('phoneCompanionBroadcast', true)
+      .then((val) => setPhoneBroadcastEnabled(val !== false))
+      .catch(() => setPhoneBroadcastEnabled(true));
+  }, []);
+
+  const handlePhoneBroadcastChange = async (enabled: boolean) => {
+    setPhoneBroadcastEnabled(enabled);
+    try {
+      await knowledgeBase.setSetting('phoneCompanionBroadcast', enabled);
+      toast.success(enabled ? 'Phone companion answers enabled' : 'Phone companion answers disabled');
+    } catch (err) {
+      console.error('Failed to save phone companion setting:', err);
+      toast.error('Failed to save setting');
+    }
+  };
+
   const [localKey, setLocalKey] = useState(apiKey);
   const [showKey, setShowKey] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -338,6 +457,7 @@ export function Settings() {
   const [providerKeys, setProviderKeys] = useState<Record<string, string>>({});
   const [showProviderKey, setShowProviderKey] = useState<Record<string, boolean>>({});
   const [providersSaving, setProvidersSaving] = useState(false);
+  const [providersSaved, setProvidersSaved] = useState(false);
   // Custom (OpenAI-compatible) provider draft state (task 11.2).
   // `customBaseUrlError` drives `aria-invalid` plus the inline message on the
   // Base_URL control (Requirement 1.8); the save path (task 11.3) sets it.
@@ -357,6 +477,26 @@ export function Settings() {
   const [providerTestStatus, setProviderTestStatus] =
     useState<Record<string, CustomConnectionTestStatus | null>>({});
 
+  // --- Custom provider: model discovery + speed measurement ---------------
+  //
+  // Both exist so the User picks a model by measurement on their own gateway
+  // rather than from a list shipped in the binary. Free-tier model ids churn
+  // weekly, so a hardcoded recommendation names a 404 within a release or two.
+  //
+  // `customModelCatalog` backs a `<datalist>` shared by both model inputs. It is
+  // purely a convenience: `null` (never loaded) and `[]` (endpoint has no
+  // listing) both leave the fields as ordinary free text.
+  const [customModelCatalog, setCustomModelCatalog] = useState<string[] | null>(null);
+  const [customCatalogLoading, setCustomCatalogLoading] = useState(false);
+  // Separate status for each slot so timing one doesn't clobber the other's result
+  const [customSpeedStatus, setCustomSpeedStatus] = useState<{
+    modelId?: { state: 'testing' | 'ok' | 'failed'; message?: string };
+    fastModelId?: { state: 'testing' | 'ok' | 'failed'; message?: string };
+  }>({});
+
+  // Anthropic dynamic model discovery
+  const [anthropicModelCatalog, setAnthropicModelCatalog] = useState<string[] | null>(null);
+  const [anthropicCatalogLoading, setAnthropicCatalogLoading] = useState(false);
 
   // Performance Profile & Ephemeral Mode State
   type Profile = 'speed' | 'balanced' | 'cost' | 'privacy';
@@ -364,11 +504,14 @@ export function Settings() {
   const [privacyMode, setPrivacyMode] = useState<PrivacyMode>('normal');
 
   // Redaction Rules State
-  const [enabledEntities, setEnabledEntities] = useState<Set<RedactionEntity>>(new Set());
+  const [enabledEntities, setEnabledEntities] = useState<Set<RedactionEntity>>(
+    () => new Set(['email', 'credit-card', 'us-ssn'])
+  );
   const [regexRules, setRegexRules] = useState<Array<{ pattern: string; flags: string; replacement: string }>>([]);
+  const [redactionSaving, setRedactionSaving] = useState(false);
+  const [redactionSaved, setRedactionSaved] = useState(false);
   const [redactionTestInput, setRedactionTestInput] = useState('');
   const [redactionTestOutput, setRedactionTestOutput] = useState<string | null>(null);
-  const [redactionSaving, setRedactionSaving] = useState(false);
 
   // Subscription State
   const { limits } = useSubscription();
@@ -381,6 +524,7 @@ export function Settings() {
   const [meetingMaxAgeDays, setMeetingMaxAgeDays] = useState(DEFAULT_MEETING_MAX_AGE_DAYS);
   const [transcriptMaxLines, setTranscriptMaxLines] = useState(DEFAULT_TRANSCRIPT_MAX_LINES);
   const [retentionSaving, setRetentionSaving] = useState(false);
+  const [retentionSaved, setRetentionSaved] = useState(false);
   const [sweepRunning, setSweepRunning] = useState(false);
 
   // Language State
@@ -601,6 +745,18 @@ export function Settings() {
     );
   }, []);
 
+  /**
+   * The fast-model slot for a non-custom provider. Screen dispatches ask for it
+   * by setting `preferFastModel`, so a gateway hosting both a strong model and a
+   * quick one can serve each from a single provider entry — which is the only
+   * lever that moves time-to-first-token, since the model chosen dominates it.
+   */
+  const handleProviderFastModelChange = useCallback((id: string, value: string) => {
+    setProviders((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, fastModelId: value } : p))
+    );
+  }, []);
+
   // --- Custom (OpenAI-compatible) field handlers (task 11.2) --------------
   //
   // Every handler routes the raw value through `clampField`, so a paste that
@@ -633,9 +789,26 @@ export function Settings() {
 
   const handleCustomModelIdChange = useCallback((value: string) => {
     setProviderTestStatus((prev) => ({ ...prev, [CUSTOM_PROVIDER_ID]: null }));
+    // A measurement describes one specific model id; editing the field makes it
+    // stale, so it is discarded rather than left to describe the wrong model.
+    setCustomSpeedStatus((prev) => ({ ...prev, modelId: undefined }));
     const clamped = clampField('modelId', value);
     setProviders((prev) =>
       prev.map((p) => (p.id === CUSTOM_PROVIDER_ID ? { ...p, modelId: clamped } : p)),
+    );
+  }, []);
+
+  /**
+   * The optional fast-model field. Unlike the other three this one cannot make
+   * the configuration invalid — blank means "use the model above" — so there is
+   * no error state to clear, only the stale Connection_Test result.
+   */
+  const handleCustomFastModelIdChange = useCallback((value: string) => {
+    setProviderTestStatus((prev) => ({ ...prev, [CUSTOM_PROVIDER_ID]: null }));
+    setCustomSpeedStatus((prev) => ({ ...prev, fastModelId: undefined }));
+    const clamped = clampField('fastModelId', value);
+    setProviders((prev) =>
+      prev.map((p) => (p.id === CUSTOM_PROVIDER_ID ? { ...p, fastModelId: clamped } : p)),
     );
   }, []);
 
@@ -749,6 +922,171 @@ export function Settings() {
     [providers, providerKeys],
   );
 
+  // --- Custom provider: model discovery + speed measurement ---------------
+
+  /**
+   * The credential to probe with: the draft if the User has typed one, otherwise
+   * the stored cipher decrypted for the duration of the call.
+   *
+   * Returns `''` rather than throwing when neither exists — a gateway that needs
+   * no key is legitimate, and the probe's own HTTP 401 is a better error message
+   * than anything this function could invent.
+   */
+  const resolveCustomApiKey = useCallback(async (): Promise<string> => {
+    const draft = (providerKeys[CUSTOM_PROVIDER_ID] ?? '').trim();
+    if (draft.length > 0) return draft;
+    const entry = providers.find((p) => p.id === CUSTOM_PROVIDER_ID);
+    if (!entry?.apiKeyCipher) return '';
+    try {
+      return await decryptApiKey(entry.apiKeyCipher);
+    } catch (error) {
+      console.error('[Settings] Stored custom credential could not be read:', error);
+      return '';
+    }
+  }, [providers, providerKeys]);
+
+  /** The same resolution for any other provider entry. */
+  const resolveProviderApiKey = useCallback(
+    async (providerId: string): Promise<string> => {
+      const draft = (providerKeys[providerId] ?? '').trim();
+      if (draft.length > 0) return draft;
+      const entry = providers.find((p) => p.id === providerId);
+      if (!entry?.apiKeyCipher) return '';
+      try {
+        return await decryptApiKey(entry.apiKeyCipher);
+      } catch (error) {
+        console.error(`[Settings] Stored ${providerId} credential could not be read:`, error);
+        return '';
+      }
+    },
+    [providers, providerKeys],
+  );
+
+  /**
+   * Ask the Anthropic gateway which models it serves.
+   *
+   * Same probe as the Custom provider's, pointed one path segment higher: the
+   * Anthropic Base URL is a full Messages endpoint, so the listing route sits
+   * under its parent. Without this the User is typing model ids blind — which is
+   * how a "fast model" slot ends up holding the same large model as the default
+   * one, and the latency does not move.
+   */
+  const handleLoadAnthropicModels = useCallback(async () => {
+    const entry = providers.find((p) => p.id === 'anthropic');
+    const configured = (entry?.baseUrl ?? '').trim();
+    // Blank means the adapter's own default, and Anthropic itself serves
+    // `/v1/models`, so there is still something useful to ask.
+    const baseUrl = configured.length > 0 ? configured : 'https://api.anthropic.com/v1/messages';
+
+    setAnthropicCatalogLoading(true);
+    try {
+      const apiKey = await resolveProviderApiKey('anthropic');
+      const { listGatewayModels, messagesEndpointToApiRoot } = await import(
+        '../brain/providers/modelCatalog'
+      );
+      const result = await listGatewayModels({
+        baseUrl: messagesEndpointToApiRoot(baseUrl),
+        apiKey,
+      });
+      if (result.ok) {
+        setAnthropicModelCatalog(result.models);
+        toast.success(`Found ${result.models.length} models on this endpoint.`);
+      } else {
+        setAnthropicModelCatalog(null);
+        toast.error(`Could not list models: ${result.detail}`);
+      }
+    } catch (error) {
+      console.error('[Settings] Anthropic model listing could not run:', error);
+      setAnthropicModelCatalog(null);
+      toast.error('Could not list models.');
+    } finally {
+      setAnthropicCatalogLoading(false);
+    }
+  }, [providers, resolveProviderApiKey]);
+
+  /**
+   * Ask the gateway what models it serves and use the answer to populate the
+   * shared `<datalist>`.
+   *
+   * Failure is deliberately non-fatal: the fields stay free text, so an endpoint
+   * without a `/models` route is exactly as configurable as it was before this
+   * button existed.
+   */
+  const handleLoadCustomModels = useCallback(async () => {
+    const entry = providers.find((p) => p.id === CUSTOM_PROVIDER_ID);
+    const baseUrl = (entry?.baseUrl ?? '').trim();
+    if (baseUrl.length === 0) {
+      toast.error('Enter the Base URL first.');
+      return;
+    }
+
+    setCustomCatalogLoading(true);
+    try {
+      const apiKey = await resolveCustomApiKey();
+      const { listGatewayModels } = await import('../brain/providers/modelCatalog');
+      const result = await listGatewayModels({ baseUrl, apiKey });
+      if (result.ok) {
+        setCustomModelCatalog(result.models);
+        toast.success(`Found ${result.models.length} models on this endpoint.`);
+      } else {
+        setCustomModelCatalog(null);
+        toast.error(`Could not list models: ${result.detail}`);
+      }
+    } catch (error) {
+      console.error('[Settings] Model listing could not run:', error);
+      setCustomModelCatalog(null);
+      toast.error('Could not list models.');
+    } finally {
+      setCustomCatalogLoading(false);
+    }
+  }, [providers, resolveCustomApiKey]);
+
+  /**
+   * Time one model with a fixed short prompt and report the two numbers that
+   * decide whether it belongs in the fast slot: when the first answer word
+   * arrives, and how fast words arrive after that.
+   *
+   * This is what replaces a recommended-models list. The User measures their own
+   * gateway, today, and picks on the result.
+   */
+  const handleMeasureCustomModelSpeed = useCallback(
+    async (field: 'modelId' | 'fastModelId') => {
+      const entry = providers.find((p) => p.id === CUSTOM_PROVIDER_ID);
+      const baseUrl = (entry?.baseUrl ?? '').trim();
+      const modelId = ((field === 'modelId' ? entry?.modelId : entry?.fastModelId) ?? '').trim();
+      if (baseUrl.length === 0 || modelId.length === 0) {
+        toast.error('Enter the Base URL and a model ID first.');
+        return;
+      }
+
+      setCustomSpeedStatus((prev) => ({ ...prev, [field]: { state: 'testing' } }));
+      try {
+        const apiKey = await resolveCustomApiKey();
+        const { measureModelSpeed, formatSpeedSample } = await import(
+          '../brain/providers/modelCatalog'
+        );
+        const result = await measureModelSpeed({ baseUrl, apiKey, modelId });
+        if (result.ok) {
+          const message = formatSpeedSample(result);
+          setCustomSpeedStatus((prev) => ({ ...prev, [field]: { state: 'ok', message } }));
+          toast.success(message);
+        } else {
+          setCustomSpeedStatus((prev) => ({
+            ...prev,
+            [field]: { state: 'failed', message: result.detail },
+          }));
+          toast.error(result.detail);
+        }
+      } catch (error) {
+        console.error('[Settings] Speed test could not run:', error);
+        const message = 'The speed test could not run.';
+        setCustomSpeedStatus((prev) => ({ ...prev, [field]: { state: 'failed', message } }));
+        toast.error(message);
+      }
+    },
+    [providers, resolveCustomApiKey],
+  );
+
 
   const handleSaveProviders = useCallback(async () => {
     setProvidersSaving(true);
@@ -777,6 +1115,10 @@ export function Settings() {
           // programmatically (Requirement 1.2).
           const baseUrlDraft = clampField('baseUrl', positioned.baseUrl ?? '');
           const modelIdDraft = clampField('modelId', positioned.modelId ?? '');
+          // Optional field: an empty string persists as "no fast model", which
+          // the adapter reads as "use `modelId` for everything" — the behaviour
+          // that predates this field.
+          const fastModelIdDraft = clampField('fastModelId', positioned.fastModelId ?? '');
           const apiKeyDraft = providerKeys[CUSTOM_PROVIDER_ID] ?? '';
 
           // Encrypt only a non-empty draft. A blank draft leaves
@@ -826,6 +1168,7 @@ export function Settings() {
             priority: positioned.priority,
             baseUrlDraft,
             modelIdDraft,
+            fastModelIdDraft,
             apiKeyDraft,
             apiKeyCipher,
           });
@@ -905,6 +1248,8 @@ export function Settings() {
       } else {
         toast.success('Provider configuration saved!');
       }
+      setProvidersSaved(true);
+      setTimeout(() => setProvidersSaved(false), 2000);
     } catch (error) {
       console.error('[Settings] Failed to save providers:', error);
       toast.error('Failed to save provider configuration.');
@@ -981,6 +1326,8 @@ export function Settings() {
     try {
       await knowledgeBase.setSetting('retention', { meetingMaxAgeDays, transcriptMaxLines });
       toast.success('Retention settings saved!');
+      setRetentionSaved(true);
+      setTimeout(() => setRetentionSaved(false), 2000);
     } catch (error) {
       console.error('[Settings] Failed to save retention settings:', error);
       toast.error('Failed to save retention settings.');
@@ -1052,6 +1399,8 @@ export function Settings() {
       const rules = buildRedactionRules();
       await knowledgeBase.setSetting('redactionRules', rules);
       toast.success('Redaction rules saved!');
+      setRedactionSaved(true);
+      setTimeout(() => setRedactionSaved(false), 2000);
     } catch (error) {
       console.error('[Settings] Failed to save redaction rules:', error);
       toast.error('Failed to save redaction rules.');
@@ -1525,21 +1874,50 @@ export function Settings() {
                             )}
                           </div>
 
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                            <label htmlFor="custom-provider-model-id" style={CUSTOM_FIELD_LABEL_STYLE}>
-                              Model ID
-                            </label>
-                            <div className="api-key-input provider-key-input">
-                              <input
-                                id="custom-provider-model-id"
-                                type="text"
-                                maxLength={MAX_MODEL_ID_LENGTH}
-                                className="input-glass"
-                                placeholder="meta-llama/llama-3.1-8b-instruct"
-                                value={provider.modelId || ''}
-                                onChange={(e) => handleCustomModelIdChange(e.target.value)}
-                              />
-                            </div>
+                          <CustomModelField
+                            id="custom-provider-model-id"
+                            label="Model ID"
+                            placeholder="meta-llama/llama-3.1-8b-instruct"
+                            value={provider.modelId || ''}
+                            onChange={handleCustomModelIdChange}
+                            thinkingHint={looksLikeThinkingModel(provider.modelId || '')}
+                            onMeasure={() => handleMeasureCustomModelSpeed('modelId')}
+                            status={customSpeedStatus.modelId}
+                            catalog={customModelCatalog}
+                          />
+
+                          <CustomModelField
+                            id="custom-provider-fast-model-id"
+                            label="Fast model for screen questions (optional)"
+                            help="Screen questions go to this model. Leave empty to use the model above."
+                            placeholder="qwen/qwen3-vl-235b-a22b-instruct"
+                            value={provider.fastModelId || ''}
+                            onChange={handleCustomFastModelIdChange}
+                            thinkingHint={looksLikeThinkingModel(provider.fastModelId || '')}
+                            onMeasure={() => handleMeasureCustomModelSpeed('fastModelId')}
+                            status={customSpeedStatus.fastModelId}
+                            catalog={customModelCatalog}
+                          />
+
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              style={{ padding: '4px 10px', fontSize: '0.7rem' }}
+                              onClick={handleLoadCustomModels}
+                              disabled={
+                                customCatalogLoading || (provider.baseUrl ?? '').trim().length === 0
+                              }
+                              aria-busy={customCatalogLoading}
+                              title="Ask this endpoint which models it serves, then pick from the list."
+                            >
+                              {customCatalogLoading ? 'Loading…' : 'Load models'}
+                            </button>
+                            <span style={CUSTOM_FIELD_HINT_STYLE}>
+                              {customModelCatalog === null
+                                ? 'Optional — fills both fields with the models your endpoint offers.'
+                                : `${customModelCatalog.length} models loaded — open the list with the arrow in either field, or type to filter.`}
+                            </span>
                           </div>
                         </div>
                       ) : provider.id === 'ollama' ? (
@@ -1610,16 +1988,61 @@ export function Settings() {
                             <label htmlFor="anthropic-model-id" style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
                               Model ID <span style={{ fontWeight: 400, opacity: 0.7 }}>(optional — default: claude-3-5-sonnet)</span>
                             </label>
-                            <div className="api-key-input provider-key-input">
-                              <input
-                                id="anthropic-model-id"
-                                type="text"
-                                className="input-glass"
-                                placeholder="claude-sonnet-4-20250514"
-                                value={provider.modelId || ''}
-                                onChange={(e) => handleProviderModelChange(provider.id, e.target.value)}
-                              />
-                            </div>
+                            <ModelCombobox
+                              id="anthropic-model-id"
+                              className="provider-key-input"
+                              maxLength={MAX_MODEL_ID_LENGTH}
+                              placeholder="claude-sonnet-4-20250514"
+                              value={provider.modelId || ''}
+                              onChange={(next) => handleProviderModelChange(provider.id, next)}
+                              options={anthropicModelCatalog}
+                            />
+                            {looksLikeThinkingModel(provider.modelId || '') && (
+                              <span style={CUSTOM_FIELD_HINT_STYLE}>{THINKING_MODEL_HINT}</span>
+                            )}
+                          </div>
+                          {/* The same fast slot the Custom provider has. Time-to-first
+                              token is decided almost entirely by which model answers,
+                              so this is the one field that changes how immediate a
+                              screen question feels. No Test speed button here: the
+                              measurement path speaks the OpenAI dialect and would
+                              report a number this endpoint never produced. */}
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            <label htmlFor="anthropic-fast-model-id" style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                              Fast model for screen questions <span style={{ fontWeight: 400, opacity: 0.7 }}>(optional)</span>
+                            </label>
+                            <ModelCombobox
+                              id="anthropic-fast-model-id"
+                              className="provider-key-input"
+                              maxLength={MAX_MODEL_ID_LENGTH}
+                              placeholder="claude-3-5-haiku-20241022"
+                              value={provider.fastModelId || ''}
+                              onChange={(next) => handleProviderFastModelChange(provider.id, next)}
+                              options={anthropicModelCatalog}
+                            />
+                            <span style={CUSTOM_FIELD_HINT_STYLE}>
+                              Screen questions go to this model. Leave empty to use the model above.
+                              Pick a smaller one than above — the same model in both slots changes nothing.
+                            </span>
+                          </div>
+
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              style={{ padding: '4px 10px', fontSize: '0.7rem' }}
+                              onClick={handleLoadAnthropicModels}
+                              disabled={anthropicCatalogLoading}
+                              aria-busy={anthropicCatalogLoading}
+                              title="Ask this endpoint which models it serves, then pick from the list."
+                            >
+                              {anthropicCatalogLoading ? 'Loading…' : 'Load models'}
+                            </button>
+                            <span style={CUSTOM_FIELD_HINT_STYLE}>
+                              {anthropicModelCatalog === null
+                                ? 'Optional — fills both fields with the models this gateway offers.'
+                                : `${anthropicModelCatalog.length} models loaded — open the list with the arrow in either field, or type to filter.`}
+                            </span>
                           </div>
                         </div>
                       ) : (
@@ -1642,58 +2065,56 @@ export function Settings() {
                       )}
 
                       {/* Per-provider Connection Test */}
-                      {provider.id !== 'simulation' && (
-                        <div
+                      <div
+                        style={{
+                          marginTop: '8px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '8px',
+                          flexWrap: 'wrap',
+                        }}
+                      >
+                        <button
+                          className="btn-secondary"
+                          onClick={() => handleTestProviderConnection(provider.id)}
+                          disabled={
+                            !canTestProviderConnection(provider.id) ||
+                            providerTestStatus[provider.id]?.state === 'testing'
+                          }
+                          aria-busy={providerTestStatus[provider.id]?.state === 'testing'}
+                          aria-label={`Test connection to ${PROVIDER_LABELS[provider.id] ?? provider.id}`}
                           style={{
-                            marginTop: '8px',
-                            display: 'flex',
+                            padding: '4px 10px',
+                            fontSize: '0.75rem',
+                            display: 'inline-flex',
                             alignItems: 'center',
-                            gap: '8px',
-                            flexWrap: 'wrap',
+                            gap: '4px',
                           }}
                         >
-                          <button
-                            className="btn-secondary"
-                            onClick={() => handleTestProviderConnection(provider.id)}
-                            disabled={
-                              !canTestProviderConnection(provider.id) ||
-                              providerTestStatus[provider.id]?.state === 'testing'
+                          <Play size={11} aria-hidden="true" />
+                          {providerTestStatus[provider.id]?.state === 'testing'
+                            ? 'Testing…'
+                            : 'Test connection'}
+                        </button>
+                        {providerTestStatus[provider.id] && (
+                          <span
+                            role="status"
+                            aria-live="polite"
+                            className={
+                              providerTestStatus[provider.id]?.state === 'ok'
+                                ? 'pill pill-green'
+                                : providerTestStatus[provider.id]?.state === 'failed'
+                                  ? 'pill pill-red'
+                                  : 'pill pill-yellow'
                             }
-                            aria-busy={providerTestStatus[provider.id]?.state === 'testing'}
-                            aria-label={`Test connection to ${PROVIDER_LABELS[provider.id] ?? provider.id}`}
-                            style={{
-                              padding: '4px 10px',
-                              fontSize: '0.75rem',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '4px',
-                            }}
+                            style={{ fontSize: '0.72rem' }}
                           >
-                            <Play size={11} aria-hidden="true" />
                             {providerTestStatus[provider.id]?.state === 'testing'
-                              ? 'Testing…'
-                              : 'Test connection'}
-                          </button>
-                          {providerTestStatus[provider.id] && (
-                            <span
-                              role="status"
-                              aria-live="polite"
-                              className={
-                                providerTestStatus[provider.id]?.state === 'ok'
-                                  ? 'pill pill-green'
-                                  : providerTestStatus[provider.id]?.state === 'failed'
-                                    ? 'pill pill-red'
-                                    : 'pill pill-yellow'
-                              }
-                              style={{ fontSize: '0.72rem' }}
-                            >
-                              {providerTestStatus[provider.id]?.state === 'testing'
-                                ? 'Testing connection…'
-                                : (providerTestStatus[provider.id] as { message?: string } | undefined)?.message}
-                            </span>
-                          )}
-                        </div>
-                      )}
+                              ? 'Testing connection…'
+                              : (providerTestStatus[provider.id] as { message?: string } | undefined)?.message}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1722,14 +2143,22 @@ export function Settings() {
           style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}
         >
           <button
-            className="btn-primary"
+            className={`btn-primary ${providersSaved ? 'saved' : ''}`}
             onClick={handleSaveProviders}
             disabled={providersSaving}
+            style={{ minWidth: '170px' }}
           >
-            {providersSaving ? 'Saving...' : 'Save Provider Config'}
+            {providersSaving ? (
+              <><RefreshCw size={14} className="animate-spin" /> Saving Config...</>
+            ) : providersSaved ? (
+              <><CheckCircle2 size={14} /> Saved!</>
+            ) : (
+              'Save Provider Config'
+            )}
           </button>
         </div>
       </section>
+
 
       {/* Knowledge Base */}
       <section className="settings-section glass-card animate-slide-up" style={{ animationDelay: '0.1s' }}>
@@ -2285,12 +2714,18 @@ export function Settings() {
         {/* Save Button */}
         <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'flex-end' }}>
           <button
-            className="btn-primary"
+            className={`btn-primary ${redactionSaved ? 'saved' : ''}`}
             onClick={handleSaveRedactionRules}
             disabled={redactionSaving}
-            style={{ padding: '8px 20px', fontSize: '0.82rem' }}
+            style={{ padding: '8px 20px', fontSize: '0.82rem', minWidth: '170px' }}
           >
-            {redactionSaving ? 'Saving...' : 'Save Redaction Rules'}
+            {redactionSaving ? (
+              <><RefreshCw size={14} className="animate-spin" /> Saving Rules...</>
+            ) : redactionSaved ? (
+              <><CheckCircle2 size={14} /> Saved!</>
+            ) : (
+              'Save Redaction Rules'
+            )}
           </button>
         </div>
       </section>
@@ -2339,12 +2774,18 @@ export function Settings() {
 
         <div className="form-actions" style={{ marginTop: '16px' }}>
           <button
-            className="btn-primary"
+            className={`btn-primary ${retentionSaved ? 'saved' : ''}`}
             onClick={handleSaveRetention}
             disabled={retentionSaving}
-            style={{ padding: '8px 20px', fontSize: '0.82rem' }}
+            style={{ padding: '8px 20px', fontSize: '0.82rem', minWidth: '180px' }}
           >
-            {retentionSaving ? 'Saving...' : 'Save Retention Settings'}
+            {retentionSaving ? (
+              <><RefreshCw size={14} className="animate-spin" /> Saving Settings...</>
+            ) : retentionSaved ? (
+              <><CheckCircle2 size={14} /> Saved!</>
+            ) : (
+              'Save Retention Settings'
+            )}
           </button>
           <button
             className="btn-secondary"
@@ -2352,13 +2793,62 @@ export function Settings() {
             disabled={sweepRunning}
             style={{ padding: '8px 20px', fontSize: '0.82rem' }}
           >
-            {sweepRunning ? 'Running...' : <><Play size={14} /> Run Sweep Now</>}
+            {sweepRunning ? (
+              <><RefreshCw size={14} className="animate-spin" /> Running Sweep...</>
+            ) : (
+              <><Play size={14} /> Run Sweep Now</>
+            )}
           </button>
         </div>
       </section>
 
+
       {/* Spend */}
       <SpendPanel />
+
+      {/* Phone Companion */}
+      <section className="settings-section glass-card animate-slide-up" style={{ animationDelay: '0.31s' }}>
+        <div className="section-header">
+          <Smartphone size={18} />
+          <h2>Phone Companion</h2>
+        </div>
+        <p className="section-desc">
+          Configure how Zule communicates with connected smartphones over your local network.
+        </p>
+
+        <div className="setting-row">
+          <div className="setting-label">
+            <span className="setting-name">Send AI Answers to Phone</span>
+            <span className="setting-desc">
+              When enabled, real-time AI responses generated on desktop are automatically streamed to your connected phone with lock screen alerts, sound, and vibration.
+            </span>
+          </div>
+          <div
+            className="theme-toggle"
+            role="radiogroup"
+            aria-label="Send AI answers to phone"
+          >
+            <button
+              type="button"
+              role="radio"
+              aria-checked={phoneBroadcastEnabled}
+              className={`theme-btn ${phoneBroadcastEnabled ? 'active' : ''}`}
+              onClick={() => handlePhoneBroadcastChange(true)}
+            >
+              Enabled
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={!phoneBroadcastEnabled}
+              className={`theme-btn ${!phoneBroadcastEnabled ? 'active' : ''}`}
+              onClick={() => handlePhoneBroadcastChange(false)}
+            >
+              Disabled
+            </button>
+          </div>
+        </div>
+      </section>
 
       {/* Privacy */}
       <section className="settings-section glass-card animate-slide-up" style={{ animationDelay: '0.32s' }}>
@@ -2380,31 +2870,68 @@ export function Settings() {
       {/* Updates (task 10.2, Requirements 3.1–3.7) */}
       <section className="settings-section glass-card animate-slide-up" style={{ animationDelay: '0.34s' }}>
         <div className="section-header">
-          <RefreshCw size={18} />
-          <h2>Updates</h2>
+          <div className="settings-icon-chip cyan">
+            <RefreshCw size={16} className={updateState.status === 'checking' || updateState.status === 'downloading' ? 'animate-spin' : ''} />
+          </div>
+          <h2>Application Updates</h2>
         </div>
         <div className="setting-row">
           <div className="setting-label">
-            <span className="setting-name">Version {updateState.currentVersion}</span>
+            <span className="setting-name">
+              Zule AI v{updateState.currentVersion}
+              {updateState.status === 'ready' && (
+                <span className="setting-chip tone-good" style={{ marginLeft: 8 }}>
+                  v{updateState.availableVersion} Ready
+                </span>
+              )}
+            </span>
             <span className="setting-desc">
-              {upToDate && "You're up to date"}
-              {updateError && updateError}
-              {!upToDate && !updateError && 'Check if a newer version of Zule is available.'}
+              {updateState.status === 'ready' && `New version v${updateState.availableVersion} is downloaded and ready to apply.`}
+              {updateState.status === 'downloading' && `Downloading update in background… ${updateState.progress?.percent ?? 0}%`}
+              {updateState.status === 'checking' && 'Checking GitHub releases for latest updates…'}
+              {updateState.status === 'idle' && upToDate && "You're running the latest version of Zule."}
+              {updateState.status === 'idle' && updateError && updateError}
+              {updateState.status === 'idle' && !upToDate && !updateError && 'Updates download automatically in the background.'}
             </span>
           </div>
-          <button
-            className="btn-primary"
-            onClick={() => {
-              setUpdateError(null);
-              setUpToDate(false);
-              checkForUpdate();
-            }}
-            disabled={updateState.status === 'checking' || updateState.status === 'downloading'}
-          >
-            {updateState.status === 'checking' ? 'Checking...' : 'Check for updates'}
-          </button>
+
+          {updateState.status === 'ready' ? (
+            <button
+              className="btn-primary"
+              onClick={() => installUpdate()}
+              style={{ background: '#ffffff', color: '#09090b', fontWeight: 600 }}
+            >
+              <RefreshCw size={14} />
+              <span>Restart & Update</span>
+            </button>
+          ) : (
+            <button
+              className="btn-primary"
+              onClick={() => {
+                setUpdateError(null);
+                setUpToDate(false);
+                checkForUpdate();
+              }}
+              disabled={updateState.status === 'checking' || updateState.status === 'downloading'}
+            >
+              {updateState.status === 'checking' ? (
+                <>
+                  <RefreshCw size={14} className="animate-spin" />
+                  <span>Checking…</span>
+                </>
+              ) : updateState.status === 'downloading' ? (
+                <>
+                  <RefreshCw size={14} className="animate-spin" />
+                  <span>Downloading ({updateState.progress?.percent ?? 0}%)</span>
+                </>
+              ) : (
+                'Check for updates'
+              )}
+            </button>
+          )}
         </div>
       </section>
     </div>
   );
 }
+

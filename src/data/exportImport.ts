@@ -355,7 +355,7 @@ function validateChunk(
   if (!isFiniteNumber(q.max)) return fail(`${path}.vectorQ.max: expected finite number`);
   if (q.max < q.min) return fail(`${path}.vectorQ: max must be >= min`);
 
-  let data: Int8Array | null = null;
+  let data: Int8Array;
   if (q.data instanceof Int8Array) {
     data = q.data;
   } else if (Array.isArray(q.data)) {

@@ -83,7 +83,9 @@ export type MetricEvent =
   | { kind: 'screen.dispatch'; latencyMs: number; hasKeyframe: boolean; hasScreenText: boolean }
   | { kind: 'screen.ocrComplete'; durationMs: number; deduped: boolean }
   | { kind: 'screen.ocrSkipped'; reason: 'vision-adapter' }
-  | { kind: 'screen.keyframeReencode'; passes: number; finalBytes: number };
+  | { kind: 'screen.keyframeReencode'; passes: number; finalBytes: number }
+  | { kind: 'asr.chunk'; pipeline: 'loopback' | 'microphone'; chunkKind: 'final' | 'partial'; queueMs: number; inferMs: number }
+  | { kind: 'realtime.dispatch'; source: 'final' | 'partial'; detectToDispatchMs: number; utteranceEndToFirstTokenMs: number };
 
 // ---------------------------------------------------------------------
 // Stored row shape
@@ -145,8 +147,6 @@ function looksLikeImageData(value: string): boolean {
  * error class names pass through.
  */
 function looksLikeScreenText(value: string): boolean {
-  // Short strings (< 20 chars) are almost certainly identifiers
-  if (value.length < 20) return false;
   return MULTI_WORD_TEXT_RE.test(value);
 }
 

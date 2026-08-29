@@ -201,9 +201,9 @@ export function scheduleIdleTermination(): void {
   // Cancel any existing timer to avoid double-termination
   cancelIdleTermination();
 
-  idleTerminationTimer = setTimeout(async () => {
+  idleTerminationTimer = setTimeout(() => {
     idleTerminationTimer = null;
-    await terminateOcrWorker();
+    void terminateOcrWorker();
   }, serviceConfig.idleGracePeriodMs);
 }
 

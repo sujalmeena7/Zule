@@ -178,10 +178,7 @@ export function InputBar({
     try {
       await bridge.whisperPreload?.({});
     } catch (preloadErr: unknown) {
-      // Model download failed — log to console (toasts suppressed in overlay).
-      // Return true so we don't fall through to Web Speech which also fails.
-      console.warn('[InputBar] Whisper preload failed:', preloadErr);
-      return true;
+      console.warn('[InputBar] Whisper preload failed (will load on-demand):', preloadErr);
     }
 
     const provider = new WhisperProvider({
@@ -196,6 +193,7 @@ export function InputBar({
 
     provider.on('line', ((line: TranscriptionLine) => appendTranscript(line.text)) as any);
     provider.on('error', ((e: ZuleError) => {
+      console.error('[InputBar] Dictation error:', e);
       notifyError(e);
       stopDictation();
     }) as any);
@@ -210,7 +208,8 @@ export function InputBar({
       whisperRef.current = provider;
       setIsVoiceTyping(true);
       return true;
-    } catch {
+    } catch (err) {
+      console.error('[InputBar] startWhisperDictation start failed:', err);
       provider.destroy();
       notifyError({ kind: 'transcription.audio-capture' });
       setIsVoiceTyping(false);
@@ -237,16 +236,17 @@ export function InputBar({
 
     // Browser fallback: Web Speech API (web mode only).
     try {
-      // @ts-ignore - SpeechRecognition is not fully typed
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (!SpeechRecognition) {
+      const SpeechRecognitionClass =
+        (window as unknown as { SpeechRecognition?: new () => any; webkitSpeechRecognition?: new () => any }).SpeechRecognition ||
+        (window as unknown as { SpeechRecognition?: new () => any; webkitSpeechRecognition?: new () => any }).webkitSpeechRecognition;
+      if (!SpeechRecognitionClass) {
         // Replaces previous `alert(...)` with the central toast pipeline
         // (Requirement 18.7).
         notifyError({ kind: 'transcription.unsupported' });
         return;
       }
 
-      const recognition = new SpeechRecognition();
+      const recognition = new SpeechRecognitionClass();
       recognition.continuous = true;
       recognition.interimResults = true;
 

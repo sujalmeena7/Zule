@@ -25,7 +25,7 @@ import type {
   StreamCallbacks,
 } from '../types/ai';
 import { selectModel, type SelectModelInput } from './modelSelector';
-import { isRetryableError } from './providers/http';
+import { isRetryableError, isImageUnsupportedError } from './providers/http';
 
 // --- Constants -----------------------------------------------------------
 
@@ -101,6 +101,57 @@ export class AllProvidersFailedError extends Error {
   }
 }
 
+/**
+ * Thrown when a caller demanded `requireImageInput` but no registered,
+ * currently-usable adapter accepts images.
+ *
+ * Distinct from `AllProvidersFailedError` because nothing failed — no request
+ * was ever made. The condition is a configuration gap, not a transport problem,
+ * and the two need different handling: a failed request may be worth retrying,
+ * whereas this one will keep being true until the User adds a vision provider or
+ * the caller falls back to OCR. Surfacing it as a generic failure would send the
+ * caller down a retry path that cannot succeed.
+ */
+export class NoVisionProviderError extends Error {
+  readonly code = 'NO_VISION_PROVIDER' as const;
+  constructor() {
+    super(
+      'AI_Provider_Router: this request needs a model that can read images, but no image-capable provider is available. Add a vision provider (e.g. Gemini) or unlock the vault.',
+    );
+    this.name = 'NoVisionProviderError';
+  }
+}
+
+/**
+ * Recorded when an adapter's stream ran to completion without ever handing the
+ * consumer a single character of answer.
+ *
+ * A fulfilled `streamGenerate` promise is not evidence that the User got an
+ * answer. A stream can open, deliver nothing but metadata frames, and close —
+ * and some adapters then call `onComplete` with an empty string and resolve. The
+ * router used to read that as success, log `✅`, and return: no failover, no
+ * error, and a card left spinning on "Thinking…" forever while the request was
+ * in fact already over. An empty answer is a failure of the same practical kind
+ * as a 500, so it is treated as one and the next provider gets its turn.
+ *
+ * Carries the mid-stream error the adapter reported through `onError`, when
+ * there was one — that is usually the real cause, and it would otherwise be
+ * dropped along with the empty completion.
+ */
+export class EmptyCompletionError extends Error {
+  readonly code = 'EMPTY_COMPLETION' as const;
+  readonly reportedError: unknown;
+  constructor(providerName: string, reportedError?: unknown) {
+    const detail =
+      reportedError instanceof Error ? ` Reported: ${reportedError.message}` : '';
+    super(
+      `AI_Provider_Router: provider '${providerName}' completed without producing any text.${detail}`,
+    );
+    this.name = 'EmptyCompletionError';
+    this.reportedError = reportedError;
+  }
+}
+
 // --- Router class --------------------------------------------------------
 
 export class AI_Provider_Router {
@@ -110,6 +161,18 @@ export class AI_Provider_Router {
   private offline = false; // Tracks navigator.onLine — Requirement 20.1
   // Provider name → epoch ms until which it is skipped after a 429.
   private rateLimitedUntil = new Map<string, number>();
+  /**
+   * Adapters that declared `capabilities.imageInput` but rejected an image at
+   * runtime. A gateway advertises the adapter's capability, not the configured
+   * model's, so the declaration is a claim; the first rejection is the only
+   * reliable evidence available. Remembering it turns a repeated hard failure
+   * into a single one followed by correct routing to another vision adapter.
+   *
+   * Not time-bounded like the 429 cooldown: a model that cannot read images will
+   * not start being able to. Cleared when the adapter is unregistered, which is
+   * what happens when the User changes the model behind it.
+   */
+  private imageIncapable = new Set<string>();
 
   /** True if `name` is currently in a post-429 cooldown window. */
   private isRateLimited(name: string): boolean {
@@ -135,6 +198,10 @@ export class AI_Provider_Router {
    */
   registerAdapter(adapter: ProviderAdapter): void {
     this.adapters.set(adapter.name, adapter);
+    // A re-registration is how a configuration change arrives (new base URL, new
+    // model tag). Whatever the previous model could or could not read says
+    // nothing about this one, so the runtime image verdict starts over.
+    this.imageIncapable.delete(adapter.name);
   }
 
   /**
@@ -148,6 +215,7 @@ export class AI_Provider_Router {
     const wasPresent = this.adapters.delete(name);
     this.priority = this.priority.filter((n) => n !== name);
     this.rateLimitedUntil.delete(name);
+    this.imageIncapable.delete(name);
     return wasPresent;
   }
 
@@ -194,6 +262,43 @@ export class AI_Provider_Router {
     return null;
   }
 
+  /**
+   * True when at least one currently-usable adapter accepts image input.
+   *
+   * Deliberately not the same question as `getActiveAdapterCapabilities()
+   * ?.imageInput`, which reports only the *first* adapter in priority order.
+   * A setup with Nemotron first and Gemini second answers "no" to that and "yes"
+   * to this — and "yes" is what matters when deciding whether a screenshot can
+   * be sent as pixels, because `requireImageInput` will route past the text-only
+   * one. Asking the narrower question is what forced the OCR detour on setups
+   * that already had a vision model configured.
+   */
+  hasImageCapableAdapter(): boolean {
+    for (const adapter of this.getOrderedAdapters()) {
+      if (!LOCAL_PROVIDER_NAMES.has(adapter.name)) {
+        if (this.vaultLocked || this.offline) continue;
+        if (this.isRateLimited(adapter.name)) continue;
+      }
+      if (this.imageIncapable.has(adapter.name)) continue;
+      if (adapter.capabilities.imageInput) return true;
+    }
+    return false;
+  }
+
+  /**
+   * The adapters that may receive an image, in priority order.
+   *
+   * Declared capability minus the ones that proved otherwise at runtime. Shared
+   * by `stream` and `complete` so both agree on what "vision-capable" means —
+   * they diverged once and the non-streaming path kept re-offering a model that
+   * had already rejected images.
+   */
+  private eligibleForImages(adapters: ProviderAdapter[]): ProviderAdapter[] {
+    return adapters.filter(
+      (a) => a.capabilities.imageInput && !this.imageIncapable.has(a.name),
+    );
+  }
+
   // --- Model selection (delegates to pure helper) ------------------------
 
   /**
@@ -231,7 +336,21 @@ export class AI_Provider_Router {
     console.log('[Router] Adapters in order:', adaptersInOrder.map(a => a.name));
     let lastError: unknown = null;
 
-    for (const adapter of adaptersInOrder) {
+    // Image-only prompts must not be offered to a text-only adapter: the image is
+    // dropped and the model answers that it received no context. Filter before
+    // the loop so failover cannot walk into one either.
+    const eligible = opts.requireImageInput
+      ? this.eligibleForImages(adaptersInOrder)
+      : adaptersInOrder;
+
+    if (opts.requireImageInput && eligible.length === 0) {
+      throw new NoVisionProviderError();
+    }
+    if (opts.requireImageInput) {
+      console.log('[Router] Vision required — eligible:', eligible.map(a => a.name));
+    }
+
+    for (const adapter of eligible) {
       // Check abort between adapters (within 200 ms requirement)
       if (opts.signal?.aborted) {
         throw makeAbortError();
@@ -257,11 +376,63 @@ export class AI_Provider_Router {
         }
       }
 
+      // Whether anything the User can read actually arrived. Counted here rather
+      // than inferred from the resolved promise, because the two are not the
+      // same thing — see `EmptyCompletionError`.
+      let sawContent = false;
+      let reportedError: unknown = null;
+      const guarded: StreamCallbacks = {
+        ...cb,
+        onToken: (cumulativeText: string) => {
+          if (cumulativeText.length > 0) sawContent = true;
+          cb.onToken(cumulativeText);
+        },
+        onComplete: (response: ProviderResponse) => {
+          if (response.text.trim().length > 0) sawContent = true;
+          // An empty completion is withheld: it would tell the consumer the
+          // request has finished — closing the stream, stopping the spinner,
+          // rendering a blank card — moments before the next adapter starts
+          // producing the real answer into the same callbacks.
+          if (sawContent) cb.onComplete(response);
+        },
+        onError: (err: Error) => {
+          // Adapters report mid-stream errors through this callback and then
+          // *resolve*. Once text has already reached the consumer it needs to
+          // know the answer is truncated. Before that, this is just one adapter
+          // failing, and the one behind it may well succeed — so hold the error
+          // and let it travel with the failover instead.
+          if (sawContent) cb.onError(err);
+          else reportedError = err;
+        },
+      };
+
       try {
         console.log(`[Router] Trying adapter: ${adapter.name}...`);
-        await adapter.streamGenerate(prompt, cb, opts);
-        console.log(`[Router] ✅ Adapter ${adapter.name} succeeded`);
-        return; // Success — done.
+        await adapter.streamGenerate(prompt, guarded, opts);
+
+        if (sawContent) {
+          console.log(`[Router] ✅ Adapter ${adapter.name} succeeded`);
+          return; // Success — done.
+        }
+
+        // Nothing reached the consumer. An abort is the legitimate reason for
+        // that, and the request is genuinely over: resolving quietly is what
+        // this path has always done, and failing over would fire a fresh
+        // request at the next provider on behalf of a User who just cancelled.
+        if (opts.signal?.aborted) {
+          return;
+        }
+
+        // Carry the withheld `onError` into the log. Without it, an adapter that
+        // knew exactly why it had nothing to say — a gateway refusing inside a
+        // 200, say — looks identical to one that simply went quiet.
+        const reason =
+          reportedError instanceof Error ? ` — ${reportedError.message}` : '';
+        console.warn(
+          `[Router] ⚠ Adapter ${adapter.name} completed with no text — treating as failure${reason}`,
+        );
+        lastError = new EmptyCompletionError(adapter.name, reportedError);
+        continue; // Try next adapter
       } catch (err) {
         console.error(`[Router] ❌ Adapter ${adapter.name} FAILED:`, err instanceof Error ? err.message : err);
         lastError = err;
@@ -275,6 +446,21 @@ export class AI_Provider_Router {
         if (is429Error(err)) {
           this.markRateLimited(adapter.name);
           console.log(`[Router] ${adapter.name} rate-limited (429) — cooling down`);
+        }
+
+        // The adapter said it takes images and the endpoint disagreed. Record it
+        // and keep going: there may be another vision adapter behind this one,
+        // and without the failover a 4xx is non-retryable and would end the
+        // request here — the caller having already thrown away its text sources
+        // on the strength of the declared capability.
+        //
+        // Only when an image was actually sent. The message match is a substring
+        // test ('multimodal', 'image input'), so an unrelated error mentioning
+        // those words on a text-only prompt must not brand the adapter.
+        if (prompt.images && prompt.images.length > 0 && isImageUnsupportedError(err)) {
+          this.imageIncapable.add(adapter.name);
+          console.log(`[Router] ${adapter.name} rejected image input — marked text-only`);
+          continue;
         }
 
         // Only failover on retryable errors (transport / 5xx / timeout)
@@ -321,7 +507,16 @@ export class AI_Provider_Router {
     const adaptersInOrder = this.getOrderedAdapters();
     let lastError: unknown = null;
 
-    for (const adapter of adaptersInOrder) {
+    // Same vision gate as `stream` — see the comment there.
+    const eligible = opts.requireImageInput
+      ? this.eligibleForImages(adaptersInOrder)
+      : adaptersInOrder;
+
+    if (opts.requireImageInput && eligible.length === 0) {
+      throw new NoVisionProviderError();
+    }
+
+    for (const adapter of eligible) {
       // Check abort between adapters
       if (opts.signal?.aborted) {
         throw makeAbortError();
@@ -346,6 +541,13 @@ export class AI_Provider_Router {
 
       try {
         const response = await adapter.complete(prompt, opts);
+        // Same rule as `stream`: an answer with no text in it is a failure the
+        // caller cannot do anything with, so let the next provider try rather
+        // than returning it as a success. See `EmptyCompletionError`.
+        if (response.text.trim().length === 0) {
+          lastError = new EmptyCompletionError(adapter.name);
+          continue;
+        }
         return response;
       } catch (err) {
         lastError = err;
@@ -356,6 +558,12 @@ export class AI_Provider_Router {
 
         if (is429Error(err)) {
           this.markRateLimited(adapter.name);
+        }
+
+        // See `stream` — a declared image capability that the endpoint refuses.
+        if (prompt.images && prompt.images.length > 0 && isImageUnsupportedError(err)) {
+          this.imageIncapable.add(adapter.name);
+          continue;
         }
 
         if (isFailoverError(err)) {

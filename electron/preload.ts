@@ -132,10 +132,18 @@ const electronAPI = {
     return () => ipcRenderer.removeListener('overlay-key', handler);
   },
 
-  /** Capture the desktop using BitBlt (bypasses display affinity protection).
-   *  Returns base64 JPEG or null if unavailable. */
-  captureDesktopBitBlt: (): Promise<{ ok: boolean; base64?: string; reason?: string }> =>
-    ipcRenderer.invoke('capture-desktop-bitblt'),
+  /** Capture the desktop using BitBlt. Returns `ok: false` with
+   *  `reason: 'capture-protected'` when the foreground window has display affinity
+   *  set — this path cannot see through it, so it declines rather than returning a
+   *  frame of the window behind. */
+  captureDesktopBitBlt: (): Promise<{
+    ok: boolean;
+    base64?: string;
+    reason?: string;
+    bytes?: number;
+    width?: number;
+    height?: number;
+  }> => ipcRenderer.invoke('capture-desktop-bitblt'),
 
   /** Extract text from the foreground window using Windows UI Automation
    *  (accessibility API). Bypasses display affinity — reads the UI tree directly. */
@@ -188,18 +196,28 @@ const electronAPI = {
   // 16 kHz mono Float32 PCM and ships chunks here.
 
   /** Pre-warm the Whisper model (call when the user enables system audio). */
-  whisperPreload: (opts?: { modelId?: string }): Promise<boolean> =>
-    ipcRenderer.invoke('whisper:preload', opts),
+  whisperPreload: (opts?: {
+    pipeline?: 'loopback' | 'microphone' | string;
+    modelId?: string;
+  }): Promise<boolean> => ipcRenderer.invoke('whisper:preload', opts),
 
-  /** Transcribe one PCM chunk; returns the recognised text. */
+  /** Transcribe one PCM chunk; returns the recognised text and latency metrics. */
   whisperTranscribe: (
     pcm: Float32Array,
-    opts?: { language?: string; modelId?: string },
-  ): Promise<{ text: string }> =>
+    opts?: {
+      language?: string;
+      modelId?: string;
+      kind?: 'final' | 'partial';
+      seq?: number;
+      pipeline?: 'loopback' | 'microphone';
+    },
+  ): Promise<{ text: string; queueMs?: number; inferMs?: number }> =>
     ipcRenderer.invoke('whisper:transcribe', pcm, opts),
 
   /** Release the Whisper model/session (call when system audio is disabled). */
-  whisperRelease: (): Promise<boolean> => ipcRenderer.invoke('whisper:release'),
+  whisperRelease: (opts?: {
+    pipeline?: 'loopback' | 'microphone' | string;
+  }): Promise<boolean> => ipcRenderer.invoke('whisper:release', opts),
 
   // ── Local text embeddings (native, main-process) ─────────────────────────
   // The embedding model also runs in the main process (renderer onnxruntime-web
@@ -327,6 +345,17 @@ const electronAPI = {
     ipcRenderer.on('phone-image-received', handler);
     return () => ipcRenderer.removeListener('phone-image-received', handler);
   },
+
+  /** Stream AI-generated answer to connected phone(s). */
+  sendAnswerToPhone: (data: {
+    id?: string;
+    text: string;
+    question?: string;
+    mode?: string;
+    model?: string;
+    timestamp?: number;
+  }): Promise<{ sent: number; seq: number }> =>
+    ipcRenderer.invoke('phone-send-answer', data),
 };
 
 // Expose the API to the renderer's window object

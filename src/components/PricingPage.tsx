@@ -14,6 +14,7 @@ import {
   type BillingInterval,
   PLAN_CONFIGS,
 } from '../types/subscription';
+import toast from 'react-hot-toast';
 import './PricingPage.css';
 
 // --- Feature list for each tier ---
@@ -203,15 +204,8 @@ function SubscriptionManagementPanel() {
           <button
             className="sub-mgmt-action-btn sub-mgmt-invoice-btn"
             onClick={() => {
-              // Open Razorpay subscription management portal
-              // Usually handled by customer portal link. We'll use a generic support link for this example or if you have a specific portal URL you can put it here.
-              // For Razorpay, merchants typically create a customer portal link or handle it via API.
-              // If you don't have a direct portal link, this button can just say "Contact Support to Manage" or point to a specific route.
-              // For now, we'll open the external URL if it exists, or just alert.
               if (typeof window !== 'undefined' && window.electronAPI?.openExternal) {
-                // If you have a specific Razorpay Hosted Page URL or Customer Portal URL, put it here.
-                // For this demo, let's just show an alert or open a dummy URL.
-                 window.alert("To cancel or modify your payment method, please contact support or check your email for the Razorpay subscription link.");
+                toast("To cancel or modify your payment method, please contact support or check your email for the Razorpay subscription link.");
               }
             }}
           >
@@ -300,21 +294,22 @@ export function PricingPage() {
       </header>
 
       {/* Billing toggle */}
-      <div className={`billing-toggle-container ${interval === 'annual' ? 'annual' : ''}`}>
-        <div className="billing-toggle-slider" />
-        <div
-          className={`billing-toggle-option ${interval === 'monthly' ? 'active' : ''}`}
+      <div className="billing-toggle-container">
+        <button
+          type="button"
+          className={`billing-toggle-btn ${interval === 'monthly' ? 'active' : ''}`}
           onClick={() => setInterval('monthly')}
         >
           Monthly
-        </div>
-        <div
-          className={`billing-toggle-option ${interval === 'annual' ? 'active' : ''}`}
+        </button>
+        <button
+          type="button"
+          className={`billing-toggle-btn ${interval === 'annual' ? 'active' : ''}`}
           onClick={() => setInterval('annual')}
         >
           Annual
-          <span className="billing-save-badge">Save 20%</span>
-        </div>
+          <span className="billing-save-badge">SAVE 20%</span>
+        </button>
       </div>
 
       {/* Tier cards */}
@@ -403,16 +398,21 @@ export function PricingPage() {
 
       {/* Comparison banner */}
       <div className="pricing-comparison">
+        <div className="pricing-comparison-badge">
+          <ShieldCheck size={14} />
+          <span>Stealth Advantage</span>
+        </div>
         <h3 className="pricing-comparison-title">
           Why choose Zule over Cluely?
         </h3>
         <p className="pricing-comparison-text">
-          Cluely charges <span className="highlight">$149.99/mo</span> for their
+          Competitors charge up to <span className="highlight">$149.99/mo</span> for their
           stealth overlay. We include it <span className="highlight">free on every plan</span>.
-          Our Pro plan at $9.99/mo gives you more features than their $19.99/mo plan.
-          That's up to <span className="highlight">87% cheaper</span>.
+          Our Pro plan gives you more real-time assistance and intelligence at a fraction of the price.
+          That's up to <span className="highlight">87% cheaper</span> with zero compromise on privacy.
         </p>
       </div>
     </div>
   );
 }
+

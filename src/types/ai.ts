@@ -80,6 +80,23 @@ export interface PromptInput {
 }
 
 /**
+ * How much deliberation to request from a *thinking* model.
+ *
+ * These models spend a hidden reasoning phase before emitting a single answer
+ * token, and its length dominates wall-clock latency: a hard problem can burn
+ * 3000+ reasoning tokens at ~60 tok/s, so the answer starts around the
+ * 50-second mark. Capping the effort trades a little accuracy on genuinely hard
+ * problems for a large, predictable latency win, which is the right trade for a
+ * live-interview copilot where an answer after the interviewer has moved on is
+ * worth nothing.
+ *
+ * `'none'` asks to skip reasoning entirely. Not all models honour it — a
+ * variant with thinking baked into its weights (`…-thinking`) reasons
+ * regardless — so it is a request, not a guarantee.
+ */
+export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high';
+
+/**
  * Per-call options. Timeouts and abort handling are honoured by the
  * shared HTTP utility (Requirements 4.4, 4.7).
  */
@@ -92,6 +109,45 @@ export interface CallOpts {
   modelId?: string;
   temperature?: number;
   maxOutputTokens?: number;
+  /**
+   * Restrict failover to adapters whose `capabilities.imageInput` is true.
+   *
+   * Set when the prompt's only grounding is an image — a screen capture, a
+   * phone photo — so the question exists in the pixels and nowhere else. Without
+   * this the router walks its normal priority order, hands the prompt to
+   * whichever adapter is first, and a text-only model has the image stripped and
+   * answers that it was given no context. Skipping those adapters is not a
+   * preference, it is the difference between an answer and a non-answer.
+   *
+   * When no registered adapter can accept images the router raises
+   * `NoVisionProviderError` rather than silently degrading, so the caller can
+   * fall back to OCR (slow but local) or tell the User which setting to change.
+   */
+  requireImageInput?: boolean;
+  /**
+   * Deliberation budget for a thinking model. Overrides the adapter's own
+   * default; omitted from the request entirely when neither is set, so a
+   * provider applies whatever it does normally.
+   */
+  reasoningEffort?: ReasoningEffort;
+  /**
+   * Ask each adapter for its *fastest* model rather than its best one.
+   *
+   * Set on screen-grounded dispatches, where latency is the whole product: the
+   * question is on screen in front of an interviewer, and an answer that arrives
+   * after they have moved on is worth nothing regardless of its quality. A
+   * thinking model spends its first minute deliberating before it emits a single
+   * answer token, so on this path the right model is a different model, not the
+   * same one asked more nicely.
+   *
+   * A boolean rather than a model id on purpose. The router fails over between
+   * providers, and a model id is only meaningful to the provider that hosts it —
+   * threading one through would send `qwen/…-instruct` to Anthropic on the
+   * second attempt. Each adapter instead answers for itself and ignores the flag
+   * when it has no fast model configured, so the fallback is always "behave
+   * exactly as before".
+   */
+  preferFastModel?: boolean;
 }
 
 /**
@@ -117,11 +173,19 @@ export interface ProviderResponse {
  * at most once and never after `signal.aborted` (Requirement 4.7).
  * `onMetrics` is optional and emitted by the router with TTFT/total
  * latency, retry count, and the resolved model id (Requirement 14).
+ *
+ * `onReasoning` carries a *thinking* model's chain-of-thought, which arrives
+ * on a separate delta field (`reasoning` / `reasoning_content`) and is not
+ * part of the answer. It exists because on a hard problem that phase can run
+ * for a minute while `onToken` is never called once, so a consumer with only
+ * `onToken` has no way to distinguish "still working" from "hung". Optional:
+ * adapters for non-reasoning models never call it.
  */
 export interface StreamCallbacks {
   onToken: (cumulativeText: string) => void;
   onComplete: (response: ProviderResponse) => void;
   onError: (err: Error) => void;
+  onReasoning?: (cumulativeReasoning: string) => void;
   onMetrics?: (m: {
     ttftMs: number;
     totalMs: number;

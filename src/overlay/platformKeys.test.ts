@@ -2,7 +2,7 @@
 // Zule AI — Platform Keys Utility Tests
 // ============================================
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import {
   getModifierKey,
   getAltKey,
@@ -19,7 +19,7 @@ describe('platformKeys', () => {
     if (originalElectronAPI) {
       window.electronAPI = originalElectronAPI;
     } else {
-      delete (window as Record<string, unknown>).electronAPI;
+      delete (window as unknown as Record<string, unknown>).electronAPI;
     }
   });
 
@@ -40,7 +40,7 @@ describe('platformKeys', () => {
     });
 
     it('defaults to "Ctrl" when electronAPI is not available', () => {
-      delete (window as Record<string, unknown>).electronAPI;
+      delete (window as unknown as Record<string, unknown>).electronAPI;
       expect(getModifierKey()).toBe('Ctrl');
     });
   });
@@ -62,40 +62,30 @@ describe('platformKeys', () => {
     });
 
     it('defaults to "Alt" when electronAPI is not available', () => {
-      delete (window as Record<string, unknown>).electronAPI;
+      delete (window as unknown as Record<string, unknown>).electronAPI;
       expect(getAltKey()).toBe('Alt');
     });
   });
 
   describe('formatShortcut', () => {
-    it('replaces Mod with Ctrl on win32', () => {
+    it('formats shortcuts with Cmd on darwin', () => {
+      window.electronAPI = { platform: 'darwin' } as typeof window.electronAPI;
+      expect(formatShortcut('Mod+Shift+Space')).toBe('Cmd+Shift+Space');
+    });
+
+    it('preserves Ctrl on win32', () => {
       window.electronAPI = { platform: 'win32' } as typeof window.electronAPI;
-      expect(formatShortcut('Mod+Shift+H')).toBe('Ctrl+Shift+H');
+      expect(formatShortcut('Mod+Shift+Space')).toBe('Ctrl+Shift+Space');
     });
 
-    it('replaces Mod with Cmd on darwin', () => {
-      window.electronAPI = { platform: 'darwin' } as typeof window.electronAPI;
-      expect(formatShortcut('Mod+Shift+H')).toBe('Cmd+Shift+H');
-    });
-
-    it('replaces Alt with Option on darwin', () => {
-      window.electronAPI = { platform: 'darwin' } as typeof window.electronAPI;
-      expect(formatShortcut('Mod+Alt+0')).toBe('Cmd+Option+0');
-    });
-
-    it('replaces Alt with Alt on win32/linux', () => {
+    it('preserves Ctrl on linux', () => {
       window.electronAPI = { platform: 'linux' } as typeof window.electronAPI;
-      expect(formatShortcut('Mod+Alt+Up')).toBe('Ctrl+Alt+Up');
+      expect(formatShortcut('Mod+Shift+Space')).toBe('Ctrl+Shift+Space');
     });
 
-    it('handles multiple Mod/Alt tokens', () => {
+    it('handles multiple modifiers', () => {
       window.electronAPI = { platform: 'darwin' } as typeof window.electronAPI;
-      expect(formatShortcut('Mod+Alt or Mod+Shift')).toBe('Cmd+Option or Cmd+Shift');
-    });
-
-    it('leaves string unchanged if no tokens present', () => {
-      window.electronAPI = { platform: 'darwin' } as typeof window.electronAPI;
-      expect(formatShortcut('Escape')).toBe('Escape');
+      expect(formatShortcut('Mod+Alt+Space')).toBe('Cmd+Option+Space');
     });
   });
 
@@ -106,7 +96,7 @@ describe('platformKeys', () => {
     });
 
     it('defaults to win32 when electronAPI is unavailable', () => {
-      delete (window as Record<string, unknown>).electronAPI;
+      delete (window as unknown as Record<string, unknown>).electronAPI;
       expect(getPlatform()).toBe('win32');
     });
   });

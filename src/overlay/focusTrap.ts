@@ -9,7 +9,7 @@
 import { useEffect, useRef } from 'react';
 
 export interface FocusTrapOptions {
-  containerRef: React.RefObject<HTMLElement>;
+  containerRef: React.RefObject<HTMLElement | null>;
   enabled: boolean;
   onEscape?: () => void;
 }
@@ -67,9 +67,10 @@ function getFocusableElements(container: HTMLElement): HTMLElement[] {
 export function useFocusTrap(options: FocusTrapOptions): void {
   const { containerRef, enabled, onEscape } = options;
 
-  // Store onEscape in a ref to avoid re-attaching the listener on every render
   const onEscapeRef = useRef(onEscape);
-  onEscapeRef.current = onEscape;
+  useEffect(() => {
+    onEscapeRef.current = onEscape;
+  }, [onEscape]);
 
   useEffect(() => {
     if (!enabled) return;

@@ -7,7 +7,7 @@
 //
 // **Validates: Requirements 1.3, 1.4, 2.1, 2.2, 2.3, 8.1, 8.2, 8.3**
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import * as fc from 'fast-check';
 import { ScreenContextGuard } from '../../brain/screenContextGuard';
 import type { OcrEntry } from '../../hooks/useScreenCapture';

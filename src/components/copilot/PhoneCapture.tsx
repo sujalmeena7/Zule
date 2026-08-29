@@ -2,7 +2,7 @@
 // Zule AI — Phone Camera Capture Overlay
 // ============================================
 
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import QRCode from 'qrcode';
 import { Smartphone, X, Copy, Check } from 'lucide-react';
 import './PhoneCapture.css';

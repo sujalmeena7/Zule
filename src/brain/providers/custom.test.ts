@@ -851,6 +851,49 @@ describe('CustomOpenAICompatibleAdapter — examples', () => {
       ).toThrow(/modelId is required/);
     }
   });
+
+  it('accepts a blank fastModelId as "no fast model", unlike modelId', async () => {
+    // `fastModelId` is optional, so blankness is a valid configuration rather
+    // than the construction error a blank `modelId` is. Construction must
+    // succeed, and a `preferFastModel` dispatch must fall back to `modelId`
+    // rather than requesting the model named `''`.
+    for (const fastModelId of ['', '   ', '\t\n']) {
+      const { impl, calls } = makeRecordingFetch(() =>
+        makeJsonResponse({ choices: [{ message: { content: 'ok' } }] }),
+      );
+      const adapter = new CustomOpenAICompatibleAdapter({
+        baseUrl: 'https://example.com/v1',
+        modelId: 'gpt-4o-mini',
+        fastModelId,
+        fetchImpl: impl,
+        telemetrySink: () => {},
+      });
+
+      await adapter.complete(ATTESTED_PROMPT, { preferFastModel: true });
+      expect(JSON.parse(String(calls[0].init?.body)).model).toBe('gpt-4o-mini');
+    }
+  });
+
+  it('routes a preferFastModel dispatch to the configured fast model', async () => {
+    const { impl, calls } = makeRecordingFetch(() => makeStreamResponse(SSE_MULTI_FRAME));
+
+    const adapter = new CustomOpenAICompatibleAdapter({
+      baseUrl: 'https://example.com/v1',
+      modelId: 'qwen-thinking',
+      fastModelId: 'qwen-instruct',
+      fetchImpl: impl,
+      telemetrySink: () => {},
+    });
+
+    const { cb, responses } = recordingCallbacks();
+    await adapter.streamGenerate(ATTESTED_PROMPT, cb, { preferFastModel: true });
+
+    // Same endpoint, same credential — only the `model` string differs, which is
+    // the entire mechanism.
+    expect(String(calls[0].input)).toBe('https://example.com/v1/chat/completions');
+    expect(JSON.parse(String(calls[0].init?.body)).model).toBe('qwen-instruct');
+    expect(responses[0].modelId).toBe('qwen-instruct');
+  });
 });
 
 // ── Property 11 ─────────────────────────────────────────────────────────────

@@ -39,7 +39,7 @@ import {
   OpenAICompatibleAdapter,
   type OpenAICompatibleUsageEvent,
 } from './openAICompatible';
-import type { Capabilities, PromptInput } from './types';
+import type { Capabilities, PromptInput, ReasoningEffort } from './types';
 
 // --- Constants -----------------------------------------------------------
 
@@ -61,11 +61,39 @@ export const MIN_SCRUBBABLE_SECRET_LENGTH = 8;
  * makes the gateway reserve the model's entire output window, which a
  * credit-limited key cannot cover — OpenRouter refuses with HTTP 402 ("you
  * requested up to 16384 tokens, but can only afford …") before generating
- * anything. A copilot suggestion is a few hundred tokens, so this ceiling is
- * generous for the use case while keeping the authorisation small enough that
- * a nearly-exhausted balance still works. Overridable per configuration.
+ * anything. So a ceiling is sent, but it has to be a *bounded* one rather than
+ * a tight one.
+ *
+ * 2048 was tight, sized for "a copilot suggestion is a few hundred tokens".
+ * That reasoning does not survive a thinking model: on those, `max_tokens` is
+ * the budget for the reasoning phase *and* the answer, and the reasoning runs
+ * first. A hard problem (design an O(1) LFU cache) can spend well over 2000
+ * tokens deciding on the approach, at which point the request ends having
+ * produced only a chain-of-thought — a successful HTTP 200 with an empty or
+ * truncated answer, which looks like the model had nothing to say.
+ *
+ * 8192 is still small enough to authorise against a nearly-exhausted balance
+ * (fractions of a cent on the cheap models people put behind a gateway) and
+ * far from "the model's entire output window", so the 402 this constant exists
+ * to prevent stays prevented. Overridable per configuration.
  */
-export const DEFAULT_MAX_OUTPUT_TOKENS = 2048;
+export const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
+
+/**
+ * Deliberation budget requested from a thinking model behind a gateway.
+ *
+ * Sized from a measurement, not a preference: on `qwen3-vl-235b-a22b-thinking`
+ * a hard DSA problem produced 3099 reasoning tokens at roughly 60 tok/s, so the
+ * first answer token landed near 52 seconds. That is past the point where a
+ * live-interview answer is worth anything, and the reasoning phase was the
+ * whole cost — capture had already finished in tens of milliseconds.
+ *
+ * `'low'` rather than `'none'` because a thinking-tuned variant reasons whether
+ * or not it is asked to, so `'none'` buys nothing while giving up the option of
+ * a shorter think. Overridable per configuration, and ignored outright by
+ * endpoints that don't implement the parameter.
+ */
+export const DEFAULT_REASONING_EFFORT: ReasoningEffort = 'low';
 
 /**
  * Conservative capability descriptor for an arbitrary gateway model.
@@ -179,6 +207,17 @@ export interface CustomProviderAdapterOptions {
   /** The `model` field value sent in the request body. Must be non-blank. */
   modelId: string;
   /**
+   * Optional second model id, used only when the caller sets
+   * `CallOpts.preferFastModel` — in practice, screen-grounded dispatches.
+   *
+   * A gateway usually fronts both a thinking and a non-thinking variant of the
+   * same vision model under one key, and the difference between them on a hard
+   * problem is roughly a minute of deliberation. Unlike `modelId` this is
+   * optional and a blank value is not a configuration error: it simply means
+   * every dispatch keeps using `modelId`, which is the pre-existing behaviour.
+   */
+  fastModelId?: string;
+  /**
    * Optional bearer credential. A blank / whitespace-only value is treated
    * as "no credential configured": the base class then omits the
    * `Authorization` header entirely and adds no other credential-bearing
@@ -202,6 +241,11 @@ export interface CustomProviderAdapterOptions {
    * `DEFAULT_MAX_OUTPUT_TOKENS`.
    */
   defaultMaxOutputTokens?: number;
+  /**
+   * Deliberation budget for a thinking model. Defaults to
+   * `DEFAULT_REASONING_EFFORT`.
+   */
+  defaultReasoningEffort?: ReasoningEffort;
 }
 
 // --- Adapter -------------------------------------------------------------
@@ -245,6 +289,9 @@ export class CustomOpenAICompatibleAdapter extends OpenAICompatibleAdapter {
       providerId: CUSTOM_PROVIDER_ID,
       baseUrl,
       defaultModelId: modelId,
+      // Optional by design: blank stays blank and the base class then ignores
+      // `preferFastModel` entirely, rather than requesting the model named ''.
+      fastModelId: opts.fastModelId,
       apiKey,
       capabilities,
       // Cloud-grade budgets from `http.ts`, not Ollama's model-load budget.
@@ -255,6 +302,8 @@ export class CustomOpenAICompatibleAdapter extends OpenAICompatibleAdapter {
       // small ceiling rather than the model's full output window.
       defaultMaxOutputTokens:
         opts.defaultMaxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+      defaultReasoningEffort:
+        opts.defaultReasoningEffort ?? DEFAULT_REASONING_EFFORT,
       fetchImpl: opts.fetchImpl,
       // Requirement 2.10 — runs before serialisation and before any fetch.
       preflight: assertRedacted,

@@ -136,7 +136,7 @@ describe('pushToRingBuffer', () => {
   });
 
   it('handles maxSize of 1', () => {
-    let buf = pushToRingBuffer([], 'first', 1);
+    let buf: string[] = pushToRingBuffer<string>([], 'first', 1);
     expect(buf).toEqual(['first']);
     buf = pushToRingBuffer(buf, 'second', 1);
     expect(buf).toEqual(['second']);

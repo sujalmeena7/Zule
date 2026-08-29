@@ -14,9 +14,10 @@
 
 import type { ContextWindow } from './contextManager';
 import { database, type ProviderConfig } from '../data/database';
-import { AI_Provider_Router, VaultLockedError, OfflineError } from './providerRouter';
-import type { PromptInput, StreamCallbacks as RouterStreamCallbacks, ProviderResponse } from '../types/ai';
+import { AI_Provider_Router, VaultLockedError, OfflineError, NoVisionProviderError } from './providerRouter';
+import type { PromptInput, StreamCallbacks as RouterStreamCallbacks, ProviderResponse, ReasoningEffort } from '../types/ai';
 import { decryptApiKey } from '../utils/secureKeyStorage';
+import { isImageUnsupportedError as isImageUnsupportedErrorShared } from './providers/http';
 import {
   CUSTOM_PROVIDER_ID,
   mergeCustomEntry,
@@ -39,6 +40,17 @@ export interface StreamCallbacks {
   onComplete: (response: AIResponse) => void;
   onError: (error: Error) => void;
   onMetrics?: (metrics: { timeToFirstToken: number; totalLatency: number; model: string }) => void;
+  /**
+   * A thinking model's chain-of-thought, which arrives on its own delta field
+   * and is not part of the answer. Optional, and never called for a
+   * non-reasoning model.
+   *
+   * Worth wiring up even if the text is never displayed: on a hard problem the
+   * reasoning phase can run for a minute during which `onToken` fires zero
+   * times, so this is the only signal that separates "still working" from
+   * "hung".
+   */
+  onReasoning?: (cumulativeReasoning: string) => void;
   /**
    * Invoked when every configured provider failed and the request is about to
    * be served by the simulation adapter instead. Without this the UI only sees
@@ -250,12 +262,23 @@ async function registerProviderAdapter(
       const { AnthropicAdapter } = await import('./providers/anthropic');
       // Forward optional baseUrl and modelId so users can point Anthropic at
       // compatible gateways (e.g. api.lumosel.vip) and choose a model.
-      const anthropicOpts: { apiKey: string; baseUrl?: string; defaultModelId?: string } = { apiKey };
+      const anthropicOpts: {
+        apiKey: string;
+        baseUrl?: string;
+        defaultModelId?: string;
+        fastModelId?: string;
+      } = { apiKey };
       if (config.baseUrl && config.baseUrl.trim()) {
         anthropicOpts.baseUrl = config.baseUrl.trim();
       }
       if (config.modelId && config.modelId.trim()) {
         anthropicOpts.defaultModelId = config.modelId.trim();
+      }
+      // Same field the custom provider uses. Screen dispatches set
+      // `preferFastModel`, so a gateway that hosts both a slow strong model and
+      // a fast one can serve each from the single Anthropic slot.
+      if (config.fastModelId && config.fastModelId.trim()) {
+        anthropicOpts.fastModelId = config.fastModelId.trim();
       }
       routerInstance.registerAdapter(new AnthropicAdapter(anthropicOpts));
       break;
@@ -293,6 +316,7 @@ async function registerProviderAdapter(
         new CustomOpenAICompatibleAdapter({
           baseUrl: decision.baseUrl,
           modelId: decision.modelId,
+          fastModelId: decision.fastModelId,
           apiKey: decision.apiKey,
           pricePerMTokens: config.pricePerMTokens,
         }),
@@ -320,9 +344,14 @@ async function ensureProvidersSynced(): Promise<void> {
 
     // Skip re-registration if config hasn't changed since last sync. The hash
     // covers the whole array, so any enable/disable transition invalidates it.
+    //
+    // Recorded only once the pass below has finished. Recording it up front means
+    // a throw anywhere in this function — a keystore failure, a corrupt stored
+    // entry — leaves the hash cached against work that never happened, and every
+    // later call short-circuits on it. The result is a session with no adapters
+    // registered and no way to recover short of a restart.
     const configHash = JSON.stringify(savedProviders);
     if (configHash === lastSyncedConfigHash) return;
-    lastSyncedConfigHash = configHash;
 
     // Exactly one `custom` entry, initialised when absent.
     const configs = mergeCustomEntry(savedProviders);
@@ -400,6 +429,10 @@ async function ensureProvidersSynced(): Promise<void> {
         }
       }
     }
+
+    // The pass completed; only now is the hash a truthful record of what is
+    // registered.
+    lastSyncedConfigHash = configHash;
   } catch (error) {
     console.error('[aiProvider] Failed to sync providers config:', error);
   }
@@ -409,25 +442,10 @@ async function ensureProvidersSynced(): Promise<void> {
 
 /**
  * True when a provider rejected the request specifically because the chosen
- * model cannot accept image input.
- *
- * `activeAdapterSupportsImageInput()` reports the *adapter's* declared
- * capability, but a gateway fronts many models and most cheap/free ones are
- * text-only. Those endpoints reject the whole request (OpenRouter answers 404
- * "No endpoints found that support image input") rather than dropping the
- * attachment, which turns an answerable question into a hard failure.
+ * model cannot accept image input. Re-exported from the shared HTTP classifier
+ * so the router and this module cannot disagree about what the condition is.
  */
-function isImageUnsupportedError(error: unknown): boolean {
-  const msg = (error instanceof Error ? error.message : String(error ?? '')).toLowerCase();
-  return (
-    msg.includes('support image input') ||
-    msg.includes('support image') ||
-    msg.includes('image input') ||
-    msg.includes('does not support image') ||
-    msg.includes('image_url') ||
-    msg.includes('multimodal')
-  );
-}
+const isImageUnsupportedError = isImageUnsupportedErrorShared;
 
 /** Convert a legacy `ContextWindow` to the new `PromptInput`. */
 function toPromptInput(context: ContextWindow): PromptInput {
@@ -497,6 +515,29 @@ export async function generateAIResponse(
 }
 
 /**
+ * Register and sync every configured provider ahead of the first request.
+ *
+ * `streamAIResponse` does this lazily, but the work is not free: reading the
+ * saved provider list from IndexedDB, decrypting each stored key through the
+ * keystore, and dynamically importing the chosen adapter chunk all land on the
+ * critical path between the User's click and the first streamed token. Calling
+ * this once at mount moves that cost into idle time.
+ *
+ * Idempotent — `ensureProvidersSynced` short-circuits on an unchanged config
+ * hash, and the `ensure*Registered` helpers no-op once registered. Failures are
+ * swallowed: a warm-up that fails simply leaves the lazy path to retry.
+ */
+export async function warmProviders(apiKey?: string): Promise<void> {
+  try {
+    await ensureProvidersSynced();
+    await ensureGeminiRegistered(apiKey);
+    await ensureSimulationRegistered();
+  } catch (error) {
+    console.warn('[aiProvider] Provider warm-up failed; will retry on first request:', error);
+  }
+}
+
+/**
  * Streaming completion. Delegates to the router's `stream` method,
  * adapting the new `StreamCallbacks` shape to the legacy one.
  */
@@ -505,6 +546,17 @@ export async function streamAIResponse(
   callbacks: StreamCallbacks,
   apiKey?: string,
   signal?: AbortSignal,
+  opts?: {
+    requireImageInput?: boolean;
+    /**
+     * Ask each adapter for its fastest model. Set by the screen path, where the
+     * question is on screen in front of an interviewer and a late answer is
+     * worth nothing. Adapters with no fast model configured ignore it.
+     */
+    preferFastModel?: boolean;
+    /** Cap a thinking model's deliberation for this dispatch. */
+    reasoningEffort?: ReasoningEffort;
+  },
 ): Promise<void> {
   await ensureProvidersSynced();
   await ensureGeminiRegistered(apiKey);
@@ -522,6 +574,11 @@ export async function streamAIResponse(
     onError: (err: Error) => {
       callbacks.onError(err);
     },
+    onReasoning: callbacks.onReasoning
+      ? (cumulativeReasoning: string) => {
+          callbacks.onReasoning!(cumulativeReasoning);
+        }
+      : undefined,
     onMetrics: callbacks.onMetrics
       ? (m) => {
           callbacks.onMetrics!({
@@ -535,7 +592,12 @@ export async function streamAIResponse(
 
   let failure: unknown;
   try {
-    await routerInstance.stream(prompt, routerCallbacks, { signal });
+    await routerInstance.stream(prompt, routerCallbacks, {
+      signal,
+      requireImageInput: opts?.requireImageInput,
+      preferFastModel: opts?.preferFastModel,
+      reasoningEffort: opts?.reasoningEffort,
+    });
     return;
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
@@ -545,19 +607,45 @@ export async function streamAIResponse(
     if (error instanceof VaultLockedError || error instanceof OfflineError) {
       throw error;
     }
+    // No vision provider available. Re-thrown rather than degraded to simulation:
+    // the caller asked for image routing because the image is the only grounding
+    // it has, so it needs to hear "that is not possible" in order to fall back to
+    // OCR. Answering with the simulation placeholder would look like a model reply
+    // and hide a fixable configuration gap.
+    if (error instanceof NoVisionProviderError) {
+      throw error;
+    }
     failure = error;
   }
 
   // Text-only model + attached keyframe: retry once without the image before
   // giving up. The screen's OCR text is already in `fullPrompt`, so the answer
   // is still grounded in what is on screen — only the picture is lost.
+  //
+  // Except when the caller set `requireImageInput`: that is its statement that
+  // the image is the *only* grounding it has. Stripping it then leaves a prompt
+  // with no question in it, and the model dutifully replies that it was given no
+  // context — a plausible-looking non-answer that hides the real cause. Report
+  // the cause instead and let the caller fall back to OCR.
   if (prompt.images && prompt.images.length > 0 && isImageUnsupportedError(failure)) {
+    if (opts?.requireImageInput) {
+      console.warn(
+        '[aiProvider] Every image-capable provider rejected the image and the image was the only grounding — not retrying text-only.',
+      );
+      throw new NoVisionProviderError();
+    }
     console.warn(
       '[aiProvider] Model rejected image input; retrying text-only (screen OCR text is retained).',
     );
     const textOnlyPrompt: PromptInput = { ...prompt, images: undefined };
     try {
-      await routerInstance.stream(textOnlyPrompt, routerCallbacks, { signal });
+      // Same speed preferences as the first attempt: losing the image is not a
+      // reason to also start waiting on a slower model.
+      await routerInstance.stream(textOnlyPrompt, routerCallbacks, {
+        signal,
+        preferFastModel: opts?.preferFastModel,
+        reasoningEffort: opts?.reasoningEffort,
+      });
       return;
     } catch (retryError) {
       if (retryError instanceof Error && retryError.name === 'AbortError') {
@@ -611,3 +699,18 @@ export function activeAdapterSupportsImageInput(): boolean {
   const caps = routerInstance.getActiveAdapterCapabilities();
   return caps?.imageInput === true;
 }
+
+/**
+ * Whether *any* usable adapter can read images, regardless of priority order.
+ *
+ * This is the question to ask before deciding to send a screenshot as pixels,
+ * because `requireImageInput` lets the router skip past a text-only adapter that
+ * merely happens to be first. `activeAdapterSupportsImageInput` answers the
+ * narrower "would the default route accept an image", which is what made a setup
+ * with a text-only model first fall back to OCR even with Gemini configured.
+ */
+export function hasVisionProvider(): boolean {
+  return routerInstance.hasImageCapableAdapter();
+}
+
+export { NoVisionProviderError };

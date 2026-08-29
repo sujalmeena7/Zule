@@ -122,6 +122,7 @@ vi.mock('../../win32/ffi', () => ({
     return createFakeFfi();
   },
   isWin32: () => true,
+  normalizeHwnd: (h: unknown) => h,
 }));
 
 vi.mock('../../win32/wndProc', () => ({

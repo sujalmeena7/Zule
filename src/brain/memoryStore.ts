@@ -15,8 +15,6 @@
 //   { id, text (redacted), embedding, source: { meetingId, meetingIds, date }, createdAt }
 
 import type { RedactionRule } from '../types/redaction';
-import { apply as redact } from './redaction';
-import { cosineSimilarity } from './vectorMath';
 
 // --- Interfaces ---
 
@@ -76,7 +74,6 @@ export class MemoryStore {
   private readonly redactFn: (text: string, rules: RedactionRule[]) => string;
   private readonly dedupThreshold: number;
   private readonly persist: boolean;
-  private readonly defaultRedactionRules: RedactionRule[];
 
   constructor(opts: MemoryStoreOptions) {
     this.generateEmbedding = opts.generateEmbedding;
@@ -84,7 +81,6 @@ export class MemoryStore {
     this.redactFn = opts.redact;
     this.dedupThreshold = opts.dedupThreshold ?? DEFAULT_DEDUP_THRESHOLD;
     this.persist = opts.persist ?? true;
-    this.defaultRedactionRules = [];
   }
 
   /**
@@ -199,6 +195,13 @@ export class MemoryStore {
   ): Promise<SearchResult[]> {
     const maxResults = opts?.maxResults ?? DEFAULT_SEARCH_MAX_RESULTS;
     const minScore = opts?.minScore ?? DEFAULT_SEARCH_MIN_SCORE;
+
+    // Nothing to score against means nothing to embed for. `generateEmbedding`
+    // is a single-threaded WASM forward pass on the renderer main thread, so it
+    // blocks the event loop and cannot be raced against a timeout; skipping it
+    // outright on an empty store is the only way to not pay for it. Checked
+    // before the embedding rather than after, which is where the cost is.
+    if (this.facts.size === 0 || maxResults <= 0) return [];
 
     const queryEmbedding = await this.generateEmbedding(query);
 

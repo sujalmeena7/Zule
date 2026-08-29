@@ -3,84 +3,170 @@
 // ============================================================================
 //
 // Runs local Whisper speech-to-text in the ELECTRON MAIN PROCESS using
-// `@huggingface/transformers`'s `node` build, which is backed by the NATIVE
-// `onnxruntime-node` engine.
+// `@huggingface/transformers`'s `node` build, backed by native `onnxruntime-node`.
 //
-// Why this lives in the main process and not the renderer:
-//   The renderer's onnxruntime-WEB backend (WASM + WebGPU) natively crashes the
-//   Electron 42 renderer with exit code 0xC0000005 (ACCESS_VIOLATION) the
-//   instant it builds an inference session — confirmed across both backends and
-//   two onnxruntime versions. The native node engine does not touch V8's WASM
-//   runtime, so that class of crash is structurally impossible here. A proof of
-//   concept loaded the vendored model in ~760 ms and transcribed 2 s of audio
-//   in ~630 ms (~3× real-time).
-//
-// The renderer still does audio CAPTURE (getDisplayMedia / AudioContext are
-// browser-only), then ships 16 kHz mono Float32 PCM chunks here over IPC; this
-// module transcribes them and returns text.
+// Realtime dual-session architecture:
+//   - Xenova/whisper-base.en (q8, ~77 MB) for finals with Priority Queue (loopback > mic).
+//   - Xenova/whisper-tiny.en (q8, ~41 MB) for low-latency interim partials.
+//   - Stale partial superseding: drops pending older partials when a newer one arrives.
+//   - Ref-counted release: only destroys sessions when all pipelines are released.
+//   - Thread tuning: session_options clamp intraOpNumThreads to [2, 4] to prevent
+//     Electron main thread starvation.
+//   - Returns { text, queueMs, inferMs } for latency measurement and telemetry.
+// ============================================================================
 
-// `electron` is CommonJS with no named ESM exports; this main-process module is
-// bundled as ESM, so obtain `app` via createRequire (see electron/main.ts).
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const { app } = require('electron') as typeof import('electron');
 
-// ESM has no __dirname; reconstruct it from import.meta.url (resolves to
-// dist-electron/ at runtime for the bundled chunk).
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Loaded lazily via dynamic import so the (externalized) native ML stack is
-// only resolved when the user actually enables system-audio transcription.
-// `pipeline`/`env` come from the package's `node` export condition →
-// transformers.node + onnxruntime-node.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type WhisperPipeline = (audio: Float32Array, opts?: Record<string, unknown>) => Promise<{ text?: string }>;
 
-// base.en is noticeably more accurate than tiny.en (better punctuation/question
-// detection), which directly improves autonomous question-triggering. Still fast
-// on a multi-core machine via the native node engine.
-const DEFAULT_MODEL_ID = 'Xenova/whisper-base.en';
+export const BASE_MODEL_ID = 'Xenova/whisper-base.en';
+export const TINY_MODEL_ID = 'Xenova/whisper-tiny.en';
 
-let transcriber: WhisperPipeline | null = null;
-let loadPromise: Promise<WhisperPipeline> | null = null;
-// Serialize inference: one session, one call at a time. Overlapping 2 s chunks
-// would otherwise re-enter the native session concurrently.
-let inferenceChain: Promise<unknown> = Promise.resolve();
+export interface TranscribeResult {
+  text: string;
+  queueMs: number;
+  inferMs: number;
+}
+
+export interface TranscribeOptions {
+  language?: string;
+  modelId?: string;
+  kind?: 'final' | 'partial';
+  seq?: number;
+  pipeline?: 'loopback' | 'microphone';
+}
+
+interface AsrSession {
+  modelId: string;
+  transcriber: WhisperPipeline | null;
+  loadPromise: Promise<WhisperPipeline> | null;
+  chain: Promise<unknown>;
+}
+
+interface BaseQueueItem {
+  id: number;
+  pipeline: 'loopback' | 'microphone';
+  pcm: Float32Array;
+  opts: TranscribeOptions;
+  enqueuedAt: number;
+  resolve: (res: TranscribeResult) => void;
+  reject: (err: unknown) => void;
+}
+
+interface TinyQueueItem {
+  id: number;
+  pipeline: 'loopback' | 'microphone';
+  seq: number;
+  pcm: Float32Array;
+  opts: TranscribeOptions;
+  enqueuedAt: number;
+  resolve: (res: TranscribeResult) => void;
+  reject: (err: unknown) => void;
+}
+
+// ── State ───────────────────────────────────────────────────────────────────
+
+let baseSession: AsrSession | null = null;
+let tinySession: AsrSession | null = null;
+const customSessions = new Map<string, AsrSession>();
+
+const activePipelines = new Set<string>();
+
+const basePendingQueue: BaseQueueItem[] = [];
+let isBaseProcessing = false;
+
+const tinyPendingQueue: TinyQueueItem[] = [];
+let isTinyProcessing = false;
+
+const latestEnqueuedPartialSeq = new Map<string, number>();
+const latestProcessedPartialSeq = new Map<string, number>();
+
+let nextJobId = 1;
 
 /**
- * Absolute path to the directory that contains the vendored models, i.e. the
- * folder holding `Xenova/whisper-tiny.en/...`. Transformers' node build reads
- * model files from disk under `env.localModelPath`.
- *
- * - Dev: the source tree's `public/vendor/models`.
- * - Packaged: `<app>/dist/vendor/models` (Vite copies `public/` → `dist/`,
- *   which is packaged). Model files are read with `fs.readFile`, which Electron
- *   transparently serves from inside the asar.
+ * Absolute path to vendored models directory.
  */
 function resolveModelsDir(): string {
-  // `__dirname` resolves to `dist-electron/` at runtime for the bundled main.
-  // Guard `app` access: outside a real Electron main process (e.g. tests/Node)
-  // `app` may be undefined — default to the packaged layout.
   const packaged = app?.isPackaged ?? true;
-  const base = packaged
+  let base = packaged
     ? path.join(__dirname, '..', 'dist', 'vendor', 'models')
     : path.join(__dirname, '..', 'public', 'vendor', 'models');
-  // Transformers appends `<modelId>/<file>`; a trailing separator keeps the
-  // join correct on all platforms.
+
+  if (packaged && base.includes('app.asar') && !base.includes('app.asar.unpacked')) {
+    const unpacked = base.replace('app.asar', 'app.asar.unpacked');
+    if (fs.existsSync(unpacked)) {
+      base = unpacked;
+    }
+  }
+
   return base + path.sep;
 }
 
-/** Load (once) and return the ASR pipeline. Concurrent callers share one load. */
-async function ensurePipeline(modelId: string): Promise<WhisperPipeline> {
-  if (transcriber) return transcriber;
-  if (loadPromise) return loadPromise;
+/**
+ * Thread options to prevent oversubscribing the CPU.
+ */
+function getSessionOptions() {
+  const cores = os.cpus()?.length || 4;
+  const intraOp = Math.max(2, Math.min(4, Math.floor(cores / 2)));
+  return {
+    intraOpNumThreads: intraOp,
+    interOpNumThreads: 1,
+  };
+}
 
-  loadPromise = (async () => {
+function getOrCreateSession(modelId: string): AsrSession {
+  if (modelId === BASE_MODEL_ID) {
+    if (!baseSession) {
+      baseSession = {
+        modelId: BASE_MODEL_ID,
+        transcriber: null,
+        loadPromise: null,
+        chain: Promise.resolve(),
+      };
+    }
+    return baseSession;
+  }
+  if (modelId === TINY_MODEL_ID) {
+    if (!tinySession) {
+      tinySession = {
+        modelId: TINY_MODEL_ID,
+        transcriber: null,
+        loadPromise: null,
+        chain: Promise.resolve(),
+      };
+    }
+    return tinySession;
+  }
+
+  let session = customSessions.get(modelId);
+  if (!session) {
+    session = {
+      modelId,
+      transcriber: null,
+      loadPromise: null,
+      chain: Promise.resolve(),
+    };
+    customSessions.set(modelId, session);
+  }
+  return session;
+}
+
+async function ensurePipeline(session: AsrSession): Promise<WhisperPipeline> {
+  if (session.transcriber) return session.transcriber;
+  if (session.loadPromise) return session.loadPromise;
+
+  session.loadPromise = (async () => {
     const t0 = Date.now();
-    // Dynamic, externalized import → resolves transformers.node + onnxruntime-node.
     const { pipeline, env } = (await import('@huggingface/transformers')) as unknown as {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       pipeline: (task: string, model: string, opts?: any) => Promise<any>;
@@ -88,63 +174,231 @@ async function ensurePipeline(modelId: string): Promise<WhisperPipeline> {
       env: any;
     };
 
-    // Read the vendored model from disk; never reach the network (it's bundled).
     env.allowLocalModels = true;
     env.allowRemoteModels = false;
     env.localModelPath = resolveModelsDir();
 
-    console.info(`[whisperService] loading ${modelId} from ${env.localModelPath}`);
-    const asr = (await pipeline('automatic-speech-recognition', modelId, {
+    console.info(`[whisperService] loading ${session.modelId} from ${env.localModelPath}`);
+    const asr = (await pipeline('automatic-speech-recognition', session.modelId, {
       dtype: 'q8',
+      session_options: getSessionOptions(),
     })) as unknown as WhisperPipeline;
-    console.info(`[whisperService] model ready in ${Date.now() - t0}ms`);
+    console.info(`[whisperService] ${session.modelId} ready in ${Date.now() - t0}ms`);
 
-    transcriber = asr;
+    session.transcriber = asr;
     return asr;
   })();
 
   try {
-    return await loadPromise;
+    return await session.loadPromise;
   } catch (err) {
-    // Reset so a later attempt can retry rather than being stuck on a rejected
-    // promise.
-    loadPromise = null;
+    session.loadPromise = null;
     throw err;
   }
 }
 
-/** Pre-warm the model (called when the user toggles system audio on). */
-export async function preloadWhisper(modelId: string = DEFAULT_MODEL_ID): Promise<void> {
-  await ensurePipeline(modelId);
+// ── Queue Processing: Finals (Priority Queue: loopback > mic) ───────────────
+
+async function processNextBaseItem(): Promise<void> {
+  if (basePendingQueue.length === 0) {
+    isBaseProcessing = false;
+    return;
+  }
+
+  isBaseProcessing = true;
+
+  // Priority ordering: loopback (index of first loopback item) > mic (earliest)
+  let bestIndex = 0;
+  let highestPriority = basePendingQueue[0].pipeline === 'loopback' ? 2 : 1;
+
+  for (let i = 1; i < basePendingQueue.length; i++) {
+    const item = basePendingQueue[i];
+    const priority = item.pipeline === 'loopback' ? 2 : 1;
+    if (priority > highestPriority) {
+      highestPriority = priority;
+      bestIndex = i;
+    }
+  }
+
+  const [item] = basePendingQueue.splice(bestIndex, 1);
+  const session = getOrCreateSession(item.opts.modelId ?? BASE_MODEL_ID);
+
+  try {
+    const startedAt = Date.now();
+    const queueMs = startedAt - item.enqueuedAt;
+
+    const asr = await ensurePipeline(session);
+    const result = await asr(item.pcm);
+    const inferMs = Date.now() - startedAt;
+    const text = (result?.text ?? '').trim();
+
+    item.resolve({ text, queueMs, inferMs });
+  } catch (err) {
+    item.reject(err);
+  } finally {
+    setImmediate(processNextBaseItem);
+  }
+}
+
+// ── Queue Processing: Partials (Stale Superseding) ──────────────────────────
+
+async function processNextTinyItem(): Promise<void> {
+  if (tinyPendingQueue.length === 0) {
+    isTinyProcessing = false;
+    return;
+  }
+
+  isTinyProcessing = true;
+  const item = tinyPendingQueue.shift()!;
+  const session = getOrCreateSession(item.opts.modelId ?? TINY_MODEL_ID);
+
+  try {
+    const currentLatestProcessed = latestProcessedPartialSeq.get(item.pipeline) ?? 0;
+    // If a newer partial already completed, this one is stale
+    if (item.seq < currentLatestProcessed) {
+      item.resolve({ text: '', queueMs: 0, inferMs: 0 });
+      setImmediate(processNextTinyItem);
+      return;
+    }
+
+    const startedAt = Date.now();
+    const queueMs = startedAt - item.enqueuedAt;
+
+    const asr = await ensurePipeline(session);
+    const result = await asr(item.pcm);
+    const inferMs = Date.now() - startedAt;
+
+    // Check again after inference in case a newer partial was processed
+    const latestAfterInfer = latestProcessedPartialSeq.get(item.pipeline) ?? 0;
+    if (item.seq < latestAfterInfer) {
+      item.resolve({ text: '', queueMs, inferMs });
+    } else {
+      latestProcessedPartialSeq.set(item.pipeline, item.seq);
+      const text = (result?.text ?? '').trim();
+      item.resolve({ text, queueMs, inferMs });
+    }
+  } catch (err) {
+    item.reject(err);
+  } finally {
+    setImmediate(processNextTinyItem);
+  }
+}
+
+// ── Public API ──────────────────────────────────────────────────────────────
+
+/**
+ * Pre-warm the ASR model(s).
+ */
+export async function preloadWhisper(
+  opts: { pipeline?: 'loopback' | 'microphone' | string; modelId?: string } = {},
+): Promise<void> {
+  if (opts.pipeline) {
+    activePipelines.add(opts.pipeline);
+  }
+
+  if (opts.modelId) {
+    await ensurePipeline(getOrCreateSession(opts.modelId));
+  } else {
+    // Pre-warm base.en (finals) and tiny.en (partials)
+    await Promise.all([
+      ensurePipeline(getOrCreateSession(BASE_MODEL_ID)),
+      ensurePipeline(getOrCreateSession(TINY_MODEL_ID)),
+    ]);
+  }
 }
 
 /**
- * Transcribe one chunk of 16 kHz mono Float32 PCM. Calls are serialized so the
- * native session is never re-entered concurrently. Returns the trimmed text
- * ('' for silence).
+ * Transcribe one chunk of 16 kHz mono Float32 PCM.
+ * Finals go to the base.en priority queue (loopback > mic).
+ * Partials go to the tiny.en queue with stale superseding.
  */
-export async function transcribePcm(
+export function transcribePcm(
   pcm: Float32Array,
-  opts: { language?: string; modelId?: string } = {},
-): Promise<string> {
-  const asr = await ensurePipeline(opts.modelId ?? DEFAULT_MODEL_ID);
+  opts: TranscribeOptions = {},
+): Promise<TranscribeResult> {
+  const pipeline = opts.pipeline ?? 'microphone';
+  const kind = opts.kind ?? 'final';
+  const seq = opts.seq ?? 0;
 
-  const run = inferenceChain.then(async () => {
-    // NOTE: do NOT pass `language`/`task` for the English-only `*.en` model —
-    // transformers throws "Cannot specify task or language for an English-only
-    // model". (A multilingual model would accept them.)
-    const result = await asr(pcm);
-    return (result?.text ?? '').trim();
+  activePipelines.add(pipeline);
+
+  if (kind === 'partial') {
+    // Supersede pending older partials for the same pipeline
+    const enqueuedSeq = latestEnqueuedPartialSeq.get(pipeline) ?? 0;
+    if (seq > enqueuedSeq) {
+      latestEnqueuedPartialSeq.set(pipeline, seq);
+    }
+
+    // Drop any pending older partials for this pipeline
+    for (let i = tinyPendingQueue.length - 1; i >= 0; i--) {
+      if (tinyPendingQueue[i].pipeline === pipeline && tinyPendingQueue[i].seq < seq) {
+        const [dropped] = tinyPendingQueue.splice(i, 1);
+        dropped.resolve({ text: '', queueMs: 0, inferMs: 0 });
+      }
+    }
+
+    return new Promise<TranscribeResult>((resolve, reject) => {
+      tinyPendingQueue.push({
+        id: nextJobId++,
+        pipeline,
+        seq,
+        pcm,
+        opts,
+        enqueuedAt: Date.now(),
+        resolve,
+        reject,
+      });
+
+      if (!isTinyProcessing) {
+        processNextTinyItem();
+      }
+    });
+  }
+
+  // Final chunk: enqueue to base.en priority queue
+  return new Promise<TranscribeResult>((resolve, reject) => {
+    basePendingQueue.push({
+      id: nextJobId++,
+      pipeline,
+      pcm,
+      opts,
+      enqueuedAt: Date.now(),
+      resolve,
+      reject,
+    });
+
+    if (!isBaseProcessing) {
+      processNextBaseItem();
+    }
   });
-
-  // Keep the chain alive even if this run throws, so the next call still runs.
-  inferenceChain = run.catch(() => undefined);
-  return run;
 }
 
-/** Release the model/session (called when the user toggles system audio off). */
-export function releaseWhisper(): void {
-  transcriber = null;
-  loadPromise = null;
-  inferenceChain = Promise.resolve();
+/**
+ * Release Whisper sessions with reference counting.
+ */
+export function releaseWhisper(opts: { pipeline?: 'loopback' | 'microphone' | string } = {}): void {
+  if (opts.pipeline) {
+    activePipelines.delete(opts.pipeline);
+  }
+
+  // Only tear down sessions when all registered pipelines have been released
+  if (!opts.pipeline || activePipelines.size === 0) {
+    activePipelines.clear();
+
+    for (const item of basePendingQueue) {
+      item.resolve({ text: '', queueMs: 0, inferMs: 0 });
+    }
+    basePendingQueue.length = 0;
+
+    for (const item of tinyPendingQueue) {
+      item.resolve({ text: '', queueMs: 0, inferMs: 0 });
+    }
+    tinyPendingQueue.length = 0;
+
+    baseSession = null;
+    tinySession = null;
+    customSessions.clear();
+    latestEnqueuedPartialSeq.clear();
+    latestProcessedPartialSeq.clear();
+  }
 }

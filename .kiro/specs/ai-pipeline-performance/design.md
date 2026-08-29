@@ -658,6 +658,89 @@ the configured speech threshold, the pipeline SHALL emit exactly `s`
 
 **Validates: Requirements 10.3**
 
+### Property 22: Utterance windowing detects a question split across chunk boundaries
+
+*For any* question text partitioned into consecutive `other`-role lines
+whose adjacent timestamps differ by less than `maxGapMs`, feeding those
+lines to `onNewContext` SHALL produce the same detection as feeding the
+unpartitioned text as a single line.
+
+This is the regression property for the pre-existing defect where
+`onNewContext` inspected only `lines[lines.length - 1]`, so a question
+spanning two 2 s chunks matched no pattern and produced no answer at all.
+
+**Validates: Requirements 8.1, 8.2**
+
+### Property 23: Utterance windowing never crosses a speaker-role boundary
+
+*For any* sequence of lines containing at least one role transition, the
+window returned by `buildUtteranceWindow` SHALL contain text from lines
+of exactly one role — the role of the final line. The user's own speech
+can therefore never be concatenated into a question attributed to the
+remote party.
+
+**Validates: Requirements 3.3, 8.4**
+
+### Property 24: Barge-in comparison is symmetric and reflexive
+
+*For any* pair of strings `a`, `b`: `countWordDifferences(a, b) ===
+countWordDifferences(b, a)`, and `countWordDifferences(a, a) === 0`. Any
+re-transcription of an utterance that differs only in casing,
+punctuation, word order, or tokens of two characters or fewer SHALL yield
+`0`, so a correct in-flight answer is never aborted by ASR jitter.
+
+**Validates: Requirements 8.5**
+
+### Property 25: Every partial is a near-superset candidate of its own utterance
+
+*For any* utterance and *any* prefix of it, `isNearSuperset(utterance,
+prefix)` SHALL be `true`. Combined with the cross-source suppression
+window this means a prefetch fired on a partial is always recognised when
+the final arrives, so the hybrid path dispatches exactly once per
+question.
+
+**Validates: Requirements 8.6**
+
+### Property 26: A silence-only capture window posts zero chunks
+
+*For any* capture window in which no frame scores above the worklet
+speech floor, the worklet SHALL post zero `chunk` and zero `partial`
+messages, regardless of window duration.
+
+This strengthens Property 14 from "at least 40 percent fewer" to "none":
+the hard-cap flush branch no longer fires on buffers that never contained
+speech, so an idle meeting generates no ASR traffic at all rather than one
+all-silence chunk every `maxBufferMs`.
+
+**Validates: Requirements 6.1, 6.3, 10.3**
+
+### Property 27: Partials never mutate committed transcript state
+
+*For any* interleaving of `partial` and `chunk` messages, the committed
+line sequence SHALL be identical to the sequence produced by the `chunk`
+messages alone. A partial SHALL emit only `interim`, SHALL never emit
+`line`, and SHALL never advance the line counter.
+
+**Validates: Requirements 8.2, 6.3**
+
+### Property 28: Priority queue never starves the loopback pipeline
+
+*For any* queue state containing at least one pending `loopback` final,
+the next final dequeued SHALL be a `loopback` final. Reported `queueMs`
+for a loopback final SHALL therefore never exceed the duration of a
+single in-flight inference.
+
+**Validates: Requirements 8.1**
+
+### Property 29: Reference-counted release preserves a session still in use
+
+*For any* sequence of `preload`/`release` calls, a model session SHALL
+remain loaded while at least one pipeline holds a reference, and SHALL be
+released once the last reference is dropped. Disabling one capture source
+can therefore never evict the model the other source is still using.
+
+**Validates: Requirements 6.3**
+
 ## Error Handling
 
 This feature introduces three new error surfaces. Each one is mapped to

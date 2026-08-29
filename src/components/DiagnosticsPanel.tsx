@@ -25,6 +25,20 @@ const EVENT_KIND_LABELS: Record<MetricEvent['kind'], string> = {
   'tokens': 'Token Usage',
   'error': 'Error',
   'latency.degraded': 'Latency Degraded',
+  'embed.batch': 'Embedding Batch',
+  'vectorIndex.query': 'Vector Index Query',
+  'vad.skipped': 'VAD Skipped',
+  'update.checked': 'Update Checked',
+  'update.available': 'Update Available',
+  'update.downloaded': 'Update Downloaded',
+  'update.installed': 'Update Installed',
+  'update.error': 'Update Error',
+  'screen.dispatch': 'Screen Dispatch',
+  'screen.ocrComplete': 'Screen OCR Complete',
+  'screen.ocrSkipped': 'Screen OCR Skipped',
+  'screen.keyframeReencode': 'Screen Keyframe Re-encode',
+  'asr.chunk': 'ASR Chunk',
+  'realtime.dispatch': 'Realtime Dispatch',
 };
 
 /** Badge colors per event kind for visual grouping. */
@@ -41,6 +55,20 @@ const EVENT_KIND_COLORS: Record<MetricEvent['kind'], string> = {
   'tokens': '#67e8f9',
   'error': '#ef4444',
   'latency.degraded': '#fbbf24',
+  'embed.batch': '#38bdf8',
+  'vectorIndex.query': '#818cf8',
+  'vad.skipped': '#94a3b8',
+  'update.checked': '#a1a1aa',
+  'update.available': '#4ade80',
+  'update.downloaded': '#22c55e',
+  'update.installed': '#16a34a',
+  'update.error': '#f43f5e',
+  'screen.dispatch': '#c084fc',
+  'screen.ocrComplete': '#e879f9',
+  'screen.ocrSkipped': '#cbd5e1',
+  'screen.keyframeReencode': '#f472b6',
+  'asr.chunk': '#2dd4bf',
+  'realtime.dispatch': '#10b981',
 };
 
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;

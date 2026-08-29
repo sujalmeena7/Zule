@@ -1,42 +1,45 @@
 // ============================================
-// Zule AI — Premium Dashboard
+// Zule AI — Modern Minimal Dashboard
+// Clean, Classy & Cluely-Inspired
 // ============================================
 
 import {
   Play, Clock, Sparkles, Mic, Code, Briefcase, Target,
-  ShoppingCart, Trash2, BarChart3, FileText, ChevronRight, Wand2
+  ShoppingCart, BarChart3, FileText, ChevronRight, Wand2, Zap,
+  Lock, Trash2
 } from 'lucide-react';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { MODE_CONFIGS, type CopilotMode } from '../brain/modePrompts';
 import { formatDuration, formatRelativeTime } from '../utils/formatters';
-import { useAutoUpdate } from '../hooks/useAutoUpdate';
-import { UpdateBanner } from './UpdateBanner';
-import { useState } from 'react';
 import { useSubscription } from '../context/SubscriptionContext';
 import { UpgradeModal } from './UpgradeModal';
-import { Lock } from 'lucide-react';
 import type { GatedFeature } from '../types/subscription';
+import { useZule } from '../context/ZuleContext';
 
 import './Dashboard.css';
 
-import { useZule } from '../context/ZuleContext';
-
-const TEMPLATE_CARDS: { mode: CopilotMode; icon: React.ReactNode; gradient: string }[] = [
-  { mode: 'assist', icon: <Sparkles size={22} />, gradient: 'linear-gradient(135deg, #3b82f6, #8b5cf6)' },
-  { mode: 'coding-interview', icon: <Code size={22} />, gradient: 'linear-gradient(135deg, #22c55e, #14b8a6)' },
-  { mode: 'behavioral-interview', icon: <Target size={22} />, gradient: 'linear-gradient(135deg, #f59e0b, #ef4444)' },
-  { mode: 'sales-call', icon: <ShoppingCart size={22} />, gradient: 'linear-gradient(135deg, #ec4899, #f43f5e)' },
-  { mode: 'what-should-i-say', icon: <Mic size={22} />, gradient: 'linear-gradient(135deg, #6366f1, #8b5cf6)' },
+const TEMPLATE_CARDS: { mode: CopilotMode; icon: React.ReactNode; colorClass: string }[] = [
+  { mode: 'assist',               icon: <Sparkles size={15} />,     colorClass: 'blue' },
+  { mode: 'coding-interview',     icon: <Code size={15} />,         colorClass: 'green' },
+  { mode: 'behavioral-interview', icon: <Target size={15} />,       colorClass: 'amber' },
+  { mode: 'sales-call',           icon: <ShoppingCart size={15} />, colorClass: 'rose' },
+  { mode: 'what-should-i-say',   icon: <Mic size={15} />,          colorClass: 'purple' },
 ];
+
+function getGreeting() {
+  const h = new Date().getHours();
+  if (h < 12) return 'Good morning';
+  if (h < 17) return 'Good afternoon';
+  return 'Good evening';
+}
 
 export function Dashboard() {
   const { state, actions } = useZule();
   const { meetings, customModes } = state;
   const { startCopilot, viewMeeting, deleteMeeting } = actions;
 
-  const { state: updateState, dismissed, download, cancel, install, defer, dismiss } = useAutoUpdate();
-
   const { isFeatureAvailable, isLimitReached, incrementUsage, limits } = useSubscription();
+
   const [upgradeModal, setUpgradeModal] = useState<{
     reason: 'meeting-limit' | 'feature-locked';
     feature?: GatedFeature;
@@ -91,17 +94,6 @@ export function Dashboard() {
 
   return (
     <div className="dashboard">
-      {/* Update Banner — renders in normal flow, pushes content down (Req 4.10) */}
-      <UpdateBanner
-        state={updateState}
-        dismissed={dismissed}
-        onDownload={download}
-        onCancel={cancel}
-        onInstall={install}
-        onDefer={defer}
-        onDismiss={dismiss}
-      />
-
       {upgradeModal && (
         <UpgradeModal
           reason={upgradeModal.reason}
@@ -110,117 +102,146 @@ export function Dashboard() {
         />
       )}
 
-      {/* Hero Section */}
-      <section className="dash-hero">
-        <div className="hero-content">
-          <h1 className="hero-title">
-            Your AI Meeting <span className="gradient-text">Copilot</span>
+
+      {/* ── Top Header ── */}
+      <div className="dash-top-bar">
+        <div className="dash-greeting-wrap">
+          <h1 className="dash-greeting-text">
+            {getGreeting()}
           </h1>
-          <p className="hero-subtitle">
-            Real-time suggestions, live transcription, and smart coaching — all completely invisible to your audience.
-          </p>
-          <button className="primary-btn" onClick={() => handleStartSession()}>
-            <Play size={18} fill="currentColor" />
-            Start Session
-          </button>
         </div>
-        <div className="hero-visual">
-          <div className="hero-orb orb-1" />
-          <div className="hero-orb orb-2" />
-          <div className="hero-orb orb-3" />
+
+        <div className="dash-status-pill">
+          <span className="status-indicator-dot" />
+          <span>Stealth Active</span>
+        </div>
+      </div>
+
+      {/* ── Modern Minimal Hero Card ── */}
+      <section className="dash-hero">
+        <div className="hero-glow-layer" />
+        <div className="hero-content">
+          <h2 className="hero-title">
+            Your AI Meeting Copilot
+          </h2>
+          <p className="hero-subtitle">
+            Real-time suggestions, live transcription, and smart coaching — completely invisible to your audience.
+          </p>
+
+          <div className="hero-actions">
+            <button
+              className="hero-primary-btn"
+              onClick={() => handleStartSession()}
+            >
+              <Play size={15} fill="currentColor" />
+              <span>Start Session</span>
+            </button>
+
+            <button
+              className="hero-secondary-btn"
+              onClick={() => handleStartSession('assist')}
+            >
+              <Zap size={14} />
+              <span>Quick Assist</span>
+            </button>
+          </div>
         </div>
       </section>
 
-      {/* Bento Grid Layout */}
-      <div className="bento-grid">
-
-        {/* Stats Row */}
-        <div className="bento-card bento-stats">
-          <div className="stat-item">
-            <div className="stat-icon-wrapper" style={{ color: '#3b82f6' }}>
-              <Briefcase size={22} />
-            </div>
-            <div className="stat-content">
-              <span className="stat-value">{stats.totalMeetings}</span>
-              <span className="stat-label">Total Sessions</span>
-            </div>
+      {/* ── Stats Row ── */}
+      <div className="dash-stats-row">
+        <div className="stat-box">
+          <div className="stat-icon blue">
+            <Briefcase size={16} />
           </div>
-          <div className="stat-item">
-            <div className="stat-icon-wrapper" style={{ color: '#8b5cf6' }}>
-              <Clock size={22} />
-            </div>
-            <div className="stat-content">
-              <span className="stat-value">{formatDuration(stats.totalTime)}</span>
-              <span className="stat-label">Time Tracked</span>
-            </div>
-          </div>
-          <div className="stat-item">
-            <div className="stat-icon-wrapper" style={{ color: '#22c55e' }}>
-              <Sparkles size={22} />
-            </div>
-            <div className="stat-content">
-              <span className="stat-value">{stats.totalSuggestions}</span>
-              <span className="stat-label">AI Suggestions</span>
-            </div>
-          </div>
-          <div className="stat-item">
-            <div className="stat-icon-wrapper" style={{ color: '#eab308' }}>
-              <BarChart3 size={22} />
-            </div>
-            <div className="stat-content">
-              <span className="stat-value">{stats.avgConfidence}</span>
-              <span className="stat-label">Avg Confidence</span>
-            </div>
+          <div className="stat-meta">
+            <span className="stat-val">{stats.totalMeetings}</span>
+            <span className="stat-lbl">Total Sessions</span>
           </div>
         </div>
 
+        <div className="stat-box">
+          <div className="stat-icon purple">
+            <Clock size={16} />
+          </div>
+          <div className="stat-meta">
+            <span className="stat-val">{formatDuration(stats.totalTime)}</span>
+            <span className="stat-lbl">Time Guided</span>
+          </div>
+        </div>
+
+        <div className="stat-box">
+          <div className="stat-icon green">
+            <Sparkles size={16} />
+          </div>
+          <div className="stat-meta">
+            <span className="stat-val">{stats.totalSuggestions}</span>
+            <span className="stat-lbl">AI Suggestions</span>
+          </div>
+        </div>
+
+        <div className="stat-box">
+          <div className="stat-icon amber">
+            <BarChart3 size={16} />
+          </div>
+          <div className="stat-meta">
+            <span className="stat-val">{stats.avgConfidence}%</span>
+            <span className="stat-lbl">Avg Confidence</span>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Main 2-Column Grid ── */}
+      <div className="dash-main-layout">
+
         {/* Recent Sessions */}
-        <div className="bento-card bento-recent">
-          <div className="bento-header">
-            <h2 className="bento-title">
-              <FileText size={18} />
-              Recent Sessions
-            </h2>
+        <div className="dash-card sessions-card">
+          <div className="dash-card-header">
+            <div className="dash-card-title">
+              <FileText size={15} />
+              <h3>Recent Sessions</h3>
+            </div>
+            <span className="dash-badge">{recentMeetings.length}</span>
           </div>
 
-          {meetings.length === 0 ? (
-            <div className="empty-state">
-              <Sparkles size={48} />
-              <h3>No sessions yet</h3>
-              <p>Start a new session to see your transcripts and AI insights here.</p>
+          {recentMeetings.length === 0 ? (
+            <div className="dash-empty">
+              <Sparkles size={22} className="empty-icon" />
+              <h4>No sessions yet</h4>
+              <p>Start a session to see your transcripts and AI insights here.</p>
             </div>
           ) : (
-            <div className="meeting-list">
+            <div className="sessions-list">
               {recentMeetings.map(meeting => (
-                <div key={meeting.id} className="meeting-card" onClick={() => viewMeeting(meeting)}>
-                  <div className="meeting-info">
-                    <span className="meeting-title">{meeting.title}</span>
-                    <div className="meeting-meta">
-                      <span><Clock size={12} /> {formatRelativeTime(meeting.startedAt)}</span>
+                <div
+                  key={meeting.id}
+                  className="session-row"
+                  onClick={() => viewMeeting(meeting)}
+                >
+                  <div className="session-row-left">
+                    <span className="session-row-title">{meeting.title}</span>
+                    <div className="session-row-meta">
+                      <span><Clock size={11} /> {formatRelativeTime(meeting.startedAt)}</span>
                       <span>•</span>
                       <span>{formatDuration(meeting.duration)}</span>
                       <span>•</span>
-                      <span style={{ color: 'var(--accent-blue)' }}>
-                        <Sparkles size={12} /> {meeting.aiSuggestionCount}
-                      </span>
+                      <span className="meta-suggestion-tag"><Sparkles size={11} /> {meeting.aiSuggestionCount}</span>
                     </div>
                   </div>
-                  <div className="meeting-actions">
-                    <button
-                      className="btn-icon"
-                      title="View Details"
-                    >
-                      <ChevronRight size={16} />
+
+                  <div className="session-row-actions">
+                    <button className="row-action-btn" title="View details">
+                      <ChevronRight size={14} />
                     </button>
                     <button
-                      className="btn-icon danger"
+                      className="row-action-btn delete"
+                      title="Delete session"
                       onClick={(e) => {
                         e.stopPropagation();
                         deleteMeeting(meeting.id);
                       }}
-                      title="Delete Session"
                     >
-                      <Trash2 size={16} />
+                      <Trash2 size={13} />
                     </button>
                   </div>
                 </div>
@@ -229,40 +250,40 @@ export function Dashboard() {
           )}
         </div>
 
-        {/* Quick Start Templates */}
-        <div className="bento-card bento-templates">
-          <div className="bento-header">
-            <h2 className="bento-title">
-              <Target size={18} />
-              Quick Start
-            </h2>
+        {/* Quick Start Modes */}
+        <div className="dash-card quickstart-card">
+          <div className="dash-card-header">
+            <div className="dash-card-title">
+              <Target size={15} />
+              <h3>Quick Start</h3>
+            </div>
           </div>
-          <div className="template-list">
+
+          <div className="quickstart-list">
             {customModes.map((mode) => {
               const isLocked = !isFeatureAvailable('copilot.custom-modes');
               return (
                 <div
                   key={mode.id}
-                  className={`template-card ${isLocked ? 'locked' : ''}`}
+                  className={`quickstart-item ${isLocked ? 'locked' : ''}`}
                   onClick={() => handleStartSession(mode.id)}
-                  style={{ opacity: isLocked ? 0.6 : 1 }}
                 >
-                  <div className="template-icon" style={{ background: 'linear-gradient(135deg, #a855f7, #ec4899)' }}>
-                    <Wand2 size={22} color="white" />
+                  <div className="quickstart-icon custom">
+                    <Wand2 size={15} />
                   </div>
-                  <div className="template-info">
-                    <span className="template-name">
+                  <div className="quickstart-info">
+                    <span className="quickstart-name">
                       {mode.label}
-                      {isLocked && <Lock size={12} style={{ marginLeft: 6 }} />}
+                      {isLocked && <Lock size={11} />}
                     </span>
-                    <span className="template-desc">{mode.description}</span>
+                    <span className="quickstart-desc">{mode.description}</span>
                   </div>
-                  <ChevronRight size={16} color="var(--text-tertiary)" />
+                  <ChevronRight size={14} className="quickstart-arrow" />
                 </div>
               );
             })}
 
-            {TEMPLATE_CARDS.map(({ mode, icon, gradient }) => {
+            {TEMPLATE_CARDS.map(({ mode, icon, colorClass }) => {
               const config = MODE_CONFIGS[mode];
               const feature = `copilot.mode.${mode}` as GatedFeature;
               const isLocked = !isFeatureAvailable(feature);
@@ -270,21 +291,20 @@ export function Dashboard() {
               return (
                 <div
                   key={mode}
-                  className={`template-card ${isLocked ? 'locked' : ''}`}
+                  className={`quickstart-item ${isLocked ? 'locked' : ''}`}
                   onClick={() => handleStartSession(mode)}
-                  style={{ opacity: isLocked ? 0.6 : 1 }}
                 >
-                  <div className="template-icon" style={{ background: gradient }}>
+                  <div className={`quickstart-icon ${colorClass}`}>
                     {icon}
                   </div>
-                  <div className="template-info">
-                    <span className="template-name">
+                  <div className="quickstart-info">
+                    <span className="quickstart-name">
                       {config.label}
-                      {isLocked && <Lock size={12} style={{ marginLeft: 6 }} />}
+                      {isLocked && <Lock size={11} />}
                     </span>
-                    <span className="template-desc">{config.description}</span>
+                    <span className="quickstart-desc">{config.description}</span>
                   </div>
-                  <ChevronRight size={16} color="var(--text-tertiary)" />
+                  <ChevronRight size={14} className="quickstart-arrow" />
                 </div>
               );
             })}
@@ -295,3 +315,4 @@ export function Dashboard() {
     </div>
   );
 }
+

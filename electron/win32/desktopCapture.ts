@@ -2,21 +2,49 @@
 // Zule AI — Desktop DC Screen Capture (Bypass Display Affinity)
 // ============================================
 //
-// Uses BitBlt from GetDC(NULL) to capture the entire screen including windows
-// that have SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) applied.
+// Uses BitBlt from GetDC(NULL) to capture the entire screen.
 //
-// Why this works: SetWindowDisplayAffinity tells the DWM to exclude the window
-// from PrintWindow, getDisplayMedia, and similar capture APIs. But GetDC(NULL)
-// returns the raw desktop device context — the final composited framebuffer
-// that the GPU sends to the monitor. Display affinity does NOT affect this path.
+// This was written to capture windows with
+// SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) applied, on the reasoning that
+// GetDC(NULL) returns the final composited framebuffer and display affinity is a
+// DWM-level exclusion that only affects PrintWindow, getDisplayMedia and friends.
 //
-// This is the same technique used by hardware-accelerated game capture overlays
-// and screen recording software that bypasses DRM protection.
+// That is no longer true, if it ever was. Measured on Windows 11 build 26200, a
+// protected window is absent from what this path reads: the capture of its exact
+// rect shows the window behind it. `foregroundWindowIsCaptureProtected()` below
+// exists to detect that case so the caller can route to UI Automation, which does
+// still work. `scripts/bitblt-probe.mjs` reproduces the measurement.
+//
+// This remains the right capture for everything else — it is a native call
+// costing tens of milliseconds, against seconds for the text chain.
 //
 // Returns a base64-encoded JPEG of the current screen content.
 
 import { createRequire } from 'node:module';
 import type { BrowserWindow as BrowserWindowType } from 'electron';
+
+import { downscaleSize } from '../../src/utils/geometry';
+
+/**
+ * Longest-edge cap applied before JPEG encoding.
+ *
+ * A native-resolution frame is not free to send: on a 1440p display the base64
+ * JPEG is several hundred kilobytes that must cross the IPC boundary, then the
+ * network, and then be turned into vision tokens the model prefills before it
+ * can emit its first answer token. All three costs scale with pixel count, and
+ * on the screen path that time is the whole product.
+ *
+ * 1600 rather than the 1280 used by the OCR path (`useScreenCapture.ts`,
+ * Requirement 13.1) because the consumer here is different. Tesseract needs
+ * per-glyph fidelity and 1280 was already marginal for it; a vision model reads
+ * far more robustly, but it still has to make out 12px UI text in a code editor,
+ * so this keeps a margin over 1280 while still cutting a 2560px-wide frame's
+ * pixel count by roughly 2.5x.
+ */
+const MAX_LONGEST_EDGE = 1600;
+
+/** JPEG quality. 80 rather than 85 — a few percent of bytes for no legibility. */
+const JPEG_QUALITY = 80;
 
 const require = createRequire(import.meta.url);
 
@@ -39,6 +67,66 @@ function ensureLoaded(): boolean {
     return true;
   } catch {
     loadFailed = true;
+    return false;
+  }
+}
+
+/**
+ * Whether the foreground window is excluded from screen capture.
+ *
+ * This exists because the bypass described at the top of this file no longer
+ * holds. Measured on Windows 11 build 26200 against a form with
+ * `WDA_EXCLUDEFROMCAPTURE` applied (`scripts/protected-window.ps1`), foreground
+ * and visible: `GetDC(NULL)` + `BitBlt` of the window's exact rect returns the
+ * *window behind it*, not the window itself. See `scripts/bitblt-probe.mjs` for
+ * the measurement.
+ *
+ * That failure mode is the dangerous one. `WDA_MONITOR` paints the window black,
+ * which is at least detectable from the pixels; `WDA_EXCLUDEFROMCAPTURE` removes
+ * it from the composited framebuffer altogether, so the capture is a valid,
+ * plausible-looking JPEG of the wrong thing. Sent to a vision model it produces a
+ * fast, confident answer about whatever was underneath — worse than no answer,
+ * because nothing about it looks wrong.
+ *
+ * So the affinity is asked for directly instead of inferred from the image. One
+ * call, no heuristics, and it distinguishes "protected" from "dark theme".
+ *
+ * Windows belonging to this process are reported as unprotected: the overlay
+ * sets `setContentProtection(true)` on itself, and it is not the subject of the
+ * capture. Without this, Zule's own overlay taking focus would read as a
+ * protected foreground and disable the pixel path for the rest of the session.
+ */
+export function foregroundWindowIsCaptureProtected(): boolean {
+  if (!ensureLoaded()) return false;
+
+  try {
+    const GetForegroundWindow = user32Lib.func('void *GetForegroundWindow()');
+    const GetWindowDisplayAffinity = user32Lib.func(
+      'bool GetWindowDisplayAffinity(void *hwnd, void *affinity)',
+    );
+    const GetWindowThreadProcessId = user32Lib.func(
+      'uint32_t GetWindowThreadProcessId(void *hwnd, void *pid)',
+    );
+
+    const hwnd = GetForegroundWindow();
+    if (!hwnd) return false;
+
+    // Ownership by pid rather than by handle comparison: every Zule window —
+    // overlay, dashboard, any future one — is owned by this process, so one check
+    // covers them all and none of them has to be plumbed in here.
+    const pidBuf = Buffer.alloc(4);
+    GetWindowThreadProcessId(hwnd, pidBuf);
+    if (pidBuf.readUInt32LE(0) === process.pid) return false;
+
+    const affBuf = Buffer.alloc(4);
+    if (!GetWindowDisplayAffinity(hwnd, affBuf)) return false;
+
+    // WDA_NONE (0) is the only unprotected value. WDA_MONITOR (1) and
+    // WDA_EXCLUDEFROMCAPTURE (0x11) both mean the pixels are not ours to read.
+    return affBuf.readUInt32LE(0) !== 0;
+  } catch {
+    // A failure here must not disable the pixel path. Unprotected is the
+    // assumption that preserves today's behaviour.
     return false;
   }
 }
@@ -119,10 +207,25 @@ export function captureDesktopRaw(): { width: number; height: number; pixels: Bu
  * Capture the screen and return as a base64 JPEG suitable for sending
  * to a vision model. Uses Electron's nativeImage for JPEG encoding.
  *
+ * Downscaled to `MAX_LONGEST_EDGE` before encoding, because every byte here is
+ * paid for three times over — IPC, upload, and vision prefill — before the model
+ * emits anything.
+ *
  * Excludes the area occupied by the overlay window to avoid capturing
  * zule itself in the screenshot.
  */
 export function captureDesktopAsBase64(overlayWindow?: BrowserWindowType | null): string | null {
+  return captureDesktopAsJpeg(overlayWindow)?.base64 ?? null;
+}
+
+/**
+ * As `captureDesktopAsBase64`, but also reports the encoded size and the
+ * dimensions actually sent, so the renderer's `[perf]` line can attribute
+ * latency to payload size instead of guessing at it.
+ */
+export function captureDesktopAsJpeg(
+  overlayWindow?: BrowserWindowType | null,
+): { base64: string; bytes: number; width: number; height: number } | null {
   const raw = captureDesktopRaw();
   if (!raw) return null;
 
@@ -130,14 +233,27 @@ export function captureDesktopAsBase64(overlayWindow?: BrowserWindowType | null)
     const { nativeImage } = require('electron') as typeof import('electron');
 
     // Create a NativeImage from the raw BGRA pixels
-    const img = nativeImage.createFromBuffer(raw.pixels, {
+    let img = nativeImage.createFromBuffer(raw.pixels, {
       width: raw.width,
       height: raw.height,
     });
 
-    // Encode as JPEG (quality 85 for readability)
-    const jpeg = img.toJPEG(85);
-    return jpeg.toString('base64');
+    // `downscaleSize` is idempotent when the frame already fits, but skip the
+    // resize call outright in that case so a small display pays nothing.
+    const target = downscaleSize({ width: raw.width, height: raw.height }, MAX_LONGEST_EDGE);
+    if (target.width !== raw.width || target.height !== raw.height) {
+      img = img.resize({ width: target.width, height: target.height, quality: 'good' });
+    }
+
+    const jpeg = img.toJPEG(JPEG_QUALITY);
+    if (!jpeg || jpeg.length === 0) return null;
+
+    return {
+      base64: jpeg.toString('base64'),
+      bytes: jpeg.length,
+      width: target.width,
+      height: target.height,
+    };
   } catch (err: unknown) {
     console.warn('[DesktopCapture] JPEG encoding failed:', err instanceof Error ? err.message : String(err));
     return null;

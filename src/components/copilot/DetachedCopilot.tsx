@@ -41,7 +41,7 @@ export function DetachedCopilot() {
           isLoading={state.isLoading || false}
           isStreaming={state.isStreaming || false}
           streamingText={state.streamingText || ''}
-          aiResponse={state.aiResponse}
+          aiResponse={state.aiResponse ?? null}
           onTriggerAI={(query) => broadcastAction('TRIGGER_AI', query)}
         />
       </div>
@@ -49,7 +49,7 @@ export function DetachedCopilot() {
       {/* Coaching Sidebar */}
       <div className="copilot-sidebar">
         <CoachingBar
-          coaching={state.coaching}
+          coaching={state.coaching ?? null}
           elapsedTime={state.elapsedTime || 0}
 
           onClose={() => {}}

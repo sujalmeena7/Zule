@@ -38,8 +38,15 @@ export const MAX_MODEL_ID_LENGTH = 200;
 export const MIN_PRIORITY = 1;
 export const MAX_PRIORITY = 10;
 
-/** The three User-editable text fields of the Custom_Provider entry. */
-export type CustomField = 'baseUrl' | 'apiKey' | 'modelId';
+/**
+ * The User-editable text fields of the Custom_Provider entry.
+ *
+ * `fastModelId` is a member so it gets the same keystroke clamping and
+ * `aria-invalid` binding as the rest, but it is deliberately absent from
+ * `MISSING_FIELD_ORDER` below: it is optional, and a blank one must never block
+ * registration.
+ */
+export type CustomField = 'baseUrl' | 'apiKey' | 'modelId' | 'fastModelId';
 
 /**
  * Fixed order in which `missing` is reported, so the configuration-incomplete
@@ -51,6 +58,7 @@ const FIELD_MAX_LENGTH: Record<CustomField, number> = {
   baseUrl: MAX_BASE_URL_LENGTH,
   apiKey: MAX_API_KEY_LENGTH,
   modelId: MAX_MODEL_ID_LENGTH,
+  fastModelId: MAX_MODEL_ID_LENGTH,
 };
 
 /** Provider ids that cannot be registered without a credential. */
@@ -78,6 +86,24 @@ function isBlank(value: string | undefined | null): boolean {
 export function clampField(field: CustomField, raw: string): string {
   const max = FIELD_MAX_LENGTH[field];
   return raw.length <= max ? raw : raw.slice(0, max);
+}
+
+/**
+ * Heuristic: does this model id name a variant that deliberates before
+ * answering?
+ *
+ * Pattern-matching a name is not a capability check and cannot be one — a
+ * gateway exposes no "does it think" field. It is used only to surface an
+ * advisory line next to a field the User can still set to anything, so a false
+ * positive costs one sentence of screen space and a false negative costs
+ * nothing; an actual speed measurement is the authoritative answer.
+ *
+ * It lives in this dependency-light module rather than beside that measurement
+ * so a render path can call it without pulling the adapter, telemetry, and the
+ * HTTP layer into its bundle for the sake of one regular expression.
+ */
+export function looksLikeThinkingModel(modelId: string): boolean {
+  return /think|reason|-r1\b|\bqwq|o1-|o3-/i.test((modelId ?? '').trim());
 }
 
 // --- 2. Entry-list initialisation (Requirements 1.1, 1.7) ----------------
@@ -150,12 +176,18 @@ export function buildCustomConfigForSave(input: {
   priority: number;
   baseUrlDraft: string;
   modelIdDraft: string;
+  /**
+   * Optional fast-model draft. Absent (rather than `''`) leaves whatever was
+   * previously persisted untouched, so a caller that predates this field cannot
+   * silently erase it.
+   */
+  fastModelIdDraft?: string;
   /** `''` means "retain the previously stored cipher". */
   apiKeyDraft: string;
   /** Present only when `apiKeyDraft` was non-empty. */
   apiKeyCipher?: string;
 }): SaveResult {
-  const { previous, enabled, priority, baseUrlDraft, modelIdDraft, apiKeyDraft, apiKeyCipher } = input;
+  const { previous, enabled, priority, baseUrlDraft, modelIdDraft, fastModelIdDraft, apiKeyDraft, apiKeyCipher } = input;
 
   // Base_URL: an empty value is allowed (the entry may be saved unconfigured),
   // but a non-empty value must be an absolute http(s) URL (Requirement 1.8).
@@ -198,6 +230,13 @@ export function buildCustomConfigForSave(input: {
     modelId: modelIdDraft.trim(),
   };
 
+  // Over-length is clamped at the keystroke by `clampField`, so there is nothing
+  // to reject here — unlike the API_Key, a truncated model id fails loudly at the
+  // gateway rather than leaking anything.
+  if (fastModelIdDraft !== undefined) {
+    config.fastModelId = fastModelIdDraft.trim().slice(0, MAX_MODEL_ID_LENGTH);
+  }
+
   if (retainedCipher === undefined) {
     delete config.apiKeyCipher;
   } else {
@@ -210,7 +249,14 @@ export function buildCustomConfigForSave(input: {
 // --- 4. Registration decision (Requirements 1.4, 1.5, 1.6) ---------------
 
 export type SyncDecision =
-  | { action: 'register'; baseUrl: string; modelId: string; apiKey: string }
+  | {
+      action: 'register';
+      baseUrl: string;
+      modelId: string;
+      apiKey: string;
+      /** `''` when none is configured, which the adapter reads as "unset". */
+      fastModelId: string;
+    }
   | { action: 'unregister'; reason: 'disabled' }
   | { action: 'skip'; reason: 'incomplete'; missing: CustomField[] }
   | { action: 'skip'; reason: 'absent' };
@@ -248,6 +294,10 @@ export function resolveCustomRegistration(input: {
     baseUrl: !normalized.ok,
     apiKey: isBlank(apiKey),
     modelId: modelId.length === 0,
+    // Always false: an absent fast model is a complete configuration, it just
+    // means every dispatch uses `modelId`. Reporting it as missing would refuse
+    // to register a perfectly usable endpoint.
+    fastModelId: false,
   };
 
   const missing = MISSING_FIELD_ORDER.filter((field) => blank[field]);
@@ -260,6 +310,7 @@ export function resolveCustomRegistration(input: {
     baseUrl: normalized.ok ? normalized.url : '',
     modelId,
     apiKey,
+    fastModelId: (config.fastModelId ?? '').trim(),
   };
 }
 

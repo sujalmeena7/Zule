@@ -12,7 +12,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { recognizeTextDeduped, terminateOcrWorker, OcrWatchdog } from '../workers/ocrWorker';
 import { prepareFrame } from '../workers/framePrepWorker';
 import { downscaleSize } from '../utils/geometry';
-import { phash, hammingDistance, PHASH_BYTES } from '../utils/phash';
+import { phash, hammingDistance } from '../utils/phash';
 import { pushToRingBuffer } from '../utils/ringBuffer';
 import { useZuleError } from './useZuleError';
 

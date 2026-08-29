@@ -146,6 +146,15 @@ export function UpdateBanner({
           </span>
         </div>
 
+        {/* Release notes */}
+        <div className="update-popup-notes">
+          {state.releaseNotes ? (
+            <div className="update-popup-notes-content">{state.releaseNotes}</div>
+          ) : (
+            <p className="update-popup-notes-placeholder">Release notes are not available</p>
+          )}
+        </div>
+
         {/* Download progress */}
         {status === 'downloading' && progress && (
           <div className="update-popup-progress">
@@ -183,6 +192,7 @@ export function UpdateBanner({
                 className="update-popup-btn primary"
                 onClick={onDownload}
                 disabled={isInstalling}
+                aria-label="Update now"
               >
                 <Download size={15} />
                 Update Now
@@ -191,6 +201,7 @@ export function UpdateBanner({
                 className="update-popup-btn secondary"
                 onClick={handleDismiss}
                 disabled={isInstalling}
+                aria-label="Later"
               >
                 Not Now
               </button>
@@ -202,6 +213,7 @@ export function UpdateBanner({
               className="update-popup-btn secondary"
               onClick={onCancel}
               disabled={isInstalling}
+              aria-label="Cancel"
             >
               Cancel Download
             </button>
@@ -213,6 +225,7 @@ export function UpdateBanner({
                 className="update-popup-btn primary"
                 onClick={onInstall}
                 disabled={isInstalling}
+                aria-label="Restart and install"
               >
                 <RefreshCw size={15} className={isInstalling ? 'spin' : ''} />
                 {isInstalling ? 'Installing…' : 'Restart & Install'}
@@ -221,6 +234,7 @@ export function UpdateBanner({
                 className="update-popup-btn secondary"
                 onClick={handleDefer}
                 disabled={isInstalling}
+                aria-label="Install on next quit"
               >
                 Install Later
               </button>

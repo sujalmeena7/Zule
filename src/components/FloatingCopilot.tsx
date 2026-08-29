@@ -16,19 +16,20 @@ import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useCrossWindowSync } from '../hooks/useCrossWindowSync';
 import { useElectronBridge } from '../hooks/useElectronBridge';
 import { clampPosition } from '../utils/geometry';
+import { ocrBase64Image } from '../utils/ocrImage';
 import { speakerManager } from '../brain/speakerManager';
 import { persistPlaceholderMeeting, generateSummaryWithTimeout } from '../brain/stopSession';
-import { buildContextWindow } from '../brain/contextManager';
+import { buildContextWindow, buildMinimalScreenContext, buildRealtimeConversationContext, primeFastContext } from '../brain/contextManager';
 import type { TranscriptLine, CitationInfo } from '../brain/contextManager';
 import type { TranscriptionLine } from '../types/transcription';
-import { streamAIResponse, describeProviderFailure } from '../brain/aiProvider';
+import { streamAIResponse, describeProviderFailure, warmProviders } from '../brain/aiProvider';
 import type { AIResponse } from '../brain/aiProvider';
-import { activeAdapterSupportsImageInput } from '../brain/aiProvider';
+import { activeAdapterSupportsImageInput, hasVisionProvider, NoVisionProviderError } from '../brain/aiProvider';
 import { database as knowledgeBase } from '../data/database';
-import { QuestionDetectorStream } from '../brain/questionDetector';
+import { QuestionDetectorStream, suppressEchoDuplicates, countWordDifferences } from '../brain/questionDetector';
 import { getFullAnalysis } from '../brain/sentimentAnalyzer';
 import { semanticCache } from '../brain/responseCache';
-import { ScreenContextGuard } from '../brain/screenContextGuard';
+import { screenCacheKey, conversationCacheKey, getScreenCached, setScreenCached } from '../brain/screenFastCache';
 import { telemetry } from '../brain/telemetry';
 import type { SentimentResult } from '../brain/sentimentAnalyzer';
 import { MODE_CONFIGS, type CopilotMode } from '../brain/modePrompts';
@@ -41,7 +42,6 @@ import { QuickActions } from './copilot/QuickActions';
 import { InputBar } from './copilot/InputBar';
 import { PhoneCapture } from './copilot/PhoneCapture';
 import { useOverlayMode } from '../overlay/useOverlayMode';
-import { UpdateIndicator } from './UpdateIndicator';
 import { useAutoUpdate } from '../hooks/useAutoUpdate';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -52,8 +52,202 @@ import type { GatedFeature } from '../types/subscription';
 import './FloatingCopilot.css';
 
 
-/** Map new TranscriptionLine[] to legacy TranscriptLine[] for APIs still on the old type. */
-function toLegacyTranscript(lines: TranscriptionLine[]): TranscriptLine[] {
+// --- Latency budget for the dispatch path ---------------------------------
+//
+// Every millisecond spent here sits between the User's click and the first
+// streamed token, so these ceilings are deliberately tight. The previous
+// 3 000 ms values were sized as "don't hang forever" guards, but a timeout on
+// the critical path doubles as the p99 latency of its stage — and a UI
+// Automation walk that hasn't returned within ~1.2 s is not about to return
+// useful text, it is a window that exposes no text tree at all. Failing over to
+// the next capture method beats waiting out the timeout.
+/**
+ * Budget for the UI Automation text walk.
+ *
+ * This one is easy to set too low, because the name suggests a native API call.
+ * It is not: `extractForegroundText` spawns `powershell.exe`, loads the
+ * `System.Windows.Automation` assemblies, then walks every descendant of the
+ * foreground window running three pattern queries per element. Process start
+ * alone is a few hundred milliseconds, and a browser window exposes thousands of
+ * accessibility nodes — the native side allows itself 5 s for good reason.
+ *
+ * Cutting this to ~1.2 s (which is roughly what the walk costs on a *simple*
+ * window) means it reliably expires on exactly the windows it exists to handle,
+ * and UIA is the only text source that survives `SetWindowDisplayAffinity`. When
+ * it expires the fallback is not a cheaper capture, it is an image — which a
+ * text-only model cannot read. So the budget has to be large enough for the walk
+ * to finish; making the walk itself cheap is a separate problem, and the real fix
+ * is to stop paying for it on the critical path at all.
+ */
+const UIA_TIMEOUT_MS = 4000;
+
+/**
+ * The budget when the foreground window is capture-protected.
+ *
+ * Every other source is already known to be a dead end in that case, so a 4s
+ * give-up returns nothing at all rather than something cheaper. The main process
+ * kills its PowerShell at 5000ms, so waiting slightly past that costs nothing and
+ * turns a discarded in-flight result into a usable one.
+ */
+const UIA_PROTECTED_TIMEOUT_MS = 5500;
+
+const BITBLT_TIMEOUT_MS = 1500;
+
+/**
+ * OCR gets a far larger budget than the other two capture methods, because it
+ * is not one of several ways to get the same thing — it is the last one. UIA and
+ * BitBlt have already failed by the time it runs, so its alternative is not a
+ * cheaper capture, it is *no screen text at all*.
+ *
+ * A Tesseract pass over a full-resolution frame routinely needs several seconds.
+ * Capping it at the same ~1.5 s as the others converts a slow success into a hard
+ * failure, and a hard failure is the more expensive outcome by a wide margin: the
+ * model receives an empty context and answers "no conversation context was
+ * included", so the User waits, gets nothing usable, and dispatches again.
+ * Waiting out a slow OCR is strictly better than paying for a round trip that
+ * cannot succeed.
+ */
+const OCR_TIMEOUT_MS = 8000;
+
+/**
+ * Ceiling on the Knowledge_Base + Memory_Store lookup for conversational
+ * (non-screen) questions. Retrieval enriches an answer; it does not gate one.
+ *
+ * Caveat, and it is a large one: this deadline is a backstop, not a guarantee.
+ * `transformersEnv` pins the ONNX WASM backend to `numThreads = 1` and
+ * `proxy = false`, so an embedding runs on the renderer main thread and blocks
+ * the event loop — the `setTimeout` behind this race cannot fire until the
+ * forward pass has already finished. It only bounds the *awaitable* part of
+ * retrieval (IndexedDB reads, persistence hydration).
+ *
+ * What actually keeps retrieval off the critical path is refusing to start it:
+ * `buildMinimalScreenContext` for screen dispatches, and the empty-corpus guards
+ * in `knowledgeBase.search` / `memoryStore.search` that return before embedding.
+ */
+const RETRIEVAL_DEADLINE_MS = 600;
+
+/**
+ * Ceiling on the embedding-backed Semantic_Cache lookup. A cache probe that
+ * overruns is treated as a miss — the point of a cache is to save time, so it
+ * is never allowed to cost more than it can save. Subject to the same
+ * main-thread caveat as `RETRIEVAL_DEADLINE_MS`, which is why the screen path
+ * uses the synchronous hash cache in `screenFastCache` instead of this one.
+ */
+const SEMANTIC_CACHE_DEADLINE_MS = 400;
+
+/**
+ * Upper bound on how long the "a dispatch is already in flight" guard may
+ * suppress new dispatches. A request aborted before its provider call is ever
+ * made resolves through no handler, so the guard would otherwise latch on and
+ * silently swallow every later dispatch — auto-detected questions and the
+ * "Assist now" button alike. Comfortably above a realistic time-to-first-token
+ * (observed 2–3.5 s on a remote model), so it never cuts a live dispatch short.
+ */
+const STALE_DISPATCH_MS = 15000;
+
+/**
+ * Timing instrumentation for the dispatch path. Emits one line per request so a
+ * slow response can be attributed to a stage — capture, cache, context assembly
+ * or provider — instead of guessed at.
+ */
+function makeStopwatch(label: string) {
+  const t0 = performance.now();
+  let last = t0;
+  const marks: string[] = [];
+  const notes: string[] = [];
+  return {
+    mark(name: string) {
+      const now = performance.now();
+      marks.push(`${name} ${Math.round(now - last)}ms`);
+      last = now;
+    },
+    /**
+     * Attach a non-timing fact to the report line — screenshot size, resolved
+     * model. Stage timings alone cannot distinguish "the model is slow" from
+     * "we sent it 900 KB of screenshot", and that distinction is the whole
+     * question on this path.
+     */
+    note(text: string) {
+      notes.push(text);
+    },
+    /**
+     * Milliseconds since the dispatch started, without emitting anything. The
+     * screen path needs the total twice — once at first token, once when the
+     * answer completes and the resolved model id is finally known — and calling
+     * `report` again would reprint the whole stage breakdown for a second line.
+     */
+    elapsed() {
+      return Math.round(performance.now() - t0);
+    },
+    report(suffix?: string) {
+      const total = Math.round(performance.now() - t0);
+      const tail = [...notes, ...(suffix ? [suffix] : [])];
+      // eslint-disable-next-line no-console
+      console.log(
+        `[perf] ${label} total ${total}ms — ${marks.join(' | ')}${tail.length ? ` | ${tail.join(' | ')}` : ''}`,
+      );
+      return total;
+    },
+  };
+}
+
+/**
+ * Copy text to the clipboard from the overlay, reporting whether it worked.
+ *
+ * The async Clipboard API is not usable from this window. The overlay is created
+ * `NOACTIVATE` and deliberately never takes focus — that is the entire point of
+ * the focusless design — and `navigator.clipboard.writeText` rejects with
+ * `NotAllowedError: Document is not focused` in exactly that situation. It does
+ * so by *rejecting*, not by throwing, so a synchronous `try/catch` around it
+ * catches nothing: the previous version of this handler set `copied = true` the
+ * instant the promise was created, never ran its `execCommand` fallback, showed
+ * a "Copied to clipboard" toast for an empty clipboard, and left an unhandled
+ * `NotAllowedError` in the console on every click.
+ *
+ * So the promise is awaited, and the synchronous `execCommand('copy')` path —
+ * which works without document focus because the selection it copies from is one
+ * this document owns — is the fallback rather than the dead branch.
+ */
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fall through to the execCommand path below.
+  }
+
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Shape returned by the native BitBlt capture bridge. Named so the
+ * `raceTimeout` fallback literals can be cast to the full shape — casting them
+ * to a narrower one silently hides the diagnostic fields from every use site.
+ */
+type BitBltResult = {
+  ok: boolean;
+  base64?: string;
+  reason?: string;
+  bytes?: number;
+  width?: number;
+  height?: number;
+};
+
+/** Map new TranscriptionLine[] to legacy TranscriptLine[] for APIs still on the old type. */function toLegacyTranscript(lines: TranscriptionLine[]): TranscriptLine[] {
   return lines.map(l => ({
     id: l.id,
     text: l.text,
@@ -109,6 +303,25 @@ function RestoreIcon() {
   );
 }
 
+function mergeSortedTranscripts(
+  a: readonly TranscriptionLine[],
+  b: readonly TranscriptionLine[],
+): TranscriptionLine[] {
+  const result: TranscriptionLine[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i].timestamp <= b[j].timestamp) {
+      result.push(a[i++]);
+    } else {
+      result.push(b[j++]);
+    }
+  }
+  while (i < a.length) result.push(a[i++]);
+  while (j < b.length) result.push(b[j++]);
+  return result;
+}
+
 export function FloatingCopilot() {
   const { state, actions } = useZule();
   const { user } = useAuth();
@@ -128,8 +341,14 @@ export function FloatingCopilot() {
   const [aiResponse, setAiResponse] = useState<AIResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
+  const [isGeneratingSummary] = useState(false);
   const [streamingText, setStreamingText] = useState('');
+  // A thinking model's chain-of-thought. Held separately from `streamingText`
+  // because it is not part of the answer and must never be mistaken for one —
+  // but it is the only thing arriving during a reasoning phase that can run for
+  // a minute, so without it the overlay shows a bare "Thinking..." spinner and
+  // is indistinguishable from a hung request.
+  const [reasoningText, setReasoningText] = useState('');
   // Chat history: accumulates all Q&A pairs for the session
   const [chatHistory, setChatHistory] = useState<{ id: string; role: 'user' | 'assistant'; text: string; isSimulated?: boolean }[]>([]);
   const [elapsedTime, setElapsedTime] = useState(0);
@@ -139,6 +358,8 @@ export function FloatingCopilot() {
   const [modalitiesUsed, setModalitiesUsed] = useState<('audio' | 'screen' | 'knowledge' | 'memory' | 'keyframe' | 'screenText')[]>([]);
   const [citations, setCitations] = useState<CitationInfo[]>([]);
   const [recognitionLanguage, setRecognitionLanguage] = useState<string | null>(null);
+  // Detected question badge — flashes when autonomous trigger fires
+  const [detectedQuestion, setDetectedQuestion] = useState<string | null>(null);
 
   // Subscription State
   const { isFeatureAvailable, isLimitReached, incrementUsage, limits } = useSubscription();
@@ -182,25 +403,23 @@ export function FloatingCopilot() {
     modeAnnouncement,
   } = useOverlayMode();
 
-  // Auto-update state for the overlay indicator (Requirements 7.1, 7.3)
-  const { state: updateState } = useAutoUpdate();
+  // Auto-update check in background (Requirements 7.1, 7.3)
+  useAutoUpdate();
 
   // Single transcript feeding the AI / detectors / UI: mic lines (role 'user')
-  // and system-audio lines (role 'other') merged in timestamp order. Both
-  // already carry epoch-ms timestamps, so a stable sort interleaves them.
+  // and system-audio lines (role 'other') merged in timestamp order via linear
+  // two-pointer merge with echo duplicate suppression.
   const mergedTranscript = useMemo(
     () =>
-      [...speech.transcript, ...systemAudio.lines].sort(
-        (a, b) => a.timestamp - b.timestamp,
+      suppressEchoDuplicates(
+        mergeSortedTranscripts(speech.transcript, systemAudio.lines),
       ),
     [speech.transcript, systemAudio.lines],
   );
 
   // Live captions: a short rolling window of the most recent transcribed lines
-  // (so text reads continuously instead of vanishing as new speech arrives),
-  // plus any in-progress interim text appended as a live, pulsing line. Mic
-  // interim is real partial text; system-audio (Whisper) interim is just a '...'
-  // working placeholder, so only mic interim is surfaced as live text.
+  // plus any in-progress interim text appended as a live, pulsing line.
+  // Filters out literal '...' placeholders.
   const CAPTION_HISTORY = 3;
   const liveCaptions = useMemo(() => {
     const recent = mergedTranscript
@@ -211,17 +430,24 @@ export function FloatingCopilot() {
         role: l.speakerRole,
         live: false,
       }));
-    if (speech.interimText) {
+    const activeInterim =
+      speech.interimText && speech.interimText !== '...'
+        ? { text: speech.interimText, role: 'user' as const }
+        : systemAudio.interimText && systemAudio.interimText !== '...'
+        ? { text: systemAudio.interimText, role: 'other' as const }
+        : null;
+
+    if (activeInterim) {
       recent.push({
         key: 'interim',
-        text: speech.interimText,
-        role: 'user' as const,
+        text: activeInterim.text,
+        role: activeInterim.role,
         live: true,
       });
     }
     // Keep the window bounded even with the interim line appended.
     return recent.slice(-CAPTION_HISTORY);
-  }, [speech.interimText, mergedTranscript]);
+  }, [speech.interimText, systemAudio.interimText, mergedTranscript]);
 
   // Ref mirrors overlayMode so callbacks always read the current value
   // without needing it in their dependency array (which causes stale closures).
@@ -276,23 +502,19 @@ export function FloatingCopilot() {
 
   // Refs
   const startTimeRef = useRef(Date.now());
-  const questionDetectorRef = useRef(new QuestionDetectorStream({ debounceMs: 1500 }));
+  const questionDetectorRef = useRef(new QuestionDetectorStream({ debounceMs: 800 }));
   const transcriptEndRef = useRef<HTMLDivElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   // Bug Fix #1: useRef to track streaming state to avoid stale closure
   const isStreamingRef = useRef(false);
-  // Bug Fix #3: ref guard so speech.start() fires only once
-  const speechStartedRef = useRef(false);
+  const isLoadingRef = useRef(false);
   // Tracks whether the main mic was listening before in-bar dictation began,
   // so we only resume a mic the user hadn't already paused.
   const dictationWasListening = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const summaryAbortControllerRef = useRef<AbortController | null>(null);
   // Generation counter for discarding late tokens from aborted streams (Req 12.2)
   const requestIdRef = useRef(0);
-  // Screen context guard for frame freshness and cross-request isolation (Req 8.1, 8.2, 8.3)
-  const screenContextGuardRef = useRef(new ScreenContextGuard());
   // Req 12.5: Stable refs for values that change every transcript update,
   // so triggerAI's useCallback deps remain stable and the autonomous-detection
   // useEffects do not re-fire on every render.
@@ -325,8 +547,26 @@ export function FloatingCopilot() {
   // Phone Camera Input: when set, triggerAI uses this as keyframeForContext
   // instead of screen capture. Cleared after consumption.
   const phoneImageRef = useRef<{ base64: string; mimeType: string } | null>(null);
+  // Set for exactly one dispatch after a `NoVisionProviderError`: the pixel path
+  // captured the screen but nothing configured can read pixels, so the retry has
+  // to go the slow text way (UI Automation / OCR) instead of capturing pixels
+  // again and failing identically. Cleared at the top of the dispatch that reads
+  // it, which is what makes the fallback single-shot rather than a loop.
+  const forceTextChainRef = useRef(false);
   const inputTextRef = useRef(inputText);
   inputTextRef.current = inputText;
+  const inFlightQuestionRef = useRef<string>('');
+  // Most recent auto-detected question, so "Assist now" can answer the thing
+  // that was actually heard instead of making the model guess from the transcript.
+  const lastDetectedQuestionRef = useRef<string>('');
+  // When the current dispatch entered its pre-first-token phase. The in-flight
+  // guard is time-bounded against it so a dropped/aborted dispatch can never
+  // latch the UI into a permanently disabled state.
+  const dispatchStartedAtRef = useRef<number>(0);
+  const dispatchOriginRef = useRef<'manual' | 'realtime-audio' | 'screen'>('manual');
+  const elapsedTimeRef = useRef(elapsedTime);
+  elapsedTimeRef.current = elapsedTime;
+  const broadcastToPhoneRef = useRef<(text: string, question?: string) => void>(() => {});
 
   // Phone Camera Input: listen for photos sent from the phone browser
   useEffect(() => {
@@ -365,6 +605,28 @@ export function FloatingCopilot() {
 
     return cleanup;
   }, [isElectronEnv, electronAPI, setOverlayMode]);
+
+  // Phone Live Answers: broadcast successful answers to connected phone(s) if enabled
+  const broadcastToPhone = useCallback(async (text: string, question?: string) => {
+    if (!isElectronEnv || !electronAPI?.sendAnswerToPhone) return;
+    try {
+      const isEnabled = await knowledgeBase.getSetting<boolean>('phoneCompanionBroadcast', true);
+      if (!isEnabled) return;
+    } catch {
+      // Default to enabled on read error
+    }
+
+    electronAPI.sendAnswerToPhone({
+      id: generateId(),
+      text,
+      question: question || activeModeRef.current || 'AI Response',
+      mode: activeModeRef.current,
+      timestamp: Date.now(),
+    }).catch((err) => {
+      console.warn('[FloatingCopilot] Failed to send answer to phone:', err);
+    });
+  }, [isElectronEnv, electronAPI]);
+  broadcastToPhoneRef.current = broadcastToPhone;
 
   // Timer & Duration Limit Check
   useEffect(() => {
@@ -411,30 +673,33 @@ export function FloatingCopilot() {
     };
   }, []);
 
-  // Sync state to detached window
+  // Sync state to detached window (throttled with bounded transcript tail)
   useEffect(() => {
-    broadcastState({
-      isDetached: false,
-      transcript: mergedTranscript,
-      interimText: speech.interimText,
-      streamingText,
-      aiResponse,
-      isLoading,
-      isStreaming,
-      elapsedTime,
-      coaching,
-      activeMode,
-    });
+    const timer = setTimeout(() => {
+      broadcastState({
+        isDetached: false,
+        transcript: mergedTranscript.slice(-30),
+        interimText: speech.interimText,
+        streamingText,
+        aiResponse,
+        isLoading,
+        isStreaming,
+        elapsedTime,
+        coaching,
+        activeMode,
+      });
+    }, 200);
+    return () => clearTimeout(timer);
   }, [mergedTranscript, speech.interimText, streamingText, aiResponse, isLoading, isStreaming, elapsedTime, coaching, activeMode, broadcastState]);
 
-  // Auto-scroll transcript
+  // Auto-scroll transcript (instant scroll)
   useEffect(() => {
-    transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    transcriptEndRef.current?.scrollIntoView({ behavior: 'auto' });
   }, [mergedTranscript]);
 
-  // Auto-scroll chat to latest message
+  // Auto-scroll chat to latest message (instant scroll)
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    chatEndRef.current?.scrollIntoView({ behavior: 'auto' });
   }, [chatHistory, streamingText]);
 
   // Dedicated screen-share stealth toggle, wired to the segmented eye/eye-off
@@ -493,50 +758,91 @@ export function FloatingCopilot() {
     }
   }, [isPanicHidden, speech, systemAudio, screen]);
 
-  // Handle coaching and simulated response updates
+  // Handle coaching updates with debounce on bounded transcript tail
   useEffect(() => {
     if (mergedTranscript.length === 0) return;
-    const fullText = mergedTranscript.map(l => l.text).join(' ');
-    const totalWords = fullText.split(/\s+/).length;
-    const analysis = getFullAnalysis(fullText, totalWords, elapsedTime);
-    setCoaching(analysis);
-  }, [mergedTranscript, elapsedTime]);
+    const timer = setTimeout(() => {
+      const bounded = mergedTranscript.slice(-20);
+      const fullText = bounded.map(l => l.text).join(' ');
+      const totalWords = fullText.split(/\s+/).length;
+      const analysis = getFullAnalysis(fullText, totalWords, elapsedTimeRef.current);
+      setCoaching(analysis);
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [mergedTranscript]);
 
-  // Autonomous question detection
-  // Req 12.5: Call triggerAIRef.current() so this effect does NOT depend on triggerAI
+  // Autonomous question detection on final lines with multi-line windowing & barge-in
   useEffect(() => {
     if (isPanicHidden) return; // Paused during panic hide (Requirement 15.8)
     if (mergedTranscript.length > 0) {
-      const recentContext = mergedTranscript.slice(-3); // Get last 3 lines for context
-      questionDetectorRef.current.onNewContext(recentContext, async () => {
-        await triggerAIRef.current();
-      });
-    }
-  }, [mergedTranscript, isPanicHidden]);
+      const recentContext = mergedTranscript.slice(-4); // Last 4 lines for multi-line split questions
+      questionDetectorRef.current.onNewContext(recentContext, async (result) => {
+        lastDetectedQuestionRef.current = result.question;
+        if (isStreamingRef.current || isLoadingRef.current) {
+          // Barge-in check: if new question differs by >= 3 significant words from in-flight question
+          const diff = countWordDifferences(inFlightQuestionRef.current, result.question);
+          if (diff >= 3) {
+            console.log(`[FloatingCopilot] Barge-in triggered (word diff=${diff}), aborting in-flight AI request`);
+            if (abortControllerRef.current) {
+              abortControllerRef.current.abort();
+            }
+            // abort() settles on a later tick, so the aborted request's own
+            // handlers have not cleared these yet. Clear them here or the
+            // re-dispatch below trips triggerAI's in-flight guard — and if the
+            // abort landed before the provider call, nothing ever clears them
+            // and every later dispatch (including "Assist now") is blocked.
+            setIsLoading(false);
+            isLoadingRef.current = false;
+            setIsStreaming(false);
+            isStreamingRef.current = false;
+          } else {
+            return; // Suppress duplicate or minor variation of in-flight question
+          }
+        }
 
-  // Predictive pre-warming detection
-  // Req 12.5: Call triggerAIRef.current() so this effect does NOT depend on triggerAI
-  useEffect(() => {
-    if (isPanicHidden) return; // Paused during panic hide (Requirement 15.8)
-    if (speech.interimText) {
-      questionDetectorRef.current.onInterimText(speech.interimText, async () => {
-        // Trigger speculative generation. We append the interim text to the context
-        // to pre-warm the LLM.
-        await triggerAIRef.current(speech.interimText);
-      });
-    }
-  }, [speech.interimText, isPanicHidden]);
+        // Show detected question badge
+        setDetectedQuestion(result.question.length > 80 ? result.question.slice(0, 80) + '…' : result.question);
+        setTimeout(() => setDetectedQuestion(null), 3500);
 
-  // Bug Fix #3: Start mic by default — check isSupported AND use ref guard
-  // Wait for recognitionLanguage to load from IndexedDB before starting
-  useEffect(() => {
-    if (speech.isSupported && !speechStartedRef.current && recognitionLanguage !== null) {
-      speechStartedRef.current = true;
-      speech.start().catch((err) => {
-        console.error('[FloatingCopilot] Auto-start mic failed:', err);
+        // Auto-expand overlay so the answer is visible
+        if (isNativeOverlay && (overlayModeRef.current === 'compact' || overlayModeRef.current === 'expanded')) {
+          setOverlayMode('maximized');
+        }
+
+        dispatchOriginRef.current = 'realtime-audio';
+        await triggerAIRef.current(result.question);
       });
     }
-  }, [speech.isSupported, recognitionLanguage]);
+  }, [mergedTranscript, isPanicHidden, isNativeOverlay, setOverlayMode]);
+
+  // Prefetch on partial detection (system audio partials)
+  useEffect(() => {
+    if (isPanicHidden) return;
+    const interim = systemAudio.interimText;
+    if (interim && interim !== '...' && interim.trim().length > 15) {
+      questionDetectorRef.current.onInterimText(
+        interim,
+        async (result) => {
+          lastDetectedQuestionRef.current = result.question;
+          // Hybrid approach: warm providers and prime context in background without answering yet
+          void primeFastContext();
+          void warmProviders(apiKey);
+          getScreenCached(conversationCacheKey({ mode: activeMode, query: result.question }));
+          setDetectedQuestion(result.question.length > 80 ? result.question.slice(0, 80) + '…' : result.question);
+          setTimeout(() => setDetectedQuestion(null), 3500);
+          if (isNativeOverlay && (overlayModeRef.current === 'compact' || overlayModeRef.current === 'expanded')) {
+            setOverlayMode('maximized');
+          }
+        },
+        'other',
+      );
+    }
+  }, [systemAudio.interimText, isPanicHidden, isNativeOverlay, setOverlayMode, apiKey, activeMode]);
+
+  // Mic does NOT auto-start. User must explicitly enable transcription
+  // via the headphone/mic toggle button on the control capsule.
+  // Previously this auto-started on mount which caused unwanted live
+  // transcription appearing in the overlay immediately.
 
   // Bug Fix #1: triggerAI uses isStreamingRef instead of stale isStreaming closure
   // Req 12.2: Manual-override abort — abort in-flight request, discard late tokens via requestId
@@ -548,6 +854,55 @@ export function FloatingCopilot() {
   const customModesRef = useRef(customModes);
   customModesRef.current = customModes;
 
+  // --- Dispatch warm-up ---------------------------------------------------
+  //
+  // Move the one-time setup costs that used to land on the first question into
+  // idle time after mount:
+  //
+  //   * `warmProviders` reads the saved provider list from IndexedDB, decrypts
+  //     each stored key through the keystore, and dynamically imports the
+  //     selected adapter chunk. Left lazy inside `streamAIResponse`, all of that
+  //     sits between the click and the request actually leaving.
+  //   * `primeFastContext` memoizes the User's redaction rules, which is the
+  //     only await left in the fast context builder.
+  //
+  // Both are idempotent and swallow their own failures, so a warm-up that
+  // doesn't complete just leaves the original lazy path in place.
+  useEffect(() => {
+    let cancelled = false;
+    const warm = () => {
+      if (cancelled) return;
+      void primeFastContext();
+      void warmProviders(apiKeyRef.current);
+    };
+    // requestIdleCallback where available, so warm-up never competes with the
+    // overlay's first paint.
+    const idle = (window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+    }).requestIdleCallback;
+    if (typeof idle === 'function') {
+      idle(warm, { timeout: 2000 });
+    } else {
+      setTimeout(warm, 250);
+    }
+    return () => { cancelled = true; };
+  }, []);
+
+  // Helper: race a promise against a timeout. If the promise doesn't resolve
+  // within `ms`, resolves with `fallback` instead of blocking the UI thread.
+  // This prevents IPC calls (UIA, BitBlt) from hanging the overlay when the
+  // window is hidden or Windows focus is unstable.
+  const raceTimeout = useCallback(<T,>(promise: Promise<T>, ms: number, fallback: T): Promise<T> => {
+    return Promise.race([
+      promise,
+      new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
+    ]);
+  }, []);
+
+  // --- Latency budget for the dispatch path -------------------------------
+  //
+  // See the module-level constants above.
+
   const triggerAI = useCallback(async (query?: string) => {
     // Enforce AI response limit
     if (isLimitReached('aiResponsesPerDay')) {
@@ -555,12 +910,33 @@ export function FloatingCopilot() {
       return;
     }
 
+    // Guard: if a previous triggerAI is still in its capture/dispatch phase
+    // (not yet streaming), skip this call. Rapid "Use Screen" clicks should
+    // not stack up multiple concurrent IPC calls that overwhelm the main process.
+    // Once streaming starts, isLoadingRef flips to false and new calls are allowed.
+    //
+    // Time-bounded: a dispatch that is aborted before the provider call is made
+    // never reaches an error handler, so without an upper bound the flag latches
+    // and every later dispatch — including the "Assist now" button — is dropped.
+    if (
+      isLoadingRef.current &&
+      !isStreamingRef.current &&
+      Date.now() - dispatchStartedAtRef.current < STALE_DISPATCH_MS
+    ) {
+      console.log('[FloatingCopilot] triggerAI skipped: previous dispatch still in flight');
+      return;
+    }
+
+    dispatchStartedAtRef.current = Date.now();
+
     setIsLoading(true);
+    isLoadingRef.current = true;
     setIsStreaming(false);
     isStreamingRef.current = false;
 
     // Track dispatch start time for screen.dispatch telemetry (Req 9.1)
     const dispatchStartMs = performance.now();
+    const sw = makeStopwatch('triggerAI');
 
     // Abort any in-flight request (Req 12.2: manual-override abort)
     if (abortControllerRef.current) {
@@ -573,6 +949,12 @@ export function FloatingCopilot() {
     const currentRequestId = requestIdRef.current;
     // Reset streaming text for the new request
     setStreamingText('');
+    setReasoningText('');
+
+    // Read outside the `try` so the catch can tell a first attempt from the
+    // text-chain retry it scheduled, and therefore cannot loop on it.
+    const forceTextChain = forceTextChainRef.current;
+    forceTextChainRef.current = false;
 
     try {
       // Read current values from refs (Req 12.5: stable deps)
@@ -590,59 +972,155 @@ export function FloatingCopilot() {
       const screenArmed = sendScreenKeyframeRef.current;
       let currentScreenText = screenTextRef.current;
 
-      // Vision adapter OCR skip logic (Req 2.1, 2.2, 2.3, 2.4):
-      // - Vision_Adapter + keyframe available → skip OCR entirely
-      // - Vision_Adapter + keyframe fails → fall back to OCR path
-      // - Text_Only_Adapter → always obtain Screen_Text via OCR
+      // Vision routing (Req 2.1, 2.2, 2.3, 2.4):
+      // - A vision provider is reachable → send pixels, skip text extraction
+      // - No vision provider → obtain Screen_Text via UIA/OCR
+      //
+      // `isVisionAdapter` asks only about the *first* adapter in priority order;
+      // `hasVisionProvider` asks whether *any* usable adapter accepts images. The
+      // second is the question that matters when deciding to capture pixels,
+      // because the dispatch below sets `requireImageInput` and the router then
+      // walks past the text-only adapters to reach the vision one. Using the
+      // narrower check is what pushed setups that already had Gemini configured
+      // through PowerShell and Tesseract for no reason.
+      // Both questions below are answered from the router's adapter list, and
+      // that list is populated lazily — by `streamAIResponse`, which runs *after*
+      // this point. On the first dispatch of a session the router can still be
+      // empty here, and an empty router answers "nothing reads images", which
+      // sends a perfectly vision-capable setup down the PowerShell + Tesseract
+      // chain and pays ten seconds for text a vision model never needed. Worse,
+      // a dispatch that then aborts for want of grounding never reaches the sync
+      // either, so the click after it is cold in exactly the same way.
+      //
+      // `warmProviders` is idempotent and short-circuits on an unchanged config
+      // hash, so once warm this is a single IndexedDB read.
+      if (screenArmed) {
+        await warmProviders(currentApiKey);
+        sw.mark('providers');
+      }
+
       const isVisionAdapter = activeAdapterSupportsImageInput();
+      const visionAvailable = !forceTextChain && (isVisionAdapter || hasVisionProvider());
       let keyframeForContext: { mimeType: string; base64: string } | null = null;
       let ocrSkippedForVision = false;
 
       // Phone Camera Input: if a phone image is pending, use it directly
       // as the keyframe and skip all screen capture paths.
       if (phoneImageRef.current) {
-        keyframeForContext = phoneImageRef.current;
+        const pending = phoneImageRef.current;
         phoneImageRef.current = null; // consume once
         ocrSkippedForVision = true;
         currentScreenText = '';
-      } else if (screenArmed) {
-        if (isVisionAdapter) {
-          // Priority 1: UI Automation text extraction (bypasses display affinity completely).
-          // This reads the foreground window's accessibility tree directly — works even
-          // when the window has WDA_EXCLUDEFROMCAPTURE. Try this FIRST.
-          if (typeof window !== 'undefined' && window.electronAPI?.extractForegroundText) {
-            try {
-              const uia = await window.electronAPI.extractForegroundText();
-              if (uia.ok && uia.text && uia.text.length > 20) {
-                // Got meaningful text from the UI tree — use it as screen context
-                currentScreenText = uia.text;
-                screenTextRef.current = uia.text;
-                ocrSkippedForVision = true;
-                console.log(`[FloatingCopilot] UI Automation extracted ${uia.text.length} chars from foreground window`);
-              }
-            } catch { /* ignore, fall through to image capture */ }
-          }
 
-          // Priority 2: Native BitBlt capture (only if UI Automation didn't get text)
-          if (!currentScreenText) {
-            const useNativeCapture = typeof window !== 'undefined' && window.electronAPI?.captureDesktopBitBlt;
-            if (useNativeCapture) {
-              try {
-                const bitblt = await window.electronAPI!.captureDesktopBitBlt();
-                if (bitblt.ok && bitblt.base64) {
-                  keyframeForContext = { mimeType: 'image/jpeg', base64: bitblt.base64 };
-                  ocrSkippedForVision = true;
-                  currentScreenText = '';
-                  console.log('[FloatingCopilot] Using BitBlt native capture');
-                }
-              } catch (err) {
-                console.warn('[FloatingCopilot] BitBlt capture failed:', err);
+        if (visionAvailable) {
+          keyframeForContext = pending;
+        } else {
+          // A text-only model cannot read the photo, and the adapter drops it
+          // before the request goes out — so passing it through produces a prompt
+          // with nothing in it. OCR is the only way this capture reaches the model.
+          const photoText = await raceTimeout(
+            ocrBase64Image(pending.base64, pending.mimeType),
+            OCR_TIMEOUT_MS,
+            '',
+          ).catch(() => '');
+          if (photoText.length > 20) {
+            currentScreenText = photoText;
+            screenTextRef.current = photoText;
+            console.log(`[FloatingCopilot] OCR'd pending image into ${photoText.length} chars for text-only model`);
+          } else {
+            console.warn('[FloatingCopilot] Pending image had no legible text for a text-only model');
+          }
+        }
+      } else if (screenArmed) {
+        // Determine if this call originated from handleUseScreen (first click)
+        // which already prefetched fresh context, vs a subsequent user query
+        // (e.g. typing "next") that needs a NEW capture of the current screen.
+        const calledFromUseScreenButton = useScreenPendingRef.current;
+        const alreadyHasContext = calledFromUseScreenButton && currentScreenText && currentScreenText.length > 20;
+
+        if (!visionAvailable) {
+          // Why the slow chain is about to run. The text chain costs a PowerShell
+          // spawn plus a Tesseract pass — 10 s and up on this machine — so when
+          // it runs despite a vision model being configured, that has to be
+          // visible rather than inferred from the absence of a log line.
+          // eslint-disable-next-line no-console
+          console.log(
+            `[FloatingCopilot] Text chain: forceTextChain=${forceTextChain} activeAdapterVision=${isVisionAdapter} anyVisionAdapter=${hasVisionProvider()}`,
+          );
+        }
+
+        // Set when the native capture reports the foreground window is excluded
+        // from capture (`WDA_MONITOR` / `WDA_EXCLUDEFROMCAPTURE`). Every pixel
+        // source is then a dead end — BitBlt reads the window behind the protected
+        // one and getDisplayMedia blacks it out — so the flag exists to stop a
+        // later pixel attempt from succeeding with the wrong screen. Declared out
+        // here because the text chain below needs it too.
+        let captureProtected = false;
+
+        if (visionAvailable) {
+          // ---- PIXEL PATH ----------------------------------------------------
+          // A vision model can read the screen directly, which makes every text
+          // extraction step on this path pure overhead. BitBlt is a native
+          // GetDC(NULL) + BitBlt through koffi — tens of milliseconds — whereas
+          // UI Automation spawns powershell.exe and walks the accessibility tree,
+          // and Tesseract is seconds. So when pixels are acceptable to the model,
+          // capture pixels and stop.
+          //
+          // This also removes the reason the old chain preferred text: it was
+          // guarding against a text-only model 404-ing on an image. `dispatch`
+          // below passes `requireImageInput`, so the router skips text-only
+          // adapters instead of failing on them, and the guard is unnecessary.
+          if (alreadyHasContext) {
+            ocrSkippedForVision = true;
+            console.log(`[FloatingCopilot] Using prefetched screen text (${currentScreenText.length} chars)`);
+          } else if (typeof window !== 'undefined' && window.electronAPI?.captureDesktopBitBlt) {
+            const bitblt = await raceTimeout(
+              window.electronAPI.captureDesktopBitBlt(),
+              BITBLT_TIMEOUT_MS,
+              { ok: false } as BitBltResult,
+            ).catch(() => ({ ok: false } as BitBltResult));
+
+            if (bitblt.ok && bitblt.base64) {
+              keyframeForContext = { mimeType: 'image/jpeg', base64: bitblt.base64 };
+              ocrSkippedForVision = true;
+              currentScreenText = '';
+              telemetry.emit({ kind: 'screen.ocrSkipped', reason: 'vision-adapter' });
+              if (bitblt.bytes) {
+                sw.note(`shot ${Math.round(bitblt.bytes / 1024)}KB ${bitblt.width}x${bitblt.height}`);
               }
+              console.log('[FloatingCopilot] BitBlt → vision model (no OCR, no UIA)');
+            } else if (bitblt.reason === 'capture-protected') {
+              // Not a failure — a refusal, and the only correct one. The pixels of
+              // a protected window are unreadable by every capture API available
+              // here, and the previous behaviour was to hand the model a valid JPEG
+              // of whatever sat behind it and answer fast and wrong.
+              captureProtected = true;
+              sw.note('capture-protected');
+              // eslint-disable-next-line no-console
+              console.log(
+                '[FloatingCopilot] Foreground window is capture-protected — UI Automation is the only path to its text',
+              );
+            } else {
+              // The pixel path failing silently is what sends a vision-capable
+              // setup down the 10-second text chain, so name the cause. A blank
+              // `reason` means `raceTimeout` won — the capture overran
+              // BITBLT_TIMEOUT_MS rather than reporting an error.
+              // eslint-disable-next-line no-console
+              console.warn(
+                `[FloatingCopilot] BitBlt returned no pixels (${bitblt.reason ?? `timeout >${BITBLT_TIMEOUT_MS}ms`}) — falling through to the text chain`,
+              );
             }
           }
 
-          // Priority 3: Standard getKeyframeAsync (web mode or if above methods fail)
-          if (!keyframeForContext && !currentScreenText) {
+          // getDisplayMedia keyframe — the web-mode equivalent of BitBlt, and the
+          // fallback when the native module is unavailable.
+          //
+          // Skipped outright on a protected window: display affinity was designed
+          // to defeat exactly this API, so it returns a frame with the window
+          // blacked out. That frame is not empty, so it would satisfy the check
+          // below and suppress the text chain — trading a working UI Automation
+          // read for a picture of a black rectangle.
+          if (!keyframeForContext && !ocrSkippedForVision && !captureProtected) {
             try {
               const keyframeResult = await getKeyframeAsyncRef.current();
               if (keyframeResult) {
@@ -650,33 +1128,171 @@ export function FloatingCopilot() {
                 ocrSkippedForVision = true;
                 currentScreenText = '';
                 telemetry.emit({ kind: 'screen.ocrSkipped', reason: 'vision-adapter' });
-              } else {
-                void captureTextNowRef.current().then((fresh) => {
-                  if (fresh) screenTextRef.current = fresh;
-                });
               }
-            } catch {
-              void captureTextNowRef.current().then((fresh) => {
-                if (fresh) screenTextRef.current = fresh;
-              });
-            }
+            } catch { /* fall through to the text chain */ }
           }
-        } else {
-          // Text_Only_Adapter: always obtain Screen_Text via OCR (Req 2.2, 2.4).
-          // Fire-and-forget: kick off an OCR pass in the background so the
-          // NEXT request benefits from fresher text. This does NOT block
-          // dispatch (Req 1.3). The dedup gate in ocrWorker ensures we reuse
-          // any in-flight pass rather than starting a duplicate (Req 1.5).
-          void captureTextNowRef.current().then((fresh) => {
+        }
+
+        // ---- TEXT CHAIN ------------------------------------------------------
+        // Reached when no vision provider is configured, or when every pixel
+        // capture above failed. Shared by both cases rather than duplicated per
+        // adapter kind: the steps and their order are identical, only the reason
+        // for being here differs.
+        if (!keyframeForContext && !ocrSkippedForVision) {
+          // UI Automation is the only source that survives
+          // SetWindowDisplayAffinity, so it stays first despite being the
+          // slowest — on a protected window the alternatives return nothing.
+          if (
+            !alreadyHasContext
+            && typeof window !== 'undefined'
+            && window.electronAPI?.extractForegroundText
+          ) {
+            try {
+              const uia = await raceTimeout(
+                window.electronAPI.extractForegroundText(),
+                captureProtected ? UIA_PROTECTED_TIMEOUT_MS : UIA_TIMEOUT_MS,
+                { ok: false, text: '' },
+              );
+              if (uia.ok && uia.text && uia.text.length > 20) {
+                currentScreenText = uia.text;
+                screenTextRef.current = uia.text;
+                console.log(`[FloatingCopilot] UI Automation got ${uia.text.length} chars`);
+              }
+            } catch { /* fall through to OCR */ }
+          }
+
+          // OCR the live getDisplayMedia frame.
+          //
+          // Skipped on a protected window. Display affinity blanks this API by
+          // design, so Tesseract would be run for its full timeout against a black
+          // rectangle — seconds spent to learn nothing, on the one path where the
+          // remaining time matters most.
+          if ((!currentScreenText || currentScreenText.length <= 20) && !captureProtected) {
+            const fresh = await raceTimeout(captureTextNowRef.current(), OCR_TIMEOUT_MS, '');
             if (fresh) {
+              currentScreenText = fresh;
               screenTextRef.current = fresh;
             }
-          });
+          }
+
+          // Last resort: BitBlt, then OCR the frame it returns.
+          //
+          // `captureTextNow` OCRs the `getDisplayMedia` video frame, so it returns
+          // '' whenever that stream is unavailable. BitBlt reaches pixels that API
+          // cannot — a window on a display it was not granted, for one.
+          //
+          // It does not reach a capture-protected window: the native side refuses
+          // and returns `capture-protected`, so this block costs one IPC round trip
+          // and stops. Left unguarded deliberately, because the refusal belongs in
+          // one place rather than being restated at every call site.
+          if (
+            (!currentScreenText || currentScreenText.length <= 20)
+            && typeof window !== 'undefined'
+            && window.electronAPI?.captureDesktopBitBlt
+          ) {
+            const bitblt = await raceTimeout(
+              window.electronAPI.captureDesktopBitBlt(),
+              BITBLT_TIMEOUT_MS,
+              { ok: false } as BitBltResult,
+            ).catch(() => ({ ok: false } as BitBltResult));
+
+            if (bitblt.ok && bitblt.base64) {
+              const shotText = await raceTimeout(
+                ocrBase64Image(bitblt.base64),
+                OCR_TIMEOUT_MS,
+                '',
+              ).catch(() => '');
+              if (shotText.length > 20) {
+                currentScreenText = shotText;
+                screenTextRef.current = shotText;
+                console.log(`[FloatingCopilot] BitBlt+OCR got ${shotText.length} chars`);
+              }
+            }
+          }
         }
       }
+      sw.mark('capture');
+
+      // Is this a screen-grounded dispatch? When it is, the question itself is
+      // in the captured pixels or UI text, and the fast path applies: an exact
+      // hash cache instead of an embedding-similarity one, and a context window
+      // assembled without Knowledge_Base or Memory_Store retrieval. Both of
+      // those otherwise run Transformers.js forward passes on the
+      // single-threaded WASM backend, which is where the bulk of the old
+      // click-to-first-token time went.
+      //
+      // Gated on the button being armed, NOT on grounding having materialised.
+      // The reverse — requiring real screen text or a keyframe — reads as the
+      // more careful choice, on the reasoning that a capture which came back
+      // empty is exactly when retrieval has something left to contribute. That
+      // reasoning is wrong here, because it prices retrieval at the deadline
+      // (600 ms) rather than at what it actually costs. Embeddings run on the
+      // renderer main thread and cannot be preempted by the deadline, so the
+      // true cost is seconds — and it buys Knowledge_Base hits for a question
+      // the model cannot see, which is not an answer the User can use anyway.
+      // Routing failed captures into the slowest path produced the observed
+      // 20–60 s dispatch that still replied "no conversation context".
+      //
+      // `hasScreenGrounding` is kept for the cache key and telemetry below: a
+      // dispatch with nothing captured must not be stored under, or served from,
+      // a key that claims a screen.
+      //
+      // A keyframe only counts when *some* reachable adapter can read it. A
+      // text-only model has its images stripped before the request is sent, so an
+      // image-only capture is indistinguishable from no capture at all from the
+      // model's side — counting it as grounding is what let an empty prompt reach
+      // the provider and come back as "no conversation context was included".
+      // With `requireImageInput` set on the dispatch the router routes past those
+      // adapters, so the question is `visionAvailable`, not "is the first one".
+      const hasScreenGrounding =
+        (currentScreenText ? currentScreenText.trim().length >= 24 : false)
+        || (keyframeForContext !== null && visionAvailable);
+      const useFastPath = screenArmed || hasScreenGrounding;
+
+      const currentOrigin = dispatchOriginRef.current;
+      dispatchOriginRef.current = 'manual';
+      const isRealtimeAudio = currentOrigin === 'realtime-audio';
+      const utteranceEndAt = Date.now();
 
       // Determine the core query for caching purposes
       const coreQuery = query || (currentTranscript.length > 0 ? currentTranscript[currentTranscript.length - 1].text : '');
+      inFlightQuestionRef.current = coreQuery;
+
+      // A screen dispatch with nothing captured and nothing typed cannot succeed.
+      // There is no question in the prompt — not a vague one, none — so the round
+      // trip can only come back as the model reporting an empty context, after the
+      // User has already waited out the whole capture chain. Say so directly
+      // instead, and keep the armed state so the next attempt is one click.
+      if (screenArmed && !hasScreenGrounding && !coreQuery.trim()) {
+        console.warn('[FloatingCopilot] Screen dispatch aborted: no capture and no query');
+        sw.report('aborted — no grounding');
+        setChatHistory(prev => [...prev, {
+          id: generateId(),
+          role: 'assistant',
+          text: 'Could not read the screen. Make sure the target window is visible and in front, then try again.',
+        }]);
+        setIsLoading(false);
+        isLoadingRef.current = false;
+        setIsStreaming(false);
+        isStreamingRef.current = false;
+        return;
+      }
+
+      const applyCachedAnswer = (text: string, isSimulated: boolean): boolean => {
+        // Only apply if this request is still current
+        if (requestIdRef.current !== currentRequestId) return true;
+        setAiResponse({ text, suggestions: [], followUps: [], isSimulated });
+        setChatHistory(prev => [...prev, { id: generateId(), role: 'assistant', text, isSimulated }]);
+        if (!isSimulated && text.trim()) {
+          broadcastToPhoneRef.current(text, coreQuery);
+        }
+        setIsLoading(false);
+        isLoadingRef.current = false;
+        setIsStreaming(false);
+        isStreamingRef.current = false;
+        setAiSuggestionCount(prev => prev + 1);
+        return true;
+      };
 
       // Resolve the frame hash for screen-aware cache keying (Req 6.1).
       // The latestFrameHashRef is updated every time getKeyframeAsync runs
@@ -686,84 +1302,106 @@ export function FloatingCopilot() {
         ? latestFrameHashRef.current
         : null;
 
-      // Screen-aware cache lookup (Req 6.1, 6.2):
-      // When screen context is armed, key the lookup on query + Frame_Hash so
-      // repeated questions about an unchanged screen hit instantly.
-      if (coreQuery && screenArmed) {
-        try {
-          const { hit } = await semanticCache.getWithFrame({
+      // Fast-path cache lookup: synchronous, exact-match on
+      // mode + query + screen text + image. No embedding, so a miss costs
+      // effectively nothing (Req 6.1, 6.2 in spirit — same "unchanged screen
+      // answers instantly" guarantee, without the WASM round trip).
+      const fastKey = hasScreenGrounding
+        ? screenCacheKey({
+            mode: currentActiveMode,
             query: coreQuery,
-            frameHash: currentFrameHash,
-          });
-          if (hit) {
-            // Only apply if this request is still current
-            if (requestIdRef.current !== currentRequestId) return;
-            console.log('Screen-aware cache hit for:', coreQuery);
-            setAiResponse({
-              text: hit.text,
-              suggestions: [],
-              followUps: [],
-              isSimulated: hit.isSimulated,
-            });
-            setChatHistory(prev => [...prev, { id: generateId(), role: 'assistant', text: hit.text, isSimulated: hit.isSimulated }]);
-            setIsLoading(false);
-            setIsStreaming(false);
-            isStreamingRef.current = false;
-            setAiSuggestionCount(prev => prev + 1);
-            return;
-          }
-        } catch {
-          // Cache lookup threw — treat as miss and proceed normally (Error Handling: Cache lookup throws)
-        }
-      }
+            screenText: currentScreenText || '',
+            imageBase64: keyframeForContext?.base64 ?? null,
+          })
+        : null;
 
-      // Non-screen Semantic Cache check.
-      //
-      // Skipped while screen context is armed: the screen-aware lookup above
-      // handles that case with frame-hash keying.
-      if (coreQuery && !screenArmed) {
-        const { hit } = await semanticCache.get(coreQuery);
-        if (hit) {
-          // Only apply if this request is still current
-          if (requestIdRef.current !== currentRequestId) return;
-          console.log('Semantic cache hit for:', coreQuery);
-          // Normalize cache hit to the AIResponse shape expected by UI components
-          setAiResponse({
-            text: hit.text,
-            suggestions: [],
-            followUps: [],
-            isSimulated: hit.isSimulated,
-          });
-          // Append cached assistant message to chat history
-          setChatHistory(prev => [...prev, { id: generateId(), role: 'assistant', text: hit.text, isSimulated: hit.isSimulated }]);
-          setIsLoading(false);
-          setIsStreaming(false);
-          isStreamingRef.current = false;
-          setAiSuggestionCount(prev => prev + 1);
+      if (fastKey) {
+        const cached = getScreenCached(fastKey);
+        if (cached) {
+          console.log('[FloatingCopilot] screen fast-cache hit');
+          sw.report('fast-cache hit');
+          applyCachedAnswer(cached.text, cached.isSimulated);
           return;
         }
       }
 
-      const context = await buildContextWindow(
-        currentActiveMode,
-        toLegacyTranscript(currentTranscript),
-        currentScreenText,
-        query || '',
-        currentCustomModes,
-        // Vision adapter with successful keyframe: use the already-captured keyframe (Req 2.1).
-        // Text_Only_Adapter or keyframe failure: no image attachment.
-        // Legacy path: synchronous keyframe when adapter supports images but new path not active.
-        keyframeForContext
-          ? { images: [keyframeForContext] }
-          : (!ocrSkippedForVision && sendScreenKeyframeRef.current && activeAdapterSupportsImageInput()
-              ? (() => {
-                  const base64 = getKeyframeBase64Ref.current();
-                  return base64
-                    ? { images: [{ mimeType: 'image/jpeg', base64 }] }
-                    : undefined;
-                })()
-              : undefined),
-      );
+      // Realtime audio exact-match fast cache lookup (0ms async cost)
+      const convKey = isRealtimeAudio && coreQuery
+        ? conversationCacheKey({ mode: currentActiveMode, query: coreQuery })
+        : null;
+
+      if (convKey) {
+        const cached = getScreenCached(convKey);
+        if (cached) {
+          console.log('[FloatingCopilot] realtime conversational fast-cache hit');
+          sw.report('conv-fast-cache hit');
+          applyCachedAnswer(cached.text, cached.isSimulated);
+          return;
+        }
+      }
+
+      // Embedding-backed Semantic Cache — manual conversational path only.
+      // Skipped on screen fast path AND realtime audio questions to avoid WASM latency.
+      if (coreQuery && !useFastPath && !isRealtimeAudio) {
+        const { hit } = await raceTimeout(
+          semanticCache.get(coreQuery),
+          SEMANTIC_CACHE_DEADLINE_MS,
+          { hit: null, similarity: 0 },
+        ).catch(() => ({ hit: null, similarity: 0 }));
+        if (hit) {
+          console.log('Semantic cache hit for:', coreQuery);
+          sw.report('semantic-cache hit');
+          applyCachedAnswer(hit.text, hit.isSimulated);
+          return;
+        }
+      }
+      sw.mark('cache');
+
+      const contextImages = keyframeForContext
+        ? { images: [keyframeForContext] }
+        : (!ocrSkippedForVision && sendScreenKeyframeRef.current && visionAvailable
+            ? (() => {
+                const base64 = getKeyframeBase64Ref.current();
+                return base64
+                  ? { images: [{ mimeType: 'image/jpeg', base64 }] }
+                  : undefined;
+              })()
+            : undefined);
+
+      // The prompt's only grounding is the image when nothing textual survived the
+      // capture chain. Telling the router that turns a guaranteed non-answer into
+      // either an answer or a diagnosable error.
+      const imageIsOnlyGrounding =
+        (contextImages?.images?.length ?? 0) > 0
+        && (currentScreenText ? currentScreenText.trim().length < 24 : true);
+
+      const context = useFastPath
+        ? await buildMinimalScreenContext(
+            currentActiveMode,
+            toLegacyTranscript(currentTranscript),
+            currentScreenText,
+            query || '',
+            currentCustomModes,
+            contextImages,
+          )
+        : isRealtimeAudio
+          ? await buildRealtimeConversationContext(
+              currentActiveMode,
+              toLegacyTranscript(currentTranscript),
+              coreQuery,
+              currentCustomModes,
+            )
+          : await buildContextWindow(
+              currentActiveMode,
+              toLegacyTranscript(currentTranscript),
+              currentScreenText,
+              query || '',
+              currentCustomModes,
+              // Vision adapter with successful keyframe: use the already-captured
+              // keyframe (Req 2.1).
+              { ...contextImages, retrievalDeadlineMs: RETRIEVAL_DEADLINE_MS },
+            );
+      sw.mark('context');
 
       // Check if this request is still current after async context build
       if (requestIdRef.current !== currentRequestId) return;
@@ -792,30 +1430,70 @@ export function FloatingCopilot() {
           onToken: (partialText) => {
             // Discard late tokens: only update state if requestId matches (Req 12.2)
             if (requestIdRef.current !== currentRequestId) return;
-            if (!isStreamingRef.current) {
+             if (!isStreamingRef.current) {
+              sw.mark('ttft');
+              sw.report(useFastPath ? 'fast path (screen)' : isRealtimeAudio ? 'fast path (realtime-audio)' : 'full path');
               setIsLoading(false);
+              isLoadingRef.current = false;
               setIsStreaming(true);
               isStreamingRef.current = true;
+
+              if (isRealtimeAudio) {
+                const detectToDispatchMs = Math.round(performance.now() - dispatchStartMs);
+                const utteranceEndToFirstTokenMs = Date.now() - utteranceEndAt;
+                telemetry.emit({
+                  kind: 'realtime.dispatch',
+                  source: 'final',
+                  detectToDispatchMs,
+                  utteranceEndToFirstTokenMs,
+                });
+              }
             }
             setStreamingText(partialText);
+          },
+          onReasoning: (cumulativeReasoning) => {
+            if (requestIdRef.current !== currentRequestId) return;
+            // Deliberately does NOT flip `isStreaming`/`isLoading`: the answer
+            // has not started, and treating reasoning as the answer would make
+            // `onToken`'s first-token bookkeeping — and the `ttft` mark — lie.
+            // The reasoning phase gets its own indicator instead.
+            setReasoningText(cumulativeReasoning);
           },
           onComplete: (response) => {
             // Discard completion from aborted stream (Req 12.2)
             if (requestIdRef.current !== currentRequestId) return;
-            // Save to Semantic Cache if it was a good response.
-            // When screen context is armed, store with frame hash so repeated
-            // questions about an unchanged screen hit instantly (Req 6.1, 6.2).
-            if (coreQuery && !response.isSimulated && response.text.trim()) {
-              if (screenArmed && currentFrameHash) {
-                void semanticCache.setWithFrame(
-                  { query: coreQuery, frameHash: currentFrameHash },
-                  {
+            // Save to cache if it was a good response.
+            if (!response.isSimulated && response.text.trim()) {
+              if (useFastPath) {
+                // Exact-hash store, mirroring the exact-hash lookup above.
+                setScreenCached(fastKey, {
+                  text: response.text,
+                  isSimulated: response.isSimulated,
+                });
+                if (coreQuery && currentFrameHash) {
+                  void semanticCache.setWithFrame(
+                    { query: coreQuery, frameHash: currentFrameHash },
+                    {
+                      text: response.text,
+                      isSimulated: response.isSimulated,
+                      status: (response as any).status ?? 200,
+                    },
+                  ).catch(() => undefined);
+                }
+              } else if (isRealtimeAudio && convKey) {
+                // Exact-hash store for conversational fast path
+                setScreenCached(convKey, {
+                  text: response.text,
+                  isSimulated: response.isSimulated,
+                });
+                if (coreQuery) {
+                  void semanticCache.set(coreQuery, {
                     text: response.text,
                     isSimulated: response.isSimulated,
                     status: (response as any).status ?? 200,
-                  },
-                );
-              } else {
+                  }).catch(() => undefined);
+                }
+              } else if (coreQuery) {
                 void semanticCache.set(coreQuery, {
                   text: response.text,
                   isSimulated: response.isSimulated,
@@ -826,9 +1504,14 @@ export function FloatingCopilot() {
             setAiResponse(response);
             // Append assistant message to chat history
             setChatHistory(prev => [...prev, { id: generateId(), role: 'assistant', text: response.text, isSimulated: response.isSimulated }]);
+            if (!response.isSimulated && response.text.trim()) {
+              broadcastToPhoneRef.current(response.text, coreQuery);
+            }
             setStreamingText('');
+            setReasoningText('');
             setIsStreaming(false);
             isStreamingRef.current = false;
+            isLoadingRef.current = false;
             setAiSuggestionCount(prev => prev + 1);
 
             // Increment usage limit after a successful generation (not simulated)
@@ -836,11 +1519,13 @@ export function FloatingCopilot() {
               incrementUsage('aiResponseCount');
             }
           },
+          onMetrics: (metrics) => {
+            // eslint-disable-next-line no-console
+            console.log(
+              `[perf] answered by ${metrics.model} — ttft ${Math.round(metrics.timeToFirstToken)}ms | provider ${Math.round(metrics.totalLatency)}ms | wall ${sw.elapsed()}ms`,
+            );
+          },
           onProviderFallback: (error) => {
-            // Every real provider failed and simulation is about to answer.
-            // Name the actual cause — the generic "add your Gemini key" banner
-            // on the simulated reply misattributes wrong-model / no-credit /
-            // model-disabled failures to a missing credential.
             if (requestIdRef.current !== currentRequestId) return;
             toast.error(`AI provider unavailable: ${describeProviderFailure(error)}`, {
               duration: 7000,
@@ -848,14 +1533,18 @@ export function FloatingCopilot() {
           },
           onError: (error) => {
             if (error.name === 'AbortError') {
-              return; // Ignore aborted requests
+              setIsLoading(false);
+              isLoadingRef.current = false;
+              setIsStreaming(false);
+              isStreamingRef.current = false;
+              return;
             }
-            // Discard errors from stale requests
             if (requestIdRef.current !== currentRequestId) return;
             toast.error('AI streaming encountered an error. Please try again.');
             setIsStreaming(false);
             isStreamingRef.current = false;
             setIsLoading(false);
+            isLoadingRef.current = false;
             setAiResponse({
               text: 'Sorry, I encountered an error generating a response. Please try again.',
               suggestions: [],
@@ -865,18 +1554,60 @@ export function FloatingCopilot() {
           },
         },
         currentApiKey,
-        abortControllerRef.current.signal
+        abortControllerRef.current.signal,
+        {
+          requireImageInput: imageIsOnlyGrounding,
+          preferFastModel: useFastPath || isRealtimeAudio,
+          reasoningEffort: (useFastPath || isRealtimeAudio) ? 'low' : undefined,
+        }
       );
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
-        return; // Ignore aborted requests
+        // Reset loading state on abort so buttons don't get stuck
+        setIsLoading(false);
+        isLoadingRef.current = false;
+        setIsStreaming(false);
+        isStreamingRef.current = false;
+        return;
       }
       // Discard errors from stale requests
       if (requestIdRef.current !== currentRequestId) return;
+
+      // The screen was captured as pixels but nothing can read pixels. This is a
+      // configuration gap, not a transport failure, so retrying the same way is
+      // pointless. Retry once down the text chain — UI Automation and OCR are
+      // slow, but slow and answered beats fast and wrong — and only report the
+      // gap if that pass also comes back with nothing.
+      if (error instanceof NoVisionProviderError) {
+        sw.report('no vision provider — retrying via text');
+        setIsStreaming(false);
+        isStreamingRef.current = false;
+        setIsLoading(false);
+        isLoadingRef.current = false;
+        if (!forceTextChain) {
+          console.warn('[FloatingCopilot] No image-capable provider — falling back to the text chain');
+          forceTextChainRef.current = true;
+          // Force a genuine re-capture. `screenTextRef` can still hold text from
+          // an earlier question — the pixel path only cleared its local copy — and
+          // `useScreenPendingRef` would let the retry treat that as "already have
+          // context", answering the previous question instead of this one.
+          screenTextRef.current = '';
+          useScreenPendingRef.current = false;
+          void triggerAIRef.current?.(query);
+          return;
+        }
+        const msg = 'I captured the screen as an image, but none of your configured models can read images, and reading it as text did not work either. Add a vision provider (Gemini or OpenAI) in Settings → AI Providers, or bring the target window to the front and try again.';
+        setChatHistory(prev => [...prev, { id: generateId(), role: 'assistant', text: msg }]);
+        setAiResponse({ text: msg, suggestions: [], followUps: [], isSimulated: true });
+        toast.error('No image-capable model configured', { duration: 7000 });
+        return;
+      }
+
       toast.error('AI generation failed. Please try again.');
       setIsStreaming(false);
       isStreamingRef.current = false;
       setIsLoading(false);
+      isLoadingRef.current = false;
       setAiResponse({
         text: 'Sorry, I encountered an error generating a response. Please try again.',
         suggestions: [],
@@ -917,7 +1648,25 @@ export function FloatingCopilot() {
   // capture and clears the flag. Cluely-parity: the button stays "active"
   // (blue tint) while screen context is armed, off otherwise. Errors are
   // surfaced via toast so failures never silently disappear.
+  //
+  // FIX: On the first click, we now await fresh screen context BEFORE
+  // dispatching to the AI. The old code fired triggerAI immediately while
+  // getDisplayMedia was still pending, which meant the AI received empty
+  // context and answered "I'm ready to help" or "no question found."
+  const useScreenPendingRef = useRef(false);
   const handleUseScreen = useCallback(async () => {
+    // Debounce: ignore repeated clicks while a request is in flight.
+    // Safety: if pending was stuck (IPC hung), force-reset it
+    // so the button doesn't stay permanently unresponsive.
+    if (useScreenPendingRef.current) {
+      // If AI is no longer loading/streaming, the pending flag is stale — reset it
+      if (!isLoadingRef.current && !isStreamingRef.current) {
+        useScreenPendingRef.current = false;
+      } else {
+        return;
+      }
+    }
+
     try {
       const isActive = screen.isCapturing && sendScreenKeyframeRef.current;
       if (isActive) {
@@ -929,32 +1678,251 @@ export function FloatingCopilot() {
         return;
       }
 
+      // If screen is already armed but getDisplayMedia isn't capturing
+      // (e.g. on Electron where BitBlt/UIA is used instead), clicking again
+      // means "re-capture the current screen and ask AI". Don't redo the
+      // full prefetch — just dispatch triggerAI which handles fresh capture.
+      if (sendScreenKeyframeRef.current) {
+        // Skip if AI is already working
+        if (isLoadingRef.current || isStreamingRef.current) return;
+        const query = inputText.trim();
+        const echoed = query || 'Answer the question on my screen';
+        setChatHistory(prev => [...prev, { id: generateId(), role: 'user', text: echoed }]);
+        if (query) setInputText('');
+        if (isNativeOverlay && (overlayModeRef.current === 'compact' || overlayModeRef.current === 'expanded')) {
+          setOverlayMode('maximized');
+        }
+        triggerAIRef.current(query || undefined).catch((err) => {
+          if (err?.name !== 'AbortError') {
+            console.error('[FloatingCopilot] UseScreen re-trigger failed:', err);
+          }
+        });
+        return;
+      }
+
+      // Mark pending immediately for debounce + visual feedback
+      useScreenPendingRef.current = true;
+
       // Toggle ON: arm the flag IMMEDIATELY for instant visual feedback.
-      // The actual capture (BitBlt/UI Automation/getDisplayMedia) happens
-      // lazily when triggerAI runs — not here.
       sendScreenKeyframeRef.current = true;
       setSendScreenKeyframe(true);
       void knowledgeBase.setSetting('sendScreenKeyframe', true);
 
-      // Start the video capture in the background (non-blocking).
-      // If it fails (e.g. user cancels permission), we still have
-      // BitBlt and UI Automation as fallbacks.
+      // Start getDisplayMedia in the background (non-blocking). We don't
+      // wait for it because BitBlt/UI Automation are faster fallbacks.
       if (!screen.isCapturing) {
         screen.startCapture().then(() => {
           void warmOcrWorker();
         }).catch(() => {
-          // getDisplayMedia failed/cancelled — that's fine, we have fallbacks
           console.log('[FloatingCopilot] getDisplayMedia unavailable, using fallback capture');
         });
       }
 
-      // Fire the AI request immediately — triggerAI handles capture internally
-      // via BitBlt/UI Automation/keyframe. No need to wait for video frame.
+      // --- PRE-FETCH fresh screen context before calling AI ---
+      // This ensures the first click gets real content instead of empty context.
+      const prefetchSw = makeStopwatch('useScreen.prefetch');
+      let prefetchedText = '';
+      let prefetchedImage: { base64: string; mimeType: string } | null = null;
+
+      // Can anything reachable read pixels? If so, that is the whole prefetch:
+      // one native BitBlt and dispatch. UI Automation exists to turn a screen into
+      // text for models that cannot see, and Tesseract exists as its fallback —
+      // both are wasted work in front of a vision model, and both are the reason
+      // "Use Screen" took tens of seconds.
+      //
+      // Synced first for the same reason as in `triggerAI`: this question is
+      // answered from the router's adapter list, and on the first click of a
+      // session that list has not been populated yet. Asking it cold answers "no"
+      // and buys the slow chain.
+      await warmProviders(apiKeyRef.current);
+      prefetchSw.mark('providers');
+      const visionAvailable = activeAdapterSupportsImageInput() || hasVisionProvider();
+
+      // As in `triggerAI`: a protected foreground window makes every pixel source
+      // a dead end, and the getDisplayMedia fallback below would otherwise satisfy
+      // itself with a blacked-out frame and skip the text chain entirely.
+      let captureProtected = false;
+
+      if (visionAvailable && typeof window !== 'undefined' && window.electronAPI?.captureDesktopBitBlt) {
+        const bitblt = await raceTimeout(
+          window.electronAPI.captureDesktopBitBlt(),
+          BITBLT_TIMEOUT_MS,
+          { ok: false } as BitBltResult,
+        ).catch(() => ({ ok: false } as BitBltResult));
+
+        if (bitblt.ok && bitblt.base64) {
+          prefetchedImage = { mimeType: 'image/jpeg', base64: bitblt.base64 };
+          console.log('[FloatingCopilot] UseScreen prefetch: BitBlt → vision model');
+        } else if (bitblt.reason === 'capture-protected') {
+          captureProtected = true;
+          console.log('[FloatingCopilot] UseScreen prefetch: window is capture-protected → UI Automation');
+        }
+        prefetchSw.mark('bitblt-vision');
+      }
+
+      if (visionAvailable && !prefetchedImage && !captureProtected && screen.isCapturing) {
+        // Native module unavailable (non-Windows, koffi missing). getDisplayMedia
+        // reaches everything except display-affinity windows.
+        try {
+          const kf = await getKeyframeAsyncRef.current();
+          if (kf) {
+            prefetchedImage = { mimeType: 'image/jpeg', base64: kf.base64 };
+            console.log('[FloatingCopilot] UseScreen prefetch: keyframe → vision model');
+          }
+        } catch { /* fall through to the text chain */ }
+      }
+
+      // Text chain — no vision provider configured, or every pixel capture failed.
+      if (!prefetchedImage) {
+      // UI Automation and BitBlt are started together rather than in sequence.
+      //
+      // They were sequential because they are *preference*-ordered: UIA text beats
+      // an image, so asking for the image only after UIA fails reads as avoiding
+      // wasted work. But the work being avoided is a native BitBlt — tens of
+      // milliseconds — while the wait it imposes is a PowerShell spawn plus a full
+      // accessibility-tree walk. Ordering them made the cheap call wait on the
+      // expensive one, so the two costs added instead of overlapping. Preference
+      // order is preserved below by which result is *consumed* first, not by which
+      // request is issued first.
+      const uiaPromise =
+        typeof window !== 'undefined' && window.electronAPI?.extractForegroundText
+          ? raceTimeout(
+              window.electronAPI.extractForegroundText(),
+              captureProtected ? UIA_PROTECTED_TIMEOUT_MS : UIA_TIMEOUT_MS,
+              { ok: false, text: '' } as { ok: boolean; text?: string },
+            ).catch(() => ({ ok: false, text: '' }))
+          : Promise.resolve({ ok: false, text: '' } as { ok: boolean; text?: string });
+
+      const bitbltPromise =
+        typeof window !== 'undefined' && window.electronAPI?.captureDesktopBitBlt
+          ? raceTimeout(
+              window.electronAPI.captureDesktopBitBlt(),
+              BITBLT_TIMEOUT_MS,
+              { ok: false } as BitBltResult,
+            ).catch(() => ({ ok: false } as BitBltResult))
+          : Promise.resolve({ ok: false } as BitBltResult);
+
+      // Priority 1: UI Automation text (survives SetWindowDisplayAffinity)
+      const uia = await uiaPromise;
+      if (uia.ok && uia.text && uia.text.length > 20) {
+        prefetchedText = uia.text;
+        console.log(`[FloatingCopilot] UseScreen prefetch: UI Automation got ${uia.text.length} chars`);
+      }
+      prefetchSw.mark('uia');
+
+      // Priority 2: the BitBlt image, already in flight
+      if (!prefetchedText) {
+        const bitblt = await bitbltPromise;
+        if (bitblt.ok && bitblt.base64) {
+          prefetchedImage = { mimeType: 'image/jpeg', base64: bitblt.base64 };
+          console.log('[FloatingCopilot] UseScreen prefetch: BitBlt captured image');
+        }
+        prefetchSw.mark('bitblt');
+      }
+
+      // Priority 3: If getDisplayMedia resolved fast enough, try keyframe.
+      // Not on a protected window — display affinity blanks this API by design.
+      if (!prefetchedText && !prefetchedImage && !captureProtected && screen.isCapturing) {
+        try {
+          const kf = await getKeyframeAsyncRef.current();
+          if (kf) {
+            prefetchedImage = { mimeType: 'image/jpeg', base64: kf.base64 };
+            console.log('[FloatingCopilot] UseScreen prefetch: keyframe captured');
+          }
+        } catch { /* fall through */ }
+      }
+
+      // Last resort: OCR the current video frame. Skipped on a protected window,
+      // where that frame is a black rectangle and Tesseract would burn its whole
+      // timeout confirming it.
+      if (!prefetchedText && !prefetchedImage && !captureProtected) {
+        try {
+          const ocrText = await raceTimeout(captureTextNowRef.current(), OCR_TIMEOUT_MS, '');
+          if (ocrText && ocrText.length > 10) {
+            prefetchedText = ocrText;
+            console.log(`[FloatingCopilot] UseScreen prefetch: OCR got ${ocrText.length} chars`);
+          }
+        } catch { /* fall through */ }
+      }
+
+      // An image is only context if the model can actually see it.
+      //
+      // Against a text-only adapter it is not merely less useful — it is dropped
+      // outright before the request is sent, so a capture that succeeded still
+      // reaches the model as an empty prompt and comes back as "no conversation
+      // context was included". OCR the frame instead: slower than sending pixels,
+      // but it is the difference between an answer and no answer.
+      if (prefetchedImage && !prefetchedText && !visionAvailable) {
+        const imageText = await raceTimeout(
+          ocrBase64Image(prefetchedImage.base64, prefetchedImage.mimeType),
+          OCR_TIMEOUT_MS,
+          '',
+        ).catch(() => '');
+        if (imageText.length > 20) {
+          prefetchedText = imageText;
+          prefetchedImage = null;
+          console.log(`[FloatingCopilot] UseScreen prefetch: OCR'd BitBlt image into ${imageText.length} chars for text-only model`);
+        } else {
+          // Nothing legible in the frame. Drop the image rather than dispatching
+          // one that will be stripped, so the "could not capture" branch below
+          // reports the truth instead of the model doing it for us.
+          prefetchedImage = null;
+          console.warn('[FloatingCopilot] UseScreen prefetch: image OCR yielded no usable text on a text-only model');
+        }
+        prefetchSw.mark('image-ocr');
+      }
+      }
+
+      prefetchSw.report(
+        prefetchedText ? `text ${prefetchedText.length} chars` : prefetchedImage ? 'image' : 'empty',
+      );
+
+      // If still nothing, inform the user instead of sending empty context
+      if (!prefetchedText && !prefetchedImage) {
+        console.warn('[FloatingCopilot] UseScreen: No screen content captured on first click');
+        // Don't call AI with empty context — that's what causes "ready to help"
+        // Set a minimal fallback message in chat
+        setChatHistory(prev => [...prev, {
+          id: generateId(),
+          role: 'assistant',
+          text: 'Could not read the screen. Make sure the target window is visible and in front, then try again.',
+        }]);
+        useScreenPendingRef.current = false;
+        return;
+      }
+
+      // --- We have fresh context. Now update refs and dispatch to AI. ---
+
+      // Store prefetched text into screenTextRef so triggerAI picks it up
+      if (prefetchedText) {
+        screenTextRef.current = prefetchedText;
+      }
+
+      // Store prefetched image into phoneImageRef (reuse the same path
+      // triggerAI already supports for phone camera images)
+      if (prefetchedImage && !prefetchedText) {
+        phoneImageRef.current = prefetchedImage;
+      }
+
       const query = inputText.trim();
       const echoed = query || 'Answer the question on my screen';
       setChatHistory(prev => [...prev, { id: generateId(), role: 'user', text: echoed }]);
       if (query) setInputText('');
-      await triggerAIRef.current(query || undefined);
+
+      // Auto-expand overlay so the answer is visible
+      if (isNativeOverlay && (overlayModeRef.current === 'compact' || overlayModeRef.current === 'expanded')) {
+        setOverlayMode('maximized');
+      }
+
+      // Dispatch to AI — don't await the full streaming response here.
+      // Release the pending lock immediately so buttons stay responsive
+      // while the AI streams its answer in the background.
+      // Wrap in catch to prevent unhandled rejections from freezing the renderer.
+      triggerAIRef.current(query || undefined).catch((err) => {
+        if (err?.name !== 'AbortError') {
+          console.error('[FloatingCopilot] UseScreen triggerAI failed:', err);
+        }
+      });
     } catch (err) {
       console.error('[FloatingCopilot] Use Screen failed:', err);
       toast.error(
@@ -962,8 +1930,10 @@ export function FloatingCopilot() {
           ? `Screen capture failed: ${err.message}`
           : 'Screen capture failed',
       );
+    } finally {
+      useScreenPendingRef.current = false;
     }
-  }, [screen, inputText]);
+  }, [screen, inputText, isNativeOverlay, setOverlayMode, raceTimeout]);
 
   // Phone Camera Input toggle handler
   // Click once -> Starts server & opens QR overlay (turns button active).
@@ -1026,6 +1996,7 @@ export function FloatingCopilot() {
     }
 
     setStreamingText('');
+    setReasoningText('');
     setIsStreaming(false);
     isStreamingRef.current = false;
     setIsLoading(false);
@@ -1048,8 +2019,6 @@ export function FloatingCopilot() {
     systemAudio.disable();
     screen.stopCapture();
     questionDetectorRef.current.reset();
-
-    setIsGeneratingSummary(true);
 
     // Build transcript from the merged mic + system-audio lines, plus the
     // flushed interim line from stop() to avoid data loss. Re-sort so the
@@ -1090,22 +2059,20 @@ export function FloatingCopilot() {
       wordsPerMinute: coaching?.wordsPerMinute || 0,
     });
 
-    // Set up cancellation support (Requirement 27.4)
-    const summaryAbortController = new AbortController();
-    summaryAbortControllerRef.current = summaryAbortController;
+    // Navigate IMMEDIATELY with the placeholder meeting so the UI feels instant.
+    // Summary generation runs in the background and updates the meeting record
+    // in IndexedDB — the detail page can poll or show a "generating..." state.
+    stopCopilot(placeholderMeeting);
 
-    // Step 2-4: Generate summary with 60s timeout (Requirements 27.2, 27.3)
-    const result = await generateSummaryWithTimeout(
+    // Fire-and-forget: generate summary in the background (Requirements 27.2, 27.3)
+    const summaryAbortController = new AbortController();
+    generateSummaryWithTimeout(
       placeholderMeeting,
       apiKey,
       summaryAbortController.signal,
-    );
-
-    summaryAbortControllerRef.current = null;
-    setIsGeneratingSummary(false);
-
-    // Navigate to meeting detail with the final meeting state
-    stopCopilot(result.meeting);
+    ).catch((err) => {
+      console.warn('[FloatingCopilot] Background summary generation failed:', err);
+    });
   }, [speech, systemAudio, mergedTranscript, screen, activeMode, elapsedTime, aiSuggestionCount, coaching, apiKey, stopCopilot, isGeneratingSummary]);
 
   // Nudge step for 8-direction reposition shortcuts (Req 18.4)
@@ -1165,28 +2132,6 @@ export function FloatingCopilot() {
           </button>
 
           <div className="copilot-bg-content">
-            {isGeneratingSummary && !isHidden && (
-              <div className="detached-warning" style={{ padding: '20px', textAlign: 'center', color: 'var(--primary-color)' }}>
-                <div style={{ marginBottom: '10px' }}>
-                  <Sparkles size={24} className="spin" />
-                </div>
-                <h4>Generating Summary...</h4>
-                <p style={{ fontSize: '13px', marginTop: '8px' }}>
-                  Zule is reviewing the transcript to create your meeting notes and action items.
-                </p>
-                <button
-                  className="btn-secondary"
-                  style={{ marginTop: '12px', fontSize: '12px' }}
-                  onClick={() => {
-                    if (summaryAbortControllerRef.current) {
-                      summaryAbortControllerRef.current.abort();
-                    }
-                  }}
-                >
-                  Cancel Summary
-                </button>
-              </div>
-            )}
           </div>
         </div>
       )}
@@ -1217,8 +2162,7 @@ export function FloatingCopilot() {
             : { left: position.x, top: position.y }
         }
       >
-        {/* Update indicator — absolutely positioned, no layout impact (Req 7.1, 7.3) */}
-        {isNativeOverlay && <UpdateIndicator status={updateState.status} />}
+        {/* Main Control Capsule */}
 
         <ControlCapsule
           isHidden={isHidden}
@@ -1293,13 +2237,18 @@ export function FloatingCopilot() {
               <span>{MODE_CONFIGS[activeMode].icon}</span>
               <span>{MODE_CONFIGS[activeMode].label}</span>
             </div>
-            {/* Manual "Assist now" — forces an AI answer from the recent
-                transcript even when no question was auto-detected (auto-detect
-                can miss when transcription is imperfect). */}
+            {/* Manual "Assist now" — answers the most recently detected question
+                if there is one (auto-detect fires but a dispatch can be
+                suppressed while another is in flight), otherwise falls back to
+                letting the model read the recent transcript. */}
             <button
               type="button"
               className="card-assist-now-btn"
-              onClick={() => triggerAI()}
+              onClick={() => {
+                const detected = lastDetectedQuestionRef.current;
+                if (detected) dispatchOriginRef.current = 'realtime-audio';
+                void triggerAI(detected || undefined);
+              }}
               disabled={isLoading || isStreaming}
               aria-label="Get an AI answer now from the recent conversation"
             >
@@ -1324,6 +2273,14 @@ export function FloatingCopilot() {
               ratings, and follow-ups. When content overflows, only this region scrolls.
               Header and bottom controls stay permanently anchored. */}
           <div className="card-scroll-body">
+            {/* Detected question notification banner */}
+            {detectedQuestion && (
+              <div className="detected-question-banner" aria-live="assertive">
+                <span className="detected-question-icon">🎯</span>
+                <span className="detected-question-label">Detected question:</span>
+                <span className="detected-question-text">"{detectedQuestion}"</span>
+              </div>
+            )}
             {/* Live captions — confirm transcription is working at a glance.
                 A short rolling window of recent lines (newest last), labelled by
                 speaker, with any in-progress speech shown as a live pulsing line.
@@ -1364,26 +2321,19 @@ export function FloatingCopilot() {
                   <button
                     className="copy-response-btn"
                     onClick={() => {
-                      let copied = false;
-                      try {
-                        if (navigator.clipboard && navigator.clipboard.writeText) {
-                          navigator.clipboard.writeText(msg.text);
-                          copied = true;
+                      void copyTextToClipboard(msg.text).then((ok) => {
+                        // Report what actually happened. A toast that says
+                        // "Copied" over an empty clipboard is worse than no
+                        // toast: the User pastes into their editor and finds
+                        // nothing, with no reason to suspect the copy.
+                        if (ok) {
+                          toast.success('Copied to clipboard', { duration: 1500 });
+                        } else {
+                          toast.error('Could not copy — select the text and press Ctrl+C', {
+                            duration: 2500,
+                          });
                         }
-                      } catch {}
-                      if (!copied) {
-                        try {
-                          const ta = document.createElement('textarea');
-                          ta.value = msg.text;
-                          ta.style.position = 'fixed';
-                          ta.style.left = '-9999px';
-                          document.body.appendChild(ta);
-                          ta.select();
-                          document.execCommand('copy');
-                          document.body.removeChild(ta);
-                        } catch {}
-                      }
-                      toast.success('Copied to clipboard', { duration: 1500 });
+                      });
                     }}
                     aria-label="Copy response"
                   >
@@ -1398,6 +2348,7 @@ export function FloatingCopilot() {
                 isLoading={isLoading}
                 isStreaming={isStreaming}
                 streamingText={streamingText}
+                reasoningText={reasoningText}
                 aiResponse={null}
                 onTriggerAI={triggerAI}
                 modalitiesUsed={modalitiesUsed}

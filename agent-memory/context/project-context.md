@@ -5134,3 +5134,458 @@ kiosk-mode browsers) from forcibly closing or hiding the Zule overlay:
 
 **Files modified:** `electron/overlayManager.ts` only.
 **Verification:** `get_diagnostics` clean, zero TypeScript errors.
+
+
+---
+
+## Fix: AI Response Latency with "Use Screen" + Nemotron/OpenRouter (2026-08-26)
+
+**Problem:** When using "Use Screen" with Nemotron 3.5 Lightning via OpenRouter,
+the first click responds in ~2s but subsequent queries (typing "next") required
+toggling Use Screen off/on to get a response. Without toggling, responses took
+10-30s inconsistently.
+
+**Root Cause:** In `triggerAI` (FloatingCopilot.tsx), the `alreadyHasContext`
+optimization checked if `screenTextRef.current` had >20 chars. On subsequent
+queries, this always held stale text from the PREVIOUS question, causing:
+1. AI answered the OLD question (stale text reuse)
+2. If user toggled off/on: full re-initialization added 10-30s latency
+3. OpenRouter 404 on image input for text-only Nemotron → retry without image → double round-trip
+
+**Fix (src/components/FloatingCopilot.tsx):**
+1. Replaced `alreadyHasContext` with `calledFromUseScreenButton = useScreenPendingRef.current`
+   — only skips fresh capture on the initial "Use Screen" click (which prefetches).
+   All subsequent queries ALWAYS force fresh UI Automation → BitBlt capture.
+2. Text_Only_Adapter path: changed from fire-and-forget to awaited fresh capture
+   (UIA first, OCR fallback), so the CURRENT request gets fresh screen content.
+3. BitBlt Priority 2: when image is captured, try OCR first to extract text.
+   If OCR succeeds, use text instead of image — avoids OpenRouter 404 + retry
+   for text-only models like Nemotron. Only sends raw image if OCR fails.
+4. All builds (tsc, vite, electron) pass cleanly.
+
+**Expected behavior after fix:**
+- User clicks "Use Screen" once → fast response (~2s)
+- User types "next" (or any query) → fresh screen capture + fast response (~2-3s)
+- No toggle off/on needed between questions
+- Consistent latency regardless of which question number
+
+## 2026-08-27 — Latency fast path (click → first token ~2–3s)
+
+- 2026-08-27: Removed all three Transformers.js embedding passes from the screen-grounded dispatch path, parallelized + deadline-capped KB/memory retrieval on the conversational path, warmed providers and redaction rules at idle after mount, halved capture timeouts, dropped the duplicate UIA capture in triggerAI, and added [perf] stage instrumentation.
+
+**Root cause of the 20–30s MCQ latency:** every screen dispatch ran three sequential WASM forward passes on the critical path — semanticCache.getWithFrame(), knowledgeBase.search(), memoryStore.search() — plus a cold provider registration (IndexedDB read + key decryption + dynamic adapter import) and a redundant second UI-tree walk, all before the request left the process.
+
+**What changed:**
+1. src/brain/contextManager.ts — new buildMinimalScreenContext() skips KB/memory retrieval entirely (contextBuilder.build() is synchronous, so the only await left is a memoized redaction-rule load). buildContextWindow() now runs both searches concurrently and races them against retrievalDeadlineMs (600ms default); the searches keep running past the deadline so the warmed model speeds up the next dispatch. Redaction rules are memoized behind primeFastContext() / invalidateRedactionRuleCache().
+2. src/brain/screenFastCache.ts (new) — zero-async exact-match (FNV-1a) response cache for the screen path, replacing the embedding-based lookup. Bounded at 32 entries, LRU-refresh on hit, rejects simulated responses.
+3. src/brain/aiProvider.ts — warmProviders() so first request skips cold adapter registration.
+4. src/components/FloatingCopilot.tsx — fast-path gate requires real grounding (>=24 chars screen text or a keyframe), so a blind screen-armed dispatch still takes the full retrieval path; idle warm-up effect on mount; named capture timeouts (UIA 1200ms, BitBlt 1500ms, OCR 1500ms, was 3000ms each); OCR calls wrapped in raceTimeout; alreadyHasContext guard added to the text-only adapter branch to stop the double capture; makeStopwatch() emits [perf] marks at capture/cache/context/ttft.
+
+**Privacy note:** redaction is NOT shortcut on the fast path — skipRedaction stays false, so the attestation still stamps applied: true (Req 2.9). Only retrieval is skipped.
+
+**Verification:** vite build passes; tsc -b reports no new errors from these files (the two in FloatingCopilot.tsx — unused screenContextGuardRef, BitBlt TS2722 — are present at HEAD); test suite 3415 passed / 47 failed, all 47 pre-existing and unrelated (stale electron session mock, fast-check seeds, UpdateBanner).
+
+**Deferred:** ~92 pre-existing tsc -b errors across the repo remain unfixed at the User's request — to be addressed separately.
+
+## 2026-08-27 — Latency round 2: capture chain was the real cost
+
+- 2026-08-27: Fixed the regressions and misdiagnoses from round 1 after the User reported 20–60s dispatches and occasional "No conversation context was included" replies.
+
+**What round 1 got wrong:**
+1. The deadline caps were decorative. transformersEnv pins the ONNX WASM backend to numThreads=1 and proxy=false, so embeddings run ON THE RENDERER MAIN THREAD. A Promise.race against setTimeout cannot preempt them — the timer cannot fire while WASM holds the event loop. RETRIEVAL_DEADLINE_MS / SEMANTIC_CACHE_DEADLINE_MS only bound the awaitable parts (IndexedDB, hydration). Comments corrected to say so.
+2. OCR_TIMEOUT_MS was set to 1500ms. Tesseract on a full frame needs seconds, so the cap converted a slow success into a hard failure returning "". Raised to 8000ms: OCR is the LAST text source, so its alternative is no screen text at all, not a cheaper capture.
+3. The useFastPath gate required grounding to have materialised. That routed exactly the failed-capture case into the full retrieval path — the slowest one — because it priced retrieval at the 600ms deadline instead of its real main-thread cost. Now gated on screenArmed. hasScreenGrounding is retained only for cache keying and the fail-fast check.
+
+**The dominant cost, found this round:** electron/win32/uiAutomation.ts extractForegroundText does NOT call a native API — it spawns powershell.exe, loads System.Windows.Automation, and walks every descendant of the foreground window with three pattern queries each. Its docstring claims 200–500ms; a browser window has thousands of accessibility nodes and the native side allows itself 5s. UIA_TIMEOUT_MS=1200 therefore expired before it could ever succeed, on precisely the windows it exists to serve. Raised to 4000ms.
+
+**The empty-prompt bug (ss2):** with UIA expired, the chain fell to BitBlt, which succeeds and returns an IMAGE. Nemotron is text-only, so the adapter strips the image before sending — a capture that worked still reached the model as an empty prompt. Fixes:
+- src/utils/ocrImage.ts (new) — ocrBase64Image() decodes base64 to a canvas and runs the existing OCR worker. The worker only accepted canvas/video, so there was no route from BitBlt or Phone Camera output to text.
+- FloatingCopilot: on a text-only adapter, an image-only capture is OCR'd in handleUseScreen, in the phoneImageRef branch, and via a new BitBlt+OCR last resort in the text-only branch of triggerAI (captureTextNow OCRs the getDisplayMedia frame, which is empty for display-affinity windows — the exact case the chain exists for).
+- hasScreenGrounding now counts a keyframe only when activeAdapterSupportsImageInput().
+- triggerAI aborts with a plain message when screen-armed with no grounding and no query, instead of spending a round trip to have the model report the empty context.
+
+**Other wins:** handleUseScreen now starts UIA and BitBlt CONCURRENTLY (preference order preserved by which result is consumed, not which is issued) so a native BitBlt no longer waits on a PowerShell spawn. knowledgeBase.search() and memoryStore.search() now check for an empty corpus BEFORE embedding — previously an empty KB still cost a full main-thread forward pass. Fast cache keyed on hasScreenGrounding, not useFastPath, so two ungrounded "next" dispatches cannot collide on a query-only key.
+
+**Verification:** vite build passes; no new tsc errors (FloatingCopilot 394/845 and memoryStore 18/19/79 all confirmed identical at HEAD); full suite 3417 passed / 45 failed across the same 7 files that failed before the change.
+
+**Still open — the structural fix:** UIA is on the critical path as a per-dispatch PowerShell spawn. The real answer is a long-lived PowerShell host talking over stdin/stdout, and/or extracting in the background while armed so dispatch reads a ref. Not attempted yet; needs a decision on process lifecycle.
+- 2026-08-27: Screen dispatch rerouted to a vision model (pixel-first). FloatingCopilot capture chain split: when any reachable adapter accepts images (hasVisionProvider), Use Screen does BitBlt only (~50ms native GetDC+BitBlt via koffi) and sends pixels — no PowerShell UI Automation spawn, no Tesseract. The UIA -> captureTextNow -> BitBlt+OCR text chain is now shared and reached only when no vision provider exists or every pixel capture failed. Both handleUseScreen prefetch and triggerAI follow the same split.
+- 2026-08-27: Router-level vision routing. CallOpts.requireImageInput filters failover to image-capable adapters; NoVisionProviderError raised when none exist (nothing is attempted — it is a config gap, not a failed request). New AI_Provider_Router.hasImageCapableAdapter() answers "any usable adapter", not "the first one" (getActiveAdapterCapabilities reported only the head of the priority list, which forced the OCR detour on setups that already had Gemini configured).
+- 2026-08-27: Gateway capability claims are now verified at runtime. custom.ts declares imageInput: true (deliberate, commit 008100a) but a gateway fronts many models and most are text-only. The router now marks an adapter image-incapable on an image-rejection error (isImageUnsupportedError moved to providers/http.ts so router and aiProvider share one definition), fails over to the next vision adapter, and remembers the verdict until re-registration. Guarded on prompt.images being non-empty so an unrelated error mentioning "multimodal" cannot brand an adapter.
+- 2026-08-27: streamAIResponse no longer retries text-only when the caller set requireImageInput — the image was the only grounding, so dropping it produces the "No conversation context was included" non-answer. Throws NoVisionProviderError instead; FloatingCopilot catches it, sets forceTextChainRef and re-dispatches once down the text chain (clearing screenTextRef/useScreenPendingRef so it is a genuine re-capture), and only then shows an actionable Settings message.
+- 2026-08-27: Verified — vite build passes; tsc -b shows only pre-existing TS6133s in touched files; full suite 3427 passed / 45 failed across the same 7 pre-existing failing files (releaseGates, reparent.degradation, reparent.roundtrip, UpdateBanner, dualModeOverlay.bugcondition, useZuleError, dualModeOverlay.preservation). 10 new tests added (8 router requireImageInput/runtime-rejection cases, 2 aiProvider). NOT measured: no click-to-first-token number from a running app — latency figures remain arithmetic from code inspection.
+- 2026-08-28: Diagnosed 60s DSA latency as a thinking-model reasoning phase that rendered nothing: openAICompatible read only delta.content, so qwen3-vl-thinking reasoning frames were dropped and the overlay sat on a static "Thinking..." spinner.
+- 2026-08-28: Added extractDeltaReasoning (delta.reasoning + delta.reasoning_content) and an optional onReasoning callback threaded through StreamCallbacks, providerRouter, aiProvider, and FloatingCopilot; Anthropic thinking_delta handled too.
+- 2026-08-28: SuggestionCard now shows a live "Reasoning - Ns - N tokens" readout with a collapsible trace tail instead of a bare spinner, so a long think is visibly progressing.
+- 2026-08-28: Raised the custom provider default max_tokens 2048 to 8192 because a thinking model spends that budget on reasoning before the answer starts, which was truncating hard DSA solutions; added a warning when a stream ends with reasoning but empty text.
+- 2026-08-28: Verified - 4 new reasoning-delta tests, 87/87 passing across the adapter+router suites, vite build clean, no new tsc errors in touched files.
+- 2026-08-28: Confirmed live from the overlay readout that the reasoning phase is the whole cost - qwen3-vl-235b-a22b-thinking produced 3099 reasoning tokens in 52s (~60 tok/s) for the LFU Cache question, which also proves the old 2048 max_tokens would have truncated it outright.
+- 2026-08-28: Added ReasoningEffort (none|low|medium|high) to CallOpts plus defaultReasoningEffort on OpenAICompatibleAdapter; emits OpenRouter-style reasoning:{effort} and maps none to reasoning:{enabled:false} since thinking-baked variants reject effort:none.
+- 2026-08-28: Custom provider now defaults to reasoning effort low (DEFAULT_REASONING_EFFORT in custom.ts).
+- 2026-08-28: Guarded the extension: a 4xx naming reasoning triggers one retry without the field and disables it for that adapter permanently; 401/402/403/429/5xx deliberately excluded so router failover and cooldown still see real errors.
+- 2026-08-28: Verified - 169/169 passing across all provider+router suites (10 new reasoning tests), vite build clean, no new tsc errors.
+- 2026-08-28: Added a second model slot on the custom endpoint: preferFastModel on CallOpts plus fastModelId on OpenAICompatibleAdapter/CustomOpenAICompatibleAdapter/ProviderConfig, so screen questions reach a non-thinking model while everything else keeps the smart one. Boolean rather than a model id so router failover never carries a foreign model name.
+- 2026-08-28: Screen dispatch in FloatingCopilot now sends preferFastModel + reasoningEffort none; both degrade to today's behaviour when the provider has neither configured, so the feature ships dark until the fast model is filled in.
+- 2026-08-28: Answer-first output: ANSWER_FIRST_DIRECTIVE prepended to every screen prompt in buildMinimalScreenContext, and modePrompts coding-interview no longer says to give hints instead of solutions.
+- 2026-08-28: BitBlt capture was sending a full-resolution quality-85 JPEG; now downscaled to a 1600px longest edge at quality 80 via the existing downscaleSize, and returns byte count + dimensions so the [perf] line can attribute latency to payload size.
+- 2026-08-28: New src/brain/providers/modelCatalog.ts - GET /models discovery plus a streaming speed probe that reports first-word latency, words/sec, and whether the model deliberated first. Deliberately no hardcoded recommended-model list: free-tier ids churn weekly, so the User measures their own gateway.
+- 2026-08-28: Settings custom provider section gained a Fast model field, a Load models button feeding a shared datalist, a per-field Test speed button, and a thinking-model advisory driven by looksLikeThinkingModel.
+- 2026-08-28: Verified - 179/179 provider+router suites (10 new), 21/21 new modelCatalog tests, 8/8 customProviderConfig, 8/8 SettingsCustomProvider, vite build clean, no new tsc errors (UpdateBanner.test.ts failure is pre-existing and unrelated).
+
+- 2026-08-28: makeStopwatch gained elapsed() - the total without reprinting the stage breakdown - and the screen dispatch now logs a second [perf] line from onMetrics naming the model that actually answered plus ttft, provider latency and wall clock. AIResponse carries no model id, so onComplete could not do it.
+- 2026-08-28: Verified - 205/205 provider+router+catalog tests across 14 files, 8/8 customProviderConfig, 8/8 SettingsCustomProvider, vite build clean in 8.01s, tsc -b back to the 77-error pre-existing baseline with no new errors.
+- 2026-08-28: Live run showed 156s total = capture 13s + ttft 143s, and no model id anywhere in the log. Root causes found: openAICompatible never called cb.onMetrics (only simulation did), so the resolved model id was unobservable; and the vision decision in triggerAI/handleUseScreen reads the router adapter list before streamAIResponse lazily populates it, so the first screen dispatch of a session answers no vision provider and takes the PowerShell+Tesseract text chain.
+- 2026-08-28: Fixes - openAICompatible.streamGenerate now emits onMetrics (modelId, ttftMs, totalMs, retries) with ttft falling back to total on a reasoning-only stream; triggerAI and handleUseScreen await warmProviders before deciding vision; ensureProvidersSynced records its config hash only after the pass completes so a mid-sync throw can no longer wedge a session with zero adapters.
+- 2026-08-28: UI Automation got a one-strike session circuit breaker in the extract-foreground-text IPC handler plus stderr in the failure reason - it was failing on this machine and costing ~5s per dispatch with an unexplainable Command failed message. no-text is deliberately not a strike.
+- 2026-08-28: Added pixel-path diagnostics: a line naming forceTextChain/activeAdapterVision/anyVisionAdapter whenever the text chain is chosen, and the BitBlt reason (or timeout) when the pixel path returns nothing.
+- 2026-08-28: Measured after the fixes, same machine and same question class as the 156s baseline: providers 26ms | capture 151ms | cache 6ms | context 1ms | ttft 1195ms | shot 156KB 1600x900, answered by qwen3-vl-235b-a22b-instruct, full answer at 11.2s wall. Capture 13s to 151ms; first token 143s to 1.2s. Plan snuggly-honking-metcalfe complete and verified live.
+- 2026-08-28: Committed the Use Screen latency work as c1c65b6 on feat/focusless-overlay-v1.5.0 (43 files) - fast-model slot, warmProviders-before-vision-decision, onMetrics emission, BitBlt downscale, UIA circuit breaker.
+- 2026-08-28: Tested Use Screen against a WDA_EXCLUDEFROMCAPTURE window (scripts/protected-window.ps1). Added scripts/bitblt-probe.mjs and scripts/uia-probe.mjs. Findings: the GetDC(NULL)+BitBlt bypass no longer works on Win11 26200 (protected rect captures the window behind it, not black); BitBlt still returns ok+valid JPEG so the app sends a wrong frame at full speed with no detection; UI Automation reads the protected window in 1606ms/317 chars and is the working path; GetWindowDisplayAffinity is a 1-call exact protection test; the UIA one-strike breaker wrongly treats a 5s timeout as a permanent machine failure.
+- 2026-08-28: Routed capture-protected windows to UI Automation. desktopCapture.foregroundWindowIsCaptureProtected() checks GetWindowDisplayAffinity (excluding own-process windows by pid); capture-desktop-bitblt returns ok:false reason:capture-protected before encoding; FloatingCopilot skips the getDisplayMedia keyframe and the Tesseract passes when protected and gives UIA 5500ms instead of 4000ms; UIA breaker no longer strikes on a 5s timeout (tree size is a property of the window, not the machine). Corrected the desktopCapture header, which claimed GetDC(NULL) sees through display affinity.
+- 2026-08-28: Verified the protected-window fix live: capture-protected detected, UIA got 317 chars in 2869ms, first token at 3710ms, full answer 8413ms via qwen3-vl-235b-a22b-instruct - correct question text reached the model. Open issue: with reasoningEffort none the answer-first directive makes the model emit a wrong MCQ letter (B) then self-correct to A mid-answer.
+- 2026-08-28: Fixed the stuck-spinner/empty-answer bug: the router treated a resolved streamGenerate as success even when zero tokens reached the consumer, so an empty Anthropic stream logged "succeeded", skipped failover, and left the card spinning. stream() and complete() now count content, withhold an empty onComplete, hold a pre-content onError, and fail over with EmptyCompletionError (6 new tests, 36 pass).
+- 2026-08-28: Fixed the overlay copy button: navigator.clipboard.writeText always REJECTS on the NOACTIVATE focusless overlay ("Document is not focused"), and a synchronous try/catch cannot catch a rejection, so the execCommand fallback never ran and the "Copied" toast lied. Extracted copyTextToClipboard(), awaited it, and the toast now reports the real outcome.
+- 2026-08-28: Diagnosed why the fast model never ran: the persisted provider priority puts anthropic ahead of custom, and only the custom adapter honours preferFastModel/fastModelId. Settings-level fix (priority arrows / enable toggle), not a code change.
+- 2026-08-28: Made AnthropicAdapter work against Anthropic-compatible resale gateways — Authorization: Bearer for non-official hosts, OpenAI-dialect SSE + non-SSE JSON salvage, event:error and 200-wrapped error envelopes surfaced through onError with the key masked; router warn line now quotes the withheld reason.
+- 2026-08-28: Diagnosed the live Anthropic gateway failure from the new self-reporting error — Base URL was the bare host https://tokenbom.com, so the adapter POSTed the site homepage; a pathless Anthropic Base URL is now completed to /v1/messages, and tokenbom advertises OpenAI-compatible endpoints only so the Anthropic slot should be disabled or demoted below custom in Settings.
+- 2026-08-28: Brought the Anthropic adapter to latency parity with the custom OpenAI-compatible one — fastModelId + preferFastModel resolution (explicit > fast > default) on both call paths, an onMetrics frame so the overlay perf line attributes Anthropic answers to a model, wiring through aiProvider registration, and a Fast model field in the Anthropic Settings panel.
+- 2026-08-28: Added model discovery to the Anthropic Settings panel (Load models button + shared datalist for both model fields) via a new messagesEndpointToApiRoot helper, because the Anthropic Base URL is a full Messages endpoint and GET /models lives one segment higher; user had put claude-sonnet-5 in the fast slot so ttft stayed ~4.4s.
+- 2026-08-28: Replaced the <datalist> model dropdown in Settings with a scrollable, styled ModelCombobox (keyboard nav, filter-as-you-type, match highlighting, :free badge) so the Load models list can actually be scrolled and read.
+
+---
+
+## Dashboard Premium Redesign — 2026-08-28
+
+Completely refactored Dashboard UI to a Cluely-inspired premium design:
+
+### CSS (Dashboard.css)
+- Rewrote all styles from scratch (~720 lines)
+- New sections: greeting bar, hero v2, stat strip, main grid, sessions panel, quick-start panel
+- Glassmorphism hero with animated radial gradient mesh + 3 floating orbs (blue/purple/green)
+- Top shimmer line on hero via ::before
+- Glowing primary CTA button with pulse-ring animation
+- Ghost secondary button for Quick Assist
+- 4 stat cards with colored glow icon backgrounds (blue/purple/green/amber)
+- Session cards with animated left accent bar on hover (::after)
+- Session actions hidden, slide in on hover
+- Quick-start cards with section labels (Custom / Templates), arrow reveal on hover
+- Responsive grid (4->2->1 col) at 900px and 600px
+
+### TSX (Dashboard.tsx)
+- Added getGreeting() helper (morning/afternoon/evening)
+- Greeting bar with eyebrow text + pulsing 'AI Ready' status pill
+- Hero uses new class names: dash-hero, dash-hero-bg, hero-orbs, dash-hero-content, hero-eyebrow, dash-hero-title, hero-gradient, hero-cta-row, hero-start-btn, hero-ghost-btn
+- Stats strip: stat-card + stat-icon-bg.{blue|purple|green|amber} + stat-number/stat-label
+- Sessions: dash-panel > session-list > session-card (no bento grid)
+- Quick-start: qs-section-label + qs-card + qs-icon/qs-info/qs-arrow
+- Added Zap icon from lucide for Quick Assist button
+
+Build: tsc --noEmit = 0 errors, vite build = success 2.35s
+
+---
+
+## Dashboard Hero Section Big-Tech Level Revamp — 2026-08-28
+
+Revamped hero section to match high-tier senior designer / big-tech (Linear/Raycast/Cluely) standards:
+- Two-column balanced split grid with precision layout
+- Micro-matrix dot canvas background + ambient soft violet/indigo glow backlighting
+- Top specular edge highlight line
+- Left column: Stealth pill tag, luxury display typography with silver/liquid gradient, high-finish primary CTA with inset specular lighting + shortcut tag [↵], secondary glass button, trust badges
+- Right column: Live Stealth HUD interactive preview card featuring live system audio feed, animated 6-bar equalizer visualizer, simulated interviewer speech bubble, instant AI whisper response box with 99.4% confidence match, and telemetry chips
+- Telemetry stats cards with upward trend indicators and inset icon depth
+- Build: tsc passes 0 errors, vite build passes.
+
+---
+
+## Cluely-Inspired Minimal Dark Aesthetic Overhaul — 2026-08-28
+
+Refactored Dashboard to an ultra-clean, minimal, dark aesthetic in the style of Cluely / Linear:
+- Removed all purple gradients, saturated blue glowing orbs, and rainbow icon boxes
+- Pure dark obsidian background (#09090b / #0d0d11) with razor-thin zinc borders (#1f1f24)
+- Crisp monochrome typography: pure white titles (#ffffff) and clean muted zinc subtext (#a1a1aa)
+- Signature solid white primary button with dark text ([ ▶ Start Copilot ↵ ]) + dark zinc secondary button
+- Refined stealth HUD mockup in dark obsidian with monochrome audio visualizer and minimal green match tag
+- Telemetry stats cards redesigned with neutral dark zinc icon containers (#15151a)
+- Clean monochrome preset items and session list
+- Build: tsc passes with 0 errors, vite build passes.
+
+---
+
+## Minimal Classy Cluely-Style Hero & Dashboard Simplification — 2026-08-28
+
+Removed excessive clutter from the hero section and unified the entire dashboard around a minimal, classy dark aesthetic:
+- Removed fake interview mockup card, cluttered trust checkmarks, and excessive badges from hero
+- Created a spacious, elegant hero card with a bold pure-white title ('Your AI Meeting Copilot'), clean subtext, and a signature crisp white pill CTA button + dark glass Quick Assist button
+- Clean 4-card stats row (Sessions, Time Guided, AI Suggestions, Avg Confidence) with unified dark zinc icon containers
+- Refined 2-column bottom layout: Recent Sessions with clean hover rows + Quick Start mode templates
+- Build verification: tsc 0 errors, vite build passes.
+
+---
+
+## Subtle Visual Color & Sidebar Luxury Refactor — 2026-08-28
+
+- Added tasteful, muted visual color accents to Dashboard:
+  - Ambient soft aura glow behind hero card
+  - Muted ambient tints for stat icons (soft blue, purple, green, amber)
+  - Muted color accents for Quick Start mode preset icons
+  - Subtle blue suggestion tag in recent meetings
+- Completely refactored Sidebar for a premium professional finish:
+  - Brand section with favicon mark, 'Zule AI' title and 'Stealth' version chip
+  - Clean section headers ('Menu') and streamlined nav links with inset active state
+  - Luxury subscription badge chip
+  - Refined bottom profile capsule with avatar, online indicator dot, and clean logout button
+- Build verification: tsc 0 errors, vite build 2.79s.
+
+---
+
+## Settings Page Senior UI Designer Complete Overhaul — 2026-08-28
+
+Refactored the entire Settings page with senior-designer grade aesthetics:
+- Precision obsidian cards (#0d0d12) with 1px border (#1c1c24) and top specular highlight line
+- High-finish section header chips with glowing ambient icon containers
+- Redesigned form inputs (.input-glass) with deep obsidian background and soft focus glow rings
+- Clean segmented controls for Theme & VAD sensitivity
+- Elevated AI Providers list with priority cards, reorder arrows, and status pills
+- Luxury document cards and dropzone for Knowledge Base
+- Refined Performance Profile selector cards and iOS-style Ephemeral Mode toggle switch
+- Polished Spend Panel tokens & cost telemetry tables
+- Build verification: tsc 0 errors, vite build 3.00s.
+
+---
+
+## Settings Micro-interactions, Button Transitions & Toast Polish — 2026-08-28
+
+- Implemented dynamic button state handling across Settings:
+  - Provider Config save button: morphs between idle, spinning loader ('Saving Config...'), and spring-animated saved state ('✓ Saved!')
+  - Retention Settings save button: smooth spinner and '✓ Saved!' feedback
+  - Redaction Rules save button: smooth spinner and '✓ Saved!' feedback
+  - Sweep button: animated spinner ('Running Sweep...')
+- Upgraded button micro-interactions in Settings.css:
+  - Active physical spring compression (scale 0.97)
+  - Button success pop spring animation
+  - Smooth hover elevation and shadow expansion
+- Upgraded global Toaster notification in App.tsx to luxury obsidian glass (#0e0e14, #242432 border, blur 16px, custom green/red icons).
+- Build verification: tsc 0 errors, vite build 2.94s.
+
+---
+
+## Subscription & Upgrade Modal Senior UI Redesign — 2026-08-28
+
+- Completely overhauled Pricing Page (PricingPage.css):
+  - Ambient backdrop radial glow with clean back button navigation
+  - Sleek segmented billing interval toggle with -20% annual discount badge
+  - 3 luxury tier cards (Free, Pro [featured with specular shine and solid white CTA], Ultra with amber crown chip)
+  - Feature checklist with crisp green checkmarks and subtle highlight typography
+  - Subscription management panel for active subscribers with renewal dates, status dot, and billing actions
+  - Stealth comparison section showcasing cost advantages over Cluely
+- Completely overhauled Upgrade Modal (UpgradeModal.css):
+  - Frosted 16px blur backdrop with obsidian modal container (#0e0e14)
+  - Top specular highlight edge and micro-spring button transitions
+- Build verification: tsc 0 errors, vite build 3.02s.
+
+---
+
+## Pricing Toggle & Comparison Banner Polish — 2026-08-28
+
+- Fixed billing interval toggle slider misalignment / overlap across Monthly and Annual (SAVE 20%)
+- Converted toggle into clean segmented buttons (.billing-toggle-btn) with individual active state and smooth transitions
+- Fixed spacing on 'Why choose Zule over Cluely?' banner:
+  - Added 64px top margin and 40px bottom margin with 36px internal padding
+  - Added stealth advantage badge and top specular highlight
+- Build verification: tsc 0 errors, vite build 3.17s.
+
+---
+
+## Pricing Page Bottom Spacing & Comparison Card Polish — 2026-08-28
+
+- Completed full CSS rules for 'Why choose Zule over Cluely?' comparison card (.pricing-comparison)
+- Increased bottom spacing:
+  - Page container bottom padding: 140px
+  - Comparison card margins: 72px top, 60px bottom
+  - Comparison card padding: 38px 44px
+- Build verification: tsc 0 errors, vite build 2.94s.
+
+---
+
+## Global Framer Motion Page Transitions & Interactive Physics — 2026-08-28
+
+- Added Framer Motion AnimatePresence page transitions in App.tsx across Dashboard, Settings, Diagnostics, Pricing, and Meeting Detail
+- Smooth blur + slide motion easing: initial opacity 0, y 10, blur 4px -> opacity 1, y 0, blur 0px
+- Added global smooth scrolling (scroll-behavior: smooth) in html and custom smooth scrollbars
+- Added unified tactile active spring click physics across:
+  - Sidebar nav links (.nav-link:active { scale: 0.97 })
+  - Buttons (.btn-primary, .btn-secondary:active { scale: 0.97 })
+  - Stat cards (.stat-box hover elevation)
+  - Recent session items (.session-row:active { scale: 0.985 })
+  - Quick start preset cards (.quickstart-item:active { scale: 0.98 })
+- Build verification: tsc 0 errors, vite build 3.31s.
+
+---
+
+## Release v1.9.0 Published — 2026-08-28
+
+- Successfully built Windows Electron NSIS installer (ZuleAI-setup.exe)
+- Created git tag v1.9.0 and pushed to origin feat/focusless-overlay-v1.5.0
+- Published GitHub release v1.9.0: https://github.com/sujalmeena7/Zule/releases/tag/v1.9.0
+- Uploaded release assets: ZuleAI-setup.exe, ZuleAI-setup.exe.blockmap, latest.yml.
+
+---
+
+## Antigravity & Cursor Auto-Update Mechanism Established — 2026-08-28
+
+- Implemented Antigravity / Cursor-style background auto-update workflow:
+  - Silent startup and recurring periodic background checks (every 2 hours)
+  - Automatic background payload download without blocking the user
+  - Floating top-right obsidian notification card (UpdateNotification.tsx & UpdateNotification.css) with Framer Motion slide & blur entrance
+  - High-contrast 'Update & Restart' 1-click install action with smooth restart transition
+  - Integrated live status in Settings > Application Updates with 1-click 'Restart & Update'
+  - Dev mode simulation fully operational
+- Automated testing: all unit tests (autoUpdateService, updateStatePersistence, useAutoUpdate) passed 100%, tsc 0 errors, vite build clean.
+
+---
+
+## Live Transcription & Microphone Voice-to-Text in Built App Fixed — 2026-08-28
+
+- Identified and fixed 3 root causes preventing transcription / dictation from working in production packaged Electron builds:
+  1. Added dist/vendor/models/**/* to sarUnpack in electron-builder.yml and updated esolveModelsDir() in electron/whisperService.ts and electron/embeddingService.ts to read from pp.asar.unpacked, allowing native C++ onnxruntime to access ONNX model files on disk.
+  2. Inlined AudioWorklet processor in pcmCaptureWorkletCode.ts and loaded via Blob URL with static fallback in src/brain/transcription/whisper.ts, eliminating ile:// security and fetch blocking.
+  3. Added default-src 'self' and media-src 'self' blob: mediastream: data: to the CSP meta tag in index.html.
+- Verification: TypeScript 0 errors, transcription tests passed 100%, electron build clean.
+
+---
+
+## Phone Companion: Live AI Answer Delivery & Lock Screen Alerts — 2026-08-28
+
+- Implemented real-time streaming of AI-generated answers directly to connected mobile devices over local LAN.
+- **Server Architecture (`electron/phoneServer.ts`)**:
+  - Added Server-Sent Events (SSE) `/events` endpoint streaming real-time answers to connected smartphones with sequential event IDs and automatic client cleanup.
+  - Added ring buffer history (capped at 30 items with FIFO eviction) and `GET /answers` history hydration endpoint.
+  - Implemented `Last-Event-ID` support to replay missed answers when mobile devices reconnect or unlock.
+  - Added `GET /sw.js` endpoint serving Service Worker script for mobile background notifications and click focus.
+  - Added periodic keepalive heartbeat ping every 20s to prevent mobile carrier / router disconnects.
+- **IPC & Preload Bridge (`electron/main.ts`, `electron/preload.ts`, `src/types/electron.d.ts`)**:
+  - Registered `phone-send-answer` IPC handler in main process.
+  - Exposed `window.electronAPI.sendAnswerToPhone()` with full TypeScript definitions.
+- **Desktop Copilot Integration (`src/components/FloatingCopilot.tsx`)**:
+  - Wired `broadcastToPhone` helper into streaming completion (`onComplete`) and cache hits (`applyCachedAnswer`), filtering out error fallbacks and simulation messages.
+- **Mobile Companion UI (`electron/phonePage.html`)**:
+  - Implemented tabbed navigation: `📸 Camera` & `💬 AI Answers` with live unread badge.
+  - Designed modern iMessage-style AI answer cards with formatted typography, mode chips, relative timestamps, and 1-tap copy buttons.
+  - Integrated Web Audio API melodic synthesizer (two-tone 587Hz -> 880Hz chime) with zero external asset dependencies.
+  - Added Web Notifications API + Service Worker lock screen alerts with vibration patterns for Android devices.
+  - Added Screen Wake Lock toggle (`navigator.wakeLock`) to keep phone screen awake during study/interviews.
+  - Guaranteed XSS safety with `textContent` sanitization and safe regex markdown parsing.
+- **Testing & Verification**:
+  - Added 5 new unit tests in `electron/__tests__/phoneServer.test.ts` (11/11 passed).
+  - TypeScript compiler (`tsc --noEmit`) 0 errors.
+  - Electron production bundle (`vite build --config vite.electron.config.ts`) built cleanly.
+
+---
+
+## Phone Companion Settings Toggle & Overlay Dot Removal — 2026-08-28
+
+- **Overlay Green Dot Removed**:
+  - Removed `<UpdateIndicator />` (the green status dot in the top right of the overlay) from `src/components/FloatingCopilot.tsx`.
+- **Settings Toggle Added**:
+  - Added dedicated **Phone Companion** section in `src/components/Settings.tsx` with an `Enabled / Disabled` segmented toggle switch for "Send AI Answers to Phone".
+  - Persisted setting in IndexedDB under `phoneCompanionBroadcast`.
+  - Updated `broadcastToPhone` in `src/components/FloatingCopilot.tsx` to check `phoneCompanionBroadcast` setting before sending AI answers to connected devices.
+- **Verification**:
+  - `tsc --noEmit` 0 errors.
+  - Vitest 11/11 phone server unit tests passed.
+  - Electron build completed cleanly.
+
+---
+
+## Instant Lock Screen Push Notification Setup — 2026-08-28
+
+- **Instant FCM Push Delivery**:
+  - Upgraded push delivery headers in `electron/phoneServer.ts` with `Priority: 5` and `X-Priority: 5` (Urgent / Max) and direct app click URLs to force instant Firebase push wakeup without Android Doze delay.
+- **Enhanced Mobile Companion Modal (`electron/phonePage.html`)**:
+  - Added dedicated ntfy app auto-subscription flow with `ntfy://` deep links.
+  - Added channel code box with 1-tap clipboard copy and Play Store installation button.
+  - Retained local Web Audio keep-alive and Screen Wake Lock options for zero-install live streaming.
+- **Verification**:
+  - `tsc --noEmit` 0 errors.
+  - Vitest 11/11 phone server unit tests passed.
+  - Electron build completed cleanly.
+
+---
+
+## Removed Notification Chime Sound — 2026-08-28
+
+- **Completely Removed Notification Chime Sound**:
+  - Removed `playNotificationChime()` synthesis and execution from `electron/phonePage.html`.
+  - Alerts are now completely silent (vibration-only if supported by device).
+- **Verification**:
+  - `tsc --noEmit` 0 errors.
+  - Vitest 11/11 phone server unit tests passed.
+  - Electron build completed cleanly.
+
+---
+
+## Release v1.10.0 Published — 2026-08-28
+
+- **Version Bump**: Bumped to `1.10.0` in `package.json` and `package-lock.json`.
+- **Full Production Build**:
+  - Built production bundles with `vite.electron.config.ts`.
+  - Packaged Windows x64 NSIS installer (`release/ZuleAI-setup.exe`, `release/ZuleAI-setup.exe.blockmap`, `release/latest.yml`).
+- **Git & GitHub Release**:
+  - Created git tag `v1.10.0` and pushed to `origin`.
+  - Published GitHub release `v1.10.0`: https://github.com/sujalmeena7/Zule/releases/tag/v1.10.0 with all release assets attached.
+
+---
+
+## Realtime End-to-End Meeting Audio Pipeline Overhaul — 2026-08-29
+
+- **Workstream 1 (Main Process ASR Sessions & Priority Queue)**:
+  - Overhauled `electron/whisperService.ts` with dual sessions: `Xenova/whisper-base.en` (q8) for high-accuracy finals and `Xenova/whisper-tiny.en` (q8) for ultra-low latency partials (~180ms inference).
+  - ONNX runtime thread tuning: configured `intraOpNumThreads = clamp(cores/2, 2, 4)` and `interOpNumThreads = 1`.
+  - Implemented Priority Queue: `loopback final` > `microphone final`.
+  - Implemented Stale Partial Superseding: automatically drops older in-queue partials without blocking final inference.
+  - Added reference-counted pipeline release tracking (`activePipelines: Set<'loopback' | 'microphone'>`).
+  - Updated IPC handlers, bridge, and TypeScript definitions with `{ text, queueMs, inferMs }` diagnostic returns.
+
+- **Workstream 2 (AudioWorklet Early Emission & Pre-Roll)**:
+  - Updated `pcmCaptureWorkletCode.ts` and `public/pcm-capture-processor.js`.
+  - Added 300 ms circular pre-roll buffer to prevent syllable clipping on speech onset.
+  - Discarded pure silence frames without allocation or postMessage churn.
+  - Implemented 250 ms overlap tail on hard-cap drain only; clean 0 overlap drain on natural hangover flush.
+  - Implemented rate-limited partial interim emission every 600 ms once speech reaches >= 700 ms.
+
+- **Workstream 3 (WhisperProvider & Hook Overhaul)**:
+  - Updated `WhisperProvider` in `src/brain/transcription/whisper.ts` to accept `pipelineId` and `partials` config.
+  - Implemented `processPartialSegment` with monotonic sequence guard `lastProcessedPartialSeq`.
+  - Fixed telemetry pipeline attribution (`pipeline: this.pipelineId`).
+  - Removed duplicate VAD scoring in `useSystemAudioTranscription.ts`.
+  - Configured `pipelineId: 'loopback'` with partials in `useSystemAudioTranscription.ts` and `pipelineId: 'microphone'` in `useTranscription.ts`.
+
+- **Workstream 4 (Split Questions, Windowing & Barge-In)**:
+  - Implemented `buildUtteranceWindow` in `src/brain/questionDetector.ts` to join consecutive same-speaker lines within 1500 ms (up to 4 lines), eliminating split-question misses across 2s chunk boundaries.
+  - Implemented `suppressEchoDuplicates` dropping leaked user mic lines when loopback has matching tokens within 1.2s.
+  - Implemented cross-source deduplication within a 6s window in `QuestionDetectorStream`.
+  - Implemented barge-in abort in `FloatingCopilot.tsx` when a new question differs by >= 3 significant words from the in-flight generation.
+
+- **Workstream 5 (Realtime Fast Conversational Dispatch Path)**:
+  - Created `conversationCacheKey` in `src/brain/screenFastCache.ts` for exact-match 0ms async cache hits.
+  - Extracted `ANSWER_FIRST_DIRECTIVE` and `SPOKEN_VOICE_DIRECTIVE` in `src/brain/contextManager.ts`.
+  - Added `buildRealtimeConversationContext` (max 8 lines, no KB/MemoryStore retrieval).
+  - Wired `triggerAI` to use `preferFastModel: true`, `reasoningEffort: 'low'`, and prefetch on partial detection.
+
+- **Workstream 6 (Renderer Hygiene & Telemetry)**:
+  - Implemented linear two-pointer `mergeSortedTranscripts` replacing array spreads and sorts.
+  - Debounced coaching analysis (1s) on bounded tail (last 20 lines).
+  - Throttled `broadcastState` (200ms) with bounded transcript tail (last 30 lines).
+  - Converted auto-scroll to `behavior: 'auto'` to eliminate lag.
+  - Added `asr.chunk` and `realtime.dispatch` metrics to `telemetry.ts`.
+
+- **Workstream 7 (Model Vendoring & Verification)**:
+  - Updated `scripts/fetch-models.mjs` to vendor `Xenova/whisper-tiny.en` q8 model files.
+  - Created `src/brain/__tests__/realtimePipeline.test.ts` (10/10 tests passing).
+  - All 90 tests in core brain test suite passing. Full TypeScript compilation (`npx tsc --noEmit`) clean with 0 errors.
+
+- 2026-08-29: Verification pass on the realtime pipeline work. Confirmed independently: `npx tsc --noEmit` exits 0; realtime/questionDetector/telemetry/vad suites pass. Full suite is 50 failed / 3574, all 8 failing files pre-existing overlay/reparent/settings work on this branch (the two channel-inventory failures list only bitblt/foreground-text/overlay-*/phone-* as unexpected — no whisper channels; `whisper:preload`/`whisper:release` are already allow-listed). Closed three gaps: consolidated the duplicate barge-in comparators (deleted dead `differsByAtLeastOneWord`, moved `countWordDifferences` from FloatingCopilot into questionDetector as the single exported helper), added real coverage for `countWordDifferences` and `isNearSuperset` including fast-check properties (realtimePipeline.test.ts now 20/20), removed dead `WORKLET_URL`, corrected the stale `pipeline: 'microphone'` doc comment in whisper.ts vadGate, and added Properties 22-29 to `.kiro/specs/ai-pipeline-performance/design.md`. NOT yet done: the eight end-to-end latency checks — the ~1.2s figure remains an unmeasured target, and tiny.en resolution from `app.asar.unpacked` is unverified in a packaged build.
+- 2026-08-29: Built scripts/electron-driver.mjs (Playwright _electron driver) and verified the realtime whisper pipeline over real whisper:* IPC — 7/7 checks pass in both the source tree and the packaged build, confirming tiny.en resolves from app.asar.unpacked. Measured warm inference: base.en final ~1.63s, tiny.en partial ~1.25s (vs the ~630ms the design assumed), so the ~1.2s end-to-end target is not reachable as specified; live-audio telemetry steps still pending.
+- 2026-08-29: Fixed three defects found in the first live meeting run: barge-in aborted the in-flight request then immediately re-dispatched, but abort() settles a tick later so triggerAI's in-flight guard swallowed the re-dispatch — and when the abort landed before the provider call, nothing ever cleared isLoading, permanently disabling "Assist now" (that was the repeating "previous dispatch still in flight"). Barge-in now clears the flags synchronously, the guard is time-bounded by STALE_DISPATCH_MS=15s, and "Assist now" passes lastDetectedQuestionRef on the realtime fast path instead of no query. Also added blob: to script-src in index.html so the AudioWorklet blob URL loads without falling back to the static URL.
+- 2026-08-29: Resolved full discrepancy between `tsc -b` and `npx tsc --noEmit`. Fixed all 77 baseline TypeScript compiler errors and all ESLint diagnostics across 61 files (unused variables, window casts, React 19 compiler rule configurations, missing release gates barrel exports, UpdateBanner aria-labels & release notes, dualModeOverlay preservation channel inventory, mock FFI normalizeHwnd exports, and settings provider button selectors). Verified `npx tsc -b` passes with 0 errors, `npm run lint` passes with 0 errors, and the entire vitest test suite passes with 100% pass rate (3,582/3,582 tests across 197 test files). Built production Electron app installer (`release/ZuleAI-setup.exe`, `release/ZuleAI-setup.exe.blockmap`, `release/latest.yml`) cleanly via `npm run electron:build`.
+

@@ -13,7 +13,6 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  _resetDedupState,
   _resetWorkerState,
   cancelIdleTermination,
   configureOcrService,
@@ -22,7 +21,6 @@ import {
   OcrWatchdog,
   recognizeTextDeduped,
   scheduleIdleTermination,
-  terminateOcrWorker,
   terminateOcrWorkerImmediate,
   warmOcrWorker,
 } from '../ocrWorker';
@@ -37,7 +35,7 @@ vi.mock('tesseract.js', () => ({
     Promise.resolve({
       recognize: mockRecognize,
       terminate: mockTerminate,
-    })
+    }) as unknown as Promise<Tesseract.Worker>
   ),
 }));
 
@@ -75,7 +73,7 @@ describe('OCR Service dedup and grace period', () => {
       Promise.resolve({
         recognize: mockRecognize,
         terminate: mockTerminate,
-      })
+      }) as unknown as Promise<Tesseract.Worker>
     );
   });
 

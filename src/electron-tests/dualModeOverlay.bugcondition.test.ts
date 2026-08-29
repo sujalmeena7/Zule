@@ -190,6 +190,9 @@ describe('Property 1: Bug Condition — Mode 1 → Mode 2 transition and Mode 2 
       webContents: {
         send: (...args: unknown[]) => void;
         openDevTools: (...args: unknown[]) => void;
+        setWindowOpenHandler?: (...args: unknown[]) => void;
+        on?: (...args: unknown[]) => void;
+        once?: (...args: unknown[]) => void;
       };
     }
 
@@ -198,7 +201,7 @@ describe('Property 1: Bug Condition — Mode 1 → Mode 2 transition and Mode 2 
     let dashWin: MockWin;
     let registeredHandlers: Map<string, (...args: unknown[]) => unknown>;
     let registeredOn: Map<string, (...args: unknown[]) => unknown>;
-    let whenReadyCb: (() => void) | null;
+    let whenReadyCb: ((() => void) | null) = null;
 
     function parseAlpha(color: string): number {
       // Accept '#RRGGBBAA' (8-digit hex with alpha) or 'rgba(r,g,b,a)'.
@@ -332,7 +335,10 @@ describe('Property 1: Bug Condition — Mode 1 → Mode 2 transition and Mode 2 
         };
         const session = {
           defaultSession: {
-            webRequest: { onHeadersReceived: vi.fn() },
+            webRequest: {
+              onHeadersReceived: vi.fn(),
+              onBeforeSendHeaders: vi.fn(),
+            },
             setDisplayMediaRequestHandler: vi.fn(),
             setPermissionRequestHandler: vi.fn(),
             setPermissionCheckHandler: vi.fn(),
@@ -398,7 +404,9 @@ describe('Property 1: Bug Condition — Mode 1 → Mode 2 transition and Mode 2 
 
       await import(path.resolve(PROJECT_ROOT, 'electron/main.ts'));
       // Drive the deferred startup: app.whenReady().then(cb) → run cb.
-      whenReadyCb?.();
+      if (typeof whenReadyCb === 'function') {
+        (whenReadyCb as () => void)();
+      }
     });
 
     afterEach(() => {
@@ -526,12 +534,12 @@ describe('Property 1: Bug Condition — Mode 1 → Mode 2 transition and Mode 2 
     function appRegionFromStylesheets(el: Element): string {
       let result = '';
       for (const sheet of Array.from(document.styleSheets)) {
-        let rules: CSSRuleList | null = null;
+        let rules: CSSRuleList;
         try { rules = sheet.cssRules; } catch { continue; }
         if (!rules) continue;
         for (const rule of Array.from(rules)) {
           if (!(rule instanceof CSSStyleRule)) continue;
-          let matches = false;
+          let matches: boolean;
           try { matches = el.matches(rule.selectorText); } catch { continue; }
           if (!matches) continue;
           const value =
